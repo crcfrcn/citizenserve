@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "repository": "citizenserve",
+  "workflows": [
+    "citizenserve.cloudflare.ci",
+    "citizenserve.cloudflare.release"
+  ],
+  "node_tests": [
+    "scripts/ci/cloudflare/check/test.mjs",
+    "scripts/release/cloudflare/check/test.mjs"
+  ],
+  "checks": [
+    "repository-contracts"
+  ],
+  "tools": {
+    "node": "25.2.1",
+    "actionlint": "1.7.12",
+    "rust": null
+  },
+  "platform_forbidden_values": [
+    "macOS ARM64",
+    "macos-arm64",
+    "macos_arm64"
+  ]
+}

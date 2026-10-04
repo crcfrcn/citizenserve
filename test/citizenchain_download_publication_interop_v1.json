@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "github_repository": "crcfrcn/citizenchain",
+  "action_tag_field": "release_tag",
+  "publication_tag_field": "version_tag",
+  "platform": "macos",
+  "download_path": "/download/citizenchain/macOS",
+  "put_body_json": "{\"expected_revision\":0,\"publication\":{\"asset_name\":\"citizenchain-node-macOS-v1.2.3.dmg\",\"asset_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"source_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"version_tag\":\"citizenchain-macos-v1.2.3\"}}",
+  "snapshot_json": "{\"asset_name\":\"citizenchain-node-macOS-v1.2.3.dmg\",\"asset_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"platform\":\"macos\",\"published_at\":1787702400123,\"revision\":1,\"source_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"version_tag\":\"citizenchain-macos-v1.2.3\"}",
+  "snapshot_anchor": "ccdp:macos:1:c7665f9bf103e67517f8c56665db3553ec3a764fc935a0d0ac5337d9bd67b042",
+  "location": "https://github.com/crcfrcn/citizenchain/releases/download/citizenchain-macos-v1.2.3/citizenchain-node-macOS-v1.2.3.dmg"
+}
