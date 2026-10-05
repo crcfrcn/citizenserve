@@ -16,11 +16,12 @@ import {
   normalizeP256SignatureHex,
   verifyP256Signature
 } from '../src/auth/device_subkey';
-import { registerDeviceSubkey } from '../src/auth/service';
+import { createLoginChallenge, createSession, registerDeviceSubkey } from '../src/auth/service';
 import { verifyWalletSignature } from '../src/auth/wallet_signature';
-import type { Env, UserRow } from '../src/types';
+import type { Env, UserRow, LoginChallengeRow } from '../src/types';
 import {
   OP_SIGN_SQUARE_DEVICE_BIND,
+  OP_SIGN_SQUARE_LOGIN,
   bytesToHex,
   concatBytes,
   scaleString,
@@ -96,6 +97,12 @@ class DeviceStmt {
     return this;
   }
   async first<T>(): Promise<T | null> {
+    if (this.sql.includes('FROM square_login_challenges')) {
+      return (this.db.recoveryChallenges.get(this.binds[0] as string) ?? null) as T | null;
+    }
+    if (this.sql.includes('FROM square_device_subkeys') && this.sql.includes('device_id = ?')) {
+      return (this.db.rows.get(`${this.binds[0]}:${this.binds[1]}`) ?? null) as T | null;
+    }
     if (this.sql.includes('FROM users') && this.sql.includes('WHERE account_id = ?')) {
       return this.db.user.account_id === this.binds[0]
         ? this.db.user as T
@@ -104,6 +111,23 @@ class DeviceStmt {
     return null;
   }
   async run(): Promise<{ meta: { changes: number } }> {
+    if (this.sql.includes('INSERT INTO square_login_challenges')) {
+      const [id, cid, revision, account, payload, expires] = this.binds;
+      this.db.recoveryChallenges.set(id as string, {
+        challenge_id: id as string, cid_number: cid as string, binding_revision: revision as number,
+        account_id: account as string, signing_payload: payload as string, expires_at: expires as number, used_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+    if (this.sql.includes('UPDATE square_login_challenges')) {
+      const [at, id, cid, revision, account, deadline] = this.binds;
+      const row = this.db.recoveryChallenges.get(id as string);
+      if (!row || row.used_at !== null || row.expires_at <= (deadline as number)
+          || row.cid_number !== cid || row.binding_revision !== revision || row.account_id !== account
+          || this.db.rejectChallengeClaim) return { meta: { changes: 0 } };
+      row.used_at = at as number;
+      return { meta: { changes: 1 } };
+    }
     const rows = this.db.rows;
     if (this.sql.startsWith('DELETE FROM')) this.db.deletes.push(this.sql);
     if (this.sql.includes('DELETE FROM square_sessions')) {
@@ -175,6 +199,8 @@ class DeviceStmt {
 }
 
 class DeviceDb {
+  readonly recoveryChallenges = new Map<string, LoginChallengeRow>();
+  rejectChallengeClaim = false;
   readonly user = projectedUser();
   readonly rows = new Map<string, StoredSubkey>();
   readonly sessions = new Map<string, StoredBindingCredential>();
@@ -423,5 +449,95 @@ describe('registerDeviceSubkey 原子单调更新', () => {
     expect(db.pushEndpoints.has('stale-push-endpoint')).toBe(false);
     expect(db.pushEndpoints.has('current-push-endpoint')).toBe(true);
     expect(db.deletes.join('\n')).toContain('DELETE FROM square_login_challenges');
+  });
+});
+
+// 恢复使用真实WebCrypto持钥签名；钱包绑定签名继续走本文件已有可控验证端口。
+async function recoveryRequest(
+  db: DeviceDb, issuedAt: number,
+  options: { expired?: boolean; used?: boolean; wrongKey?: boolean; revision?: number } = {},
+  pair?: CryptoKeyPair,
+): Promise<{ request: Request; pair: CryptoKeyPair; id: string }> {
+  pair ??= await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pub = toHex(await crypto.subtle.exportKey('raw', pair.publicKey));
+  const id = `sqdr_${crypto.randomUUID()}`;
+  const expires = Date.now() + (options.expired ? -1000 : 300000);
+  const revision = options.revision ?? 1;
+  const payload = concatBytes(scaleString(TEST_CID), u64Le(revision), scaleString(DEVICE_BIND_INPUT.account_id), scaleString(id), u64Le(expires));
+  db.recoveryChallenges.set(id, {
+    challenge_id: id, cid_number: TEST_CID, binding_revision: revision,
+    account_id: DEVICE_BIND_INPUT.account_id, signing_payload: bytesToHex(payload),
+    expires_at: expires, used_at: options.used ? Date.now() : null,
+  });
+  const signature = toHex(await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey,
+    signingMessage(OP_SIGN_SQUARE_LOGIN, payload),
+  ));
+  return {
+    pair, id,
+    request: new Request('https://worker.test/square/auth/device/register', {
+      method: 'POST', body: JSON.stringify({
+        account_id: DEVICE_BIND_INPUT.account_id, p256_public_key: `0x${pub}`, issued_at: issuedAt,
+        binding_signature: `0x${'1'.repeat(128)}`, recovery_challenge_id: id,
+        recovery_signature: `0x${options.wrongKey ? '0'.repeat(128) : signature}`,
+      }),
+    }),
+  };
+}
+
+describe('首次授权证明的静默登记恢复', () => {
+  beforeEach(() => { mockVerify.mockReset(); mockVerify.mockResolvedValue(true); });
+
+  it('旧证明超过五分钟仍可凭当前硬件钥恢复，回执丢失重传幂等', async () => {
+    const db = new DeviceDb(); const env = deviceEnv(db);
+    const old = Date.now() - 86400000;
+    const first = await recoveryRequest(db, old);
+    await expect(registerDeviceSubkey(first.request, env)).resolves.toBeInstanceOf(Response);
+    const retry = await recoveryRequest(db, old, {}, first.pair);
+    const replayBody = await retry.request.clone().text();
+    await expect(registerDeviceSubkey(retry.request, env)).resolves.toBeInstanceOf(Response);
+    expect(db.rows.size).toBe(1);
+    expect([...db.rows.values()][0].issued_at).toBe(old);
+    expect(db.recoveryChallenges.get(first.id)?.used_at).not.toBeNull();
+    await expect(registerDeviceSubkey(new Request('https://worker.test/square/auth/device/register', { method: 'POST', body: replayBody }), env)).rejects.toMatchObject({ code: 'invalid_device_recovery' });
+  });
+
+  it.each(['expired', 'used', 'wrongKey', 'revision'] as const)('拒绝无效持钥挑战：%s', async (failure) => {
+    const db = new DeviceDb();
+    const options = failure === 'revision' ? { revision: 2 } : { [failure]: true };
+    const recovery = await recoveryRequest(db, Date.now() - 86400000, options);
+    await expect(registerDeviceSubkey(recovery.request, deviceEnv(db))).rejects.toMatchObject({ code: 'invalid_device_recovery' });
+    expect(db.rows.size).toBe(0);
+  });
+
+  it('挑战原子占用失败不能写设备登记', async () => {
+    const db = new DeviceDb(); db.rejectChallengeClaim = true;
+    const recovery = await recoveryRequest(db, Date.now() - 86400000);
+    await expect(registerDeviceSubkey(recovery.request, deviceEnv(db))).rejects.toMatchObject({ code: 'invalid_device_recovery' });
+    expect(db.rows.size).toBe(0);
+  });
+
+  it('恢复不能绕过钱包证明验签或回退新登记', async () => {
+    const db = new DeviceDb(); const env = deviceEnv(db);
+    const first = await recoveryRequest(db, Date.now());
+    await registerDeviceSubkey(first.request, env);
+    const older = await recoveryRequest(db, Date.now() - 86400000, {}, first.pair);
+    await expect(registerDeviceSubkey(older.request, env)).rejects.toMatchObject({ code: 'stale_device_binding' });
+    const invalid = await recoveryRequest(db, Date.now(), {}, first.pair);
+    mockVerify.mockResolvedValue(false);
+    await expect(registerDeviceSubkey(invalid.request, env)).rejects.toMatchObject({ code: 'invalid_binding_signature' });
+    expect(db.recoveryChallenges.get(invalid.id)?.used_at).toBeNull();
+  });
+
+  it('登记恢复挑战不能兑换登录Session', async () => {
+    const db = new DeviceDb(); const env = deviceEnv(db);
+    const response = await createLoginChallenge(new Request('https://worker.test/square/auth/challenge', {
+      method: 'POST', body: JSON.stringify({ account_id: DEVICE_BIND_INPUT.account_id, device_registration: true }),
+    }), env);
+    const challenge = await response.json() as { challenge_id: string };
+    expect(challenge.challenge_id).toMatch(/^sqdr_/);
+    await expect(createSession(new Request('https://worker.test/square/auth/session', {
+      method: 'POST', body: JSON.stringify({ account_id: DEVICE_BIND_INPUT.account_id, challenge_id: challenge.challenge_id, signature: `0x${'1'.repeat(128)}` }),
+    }), env)).rejects.toMatchObject({ code: 'invalid_session_request' });
   });
 });

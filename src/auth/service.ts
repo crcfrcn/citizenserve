@@ -33,6 +33,7 @@ import {
 
 interface ChallengeRequest {
   account_id?: unknown;
+  device_registration?: unknown;
 }
 
 interface SessionRequest {
@@ -47,6 +48,8 @@ interface DeviceRegisterRequest {
   issued_at?: unknown;
   binding_signature?: unknown;
   turnstile_token?: unknown;
+  recovery_challenge_id?: unknown;
+  recovery_signature?: unknown;
 }
 
 /// 登录挑战的 SCALE payload：
@@ -84,7 +87,8 @@ export async function createLoginChallenge(request: Request, env: Env): Promise<
   }
   const cidNumber = identity.cid_number;
 
-  const challengeId = createId('sqc');
+  // 相同登录签名域、独立挑战前缀：登记恢复证明不能被兑换成Session。
+  const challengeId = createId(body.device_registration === true ? 'sqdr' : 'sqc');
   const expiresAt = secondsFromNow(300);
   const signingPayloadHex = bytesToHex(buildLoginScalePayload(
     cidNumber,
@@ -277,7 +281,8 @@ export async function createSession(request: Request, env: Env): Promise<Respons
 /// 该子钥静默签名。
 export async function registerDeviceSubkey(request: Request, env: Env): Promise<Response> {
   const body = await readJson<DeviceRegisterRequest>(request);
-  await verifyTurnstile(request, env, body.turnstile_token);
+  const recovering = body.recovery_challenge_id !== undefined || body.recovery_signature !== undefined;
+  if (!recovering) await verifyTurnstile(request, env, body.turnstile_token);
   let accountId: string;
   try {
     accountId = assertAccountId(body.account_id);
@@ -289,7 +294,9 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
   if (
     typeof body.issued_at !== 'number' ||
     !Number.isSafeInteger(body.issued_at) ||
-    Math.abs(now - body.issued_at) > DEVICE_SKEW_MS
+    body.issued_at <= 0 ||
+    body.issued_at > now + DEVICE_SKEW_MS ||
+    (!recovering && Math.abs(now - body.issued_at) > DEVICE_SKEW_MS)
   ) {
     throw new HttpError(400, 'invalid_issued_at', '设备绑定时间戳不合法');
   }
@@ -317,6 +324,10 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
   );
   if (!isValid) {
     throw new HttpError(401, 'invalid_binding_signature', '设备绑定签名校验失败');
+  }
+
+  if (recovering) {
+    await claimDeviceRegistrationChallenge(body, env, cidNumber, identity.binding_revision, accountId, p256PublicKey);
   }
 
   // device_id = 该设备 P-256 公钥的 sha256:同一身份多设备各一行;换机(新公钥)=新设备。
@@ -348,7 +359,18 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
     )
     .run();
   if ((updated.meta?.changes ?? 0) !== 1) {
-    throw new HttpError(409, 'stale_device_binding', '设备绑定证明已使用或早于当前绑定');
+    // 回执丢失时只允许持钥设备重传完全相同的证明，不能回退较新的登记。
+    const existing = recovering ? await env.DB.prepare(
+      `SELECT cid_number, binding_revision, account_id, p256_public_key, issued_at
+       FROM square_device_subkeys WHERE cid_number = ? AND device_id = ?`
+    ).bind(cidNumber, deviceId).first<{
+      cid_number: string; binding_revision: number; account_id: string; p256_public_key: string; issued_at: number;
+    }>() : null;
+    if (!existing || existing.cid_number !== cidNumber || existing.binding_revision !== identity.binding_revision
+        || existing.account_id !== accountId || existing.p256_public_key !== p256PublicKey
+        || existing.issued_at !== body.issued_at) {
+      throw new HttpError(409, 'stale_device_binding', '设备绑定证明已使用或早于当前绑定');
+    }
   }
 
   // 新账户的设备子钥已经由新账户签名并成功落库，证明新鉴权钥已经上岗；此后才清理
@@ -366,6 +388,37 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
     cid_number: cidNumber,
     binding_revision: identity.binding_revision,
   });
+}
+
+async function claimDeviceRegistrationChallenge(
+  body: DeviceRegisterRequest, env: Env, cidNumber: string, bindingRevision: number,
+  accountId: string, publicKey: string,
+): Promise<void> {
+  const signature = normalizeP256SignatureHex(body.recovery_signature);
+  if (typeof body.recovery_challenge_id !== 'string' || !body.recovery_challenge_id.startsWith('sqdr_') || !signature) {
+    throw new HttpError(401, 'invalid_device_recovery', '设备恢复挑战或签名无效');
+  }
+  const challenge = await env.DB.prepare(
+    `SELECT challenge_id, cid_number, binding_revision, account_id, signing_payload, expires_at, used_at
+     FROM square_login_challenges WHERE challenge_id = ?`
+  ).bind(body.recovery_challenge_id).first<LoginChallengeRow>();
+  if (!challenge || challenge.cid_number !== cidNumber || challenge.binding_revision !== bindingRevision
+      || challenge.account_id !== accountId || challenge.used_at !== null || challenge.expires_at <= nowMs()) {
+    throw new HttpError(401, 'invalid_device_recovery', '设备恢复挑战已失效');
+  }
+  const message = signingMessage(OP_SIGN_SQUARE_LOGIN, hexToBytes(challenge.signing_payload));
+  if (!await verifyP256Signature(message, signature, publicKey)) {
+    throw new HttpError(401, 'invalid_device_recovery', '设备恢复持钥证明无效');
+  }
+  const claimedAt = nowMs();
+  const claimed = await env.DB.prepare(
+    `UPDATE square_login_challenges SET used_at = ?
+     WHERE challenge_id = ? AND cid_number = ? AND binding_revision = ? AND account_id = ?
+       AND used_at IS NULL AND expires_at > ?`
+  ).bind(claimedAt, challenge.challenge_id, cidNumber, bindingRevision, accountId, claimedAt).run();
+  if ((claimed.meta?.changes ?? 0) !== 1) {
+    throw new HttpError(401, 'invalid_device_recovery', '设备恢复挑战已使用或过期');
+  }
 }
 
 /// D1 没查到用户时，必须先证明投影已经追到当前 finalized 头；否则不能误报未绑定。
