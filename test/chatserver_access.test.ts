@@ -58,13 +58,13 @@ function bufferSource(bytes: Uint8Array): ArrayBuffer {
 
 async function setup(
   membership: MembershipRow | null,
-  deviceId = 'chat-device-a',
+  deviceId = 'a'.repeat(64),
 ) {
   const session: SessionState = {
     cid_number: CID_NUMBER,
     binding_revision: 1,
     account_id: ACCOUNT_ID,
-    device_key_hash: 'a'.repeat(64),
+    device_id: 'a'.repeat(64),
     created_at: Date.now(),
     expires_at: Date.now() + 60000,
   };
@@ -122,7 +122,7 @@ describe('ChatServer short-lived access', () => {
     ) as Record<string, unknown>;
     expect(claims).toMatchObject({
       sub: CID_NUMBER,
-      device_id: 'chat-device-a',
+      device_id: 'a'.repeat(64),
       chat_enabled: true,
       max_attachment_bytes: 10 * 1024 * 1024,
       iss: 'https://www.crcfrcn.com',
@@ -159,6 +159,11 @@ describe('ChatServer short-lived access', () => {
       status: 403,
       code: 'chat_membership_required',
     });
+  });
+
+  it('拒绝冒报其他规范MLS设备，不能用当前会话签发另一设备的聊天授权', async () => {
+    const { env, request } = await setup(activeMembership(), 'b'.repeat(64));
+    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({ status: 403, code: 'device_mismatch' });
   });
 
   it('rejects an invalid device identifier', async () => {

@@ -3,13 +3,13 @@ import {
   confirmFinalizedUsersRoute,
   inspectCachedUserProjectionHealth,
 } from "./account/user_projection";
-import { createLoginChallenge, createSession, registerDeviceSubkey } from "./auth/service";
+import { createMlsChallenge, createSession, registerMlsDevice } from "./auth/service";
 import { issueChatServerAccess } from "./auth/chatserver_access";
 import { registerPushEndpoint } from "./auth/push_endpoint";
 import { chainBootstrapRoute, citizenSdkBootstrapRoute } from "./chain/bootstrap";
 import { constitutionRoute } from "./chain/constitution";
 import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
-import { deleteContactRoute, listContactsRoute, putContactRoute } from "./contacts";
+import { contactMlsRoute } from "./contacts";
 import { feedRoute } from "./feeds/service";
 import { followRoute, setFollowNotifyRoute, unfollowRoute } from "./feeds/follows";
 import { getNotifyUnreadRoute, markNotifyReadRoute } from "./feeds/notify";
@@ -109,13 +109,13 @@ export async function routeRequest(
   }
 
   if (request.method === "POST" && path === "/square/auth/challenge") {
-    return createLoginChallenge(request, env);
+    return createMlsChallenge(request, env);
   }
   if (request.method === "POST" && path === "/square/auth/session") {
     return createSession(request, env);
   }
   if (request.method === "POST" && path === "/square/auth/device/register") {
-    return registerDeviceSubkey(request, env);
+    return registerMlsDevice(request, env);
   }
   if (request.method === "POST" && path === "/auth/chatserver/access") {
     return issueChatServerAccess(request, env);
@@ -149,14 +149,8 @@ export async function routeRequest(
   if (request.method === "GET" && path.startsWith("/square/creator/plan/")) {
     return creatorPlanOfRoute(request, env, path.slice("/square/creator/plan/".length));
   }
-  if (request.method === "GET" && path === "/square/contacts") {
-    return listContactsRoute(request, env);
-  }
-  if (request.method === "PUT" && path.startsWith("/square/contacts/")) {
-    return putContactRoute(request, env, path.slice("/square/contacts/".length));
-  }
-  if (request.method === "DELETE" && path.startsWith("/square/contacts/")) {
-    return deleteContactRoute(request, env, path.slice("/square/contacts/".length));
+  if (request.method === "POST" && path === "/square/contacts/mls") {
+    return contactMlsRoute(request, env);
   }
   if (request.method === "POST" && path === "/square/uploads/prepare") {
     return prepareUpload(request, env);

@@ -16,7 +16,7 @@ interface RegisterPushEndpointRequest {
 /**
  * 幂等登记当前 CitizenServe 会话设备的普通应用通知端点。
  *
- * 设备身份只读取已验签 Session 的 device_key_hash；请求不得自报设备编号。该端点只服务
+ * 设备身份只读取已验签 Session 的 device_id；请求不得自报设备编号。该端点只服务
  * 广场公开通知和会员存储清理提醒，不承载聊天唤醒、消息、会话或附件信息。
  */
 export async function registerPushEndpoint(
@@ -51,9 +51,9 @@ export async function registerPushEndpoint(
     `SELECT binding_revision, account_id, push_provider, push_token,
             apns_environment, expires_at
        FROM push_endpoints
-      WHERE cid_number = ? AND device_key_hash = ?`,
+      WHERE cid_number = ? AND device_id = ?`,
   )
-    .bind(session.cid_number, session.device_key_hash)
+    .bind(session.cid_number, session.device_id)
     .first<{
       binding_revision: number;
       account_id: string;
@@ -76,9 +76,9 @@ export async function registerPushEndpoint(
 
   const active = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM push_endpoints
-      WHERE cid_number = ? AND device_key_hash <> ? AND expires_at > ?`,
+      WHERE cid_number = ? AND device_id <> ? AND expires_at > ?`,
   )
-    .bind(session.cid_number, session.device_key_hash, current)
+    .bind(session.cid_number, session.device_id, current)
     .first<{ n: number }>();
   if ((active?.n ?? 0) >= (endpointLimit.max_count ?? 1)) {
     throw new HttpError(409, 'push_endpoint_limit_reached', '应用推送设备数已达上限');
@@ -88,16 +88,16 @@ export async function registerPushEndpoint(
   await env.DB.prepare(
     `DELETE FROM push_endpoints
       WHERE push_provider = ? AND push_token = ?
-        AND (cid_number <> ? OR device_key_hash <> ?)`,
+        AND (cid_number <> ? OR device_id <> ?)`,
   )
-    .bind(pushProvider, pushToken, session.cid_number, session.device_key_hash)
+    .bind(pushProvider, pushToken, session.cid_number, session.device_id)
     .run();
   await env.DB.prepare(
     `INSERT INTO push_endpoints
-      (cid_number, binding_revision, account_id, device_key_hash, push_provider,
+      (cid_number, binding_revision, account_id, device_id, push_provider,
        push_token, apns_environment, expires_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cid_number, device_key_hash) DO UPDATE SET
+      ON CONFLICT(cid_number, device_id) DO UPDATE SET
         binding_revision = excluded.binding_revision,
         account_id = excluded.account_id,
         push_provider = excluded.push_provider,
@@ -110,7 +110,7 @@ export async function registerPushEndpoint(
       session.cid_number,
       session.binding_revision,
       session.account_id,
-      session.device_key_hash,
+      session.device_id,
       pushProvider,
       pushToken,
       apnsEnvironment,

@@ -1,4 +1,5 @@
 import type { Env, SessionState } from '../types';
+import { assertAccountId, assertCidNumber } from './ids';
 import { readLimitedJson } from '../limits/request';
 import { sessionCacheKey } from '../auth/session_index';
 
@@ -46,8 +47,9 @@ export function errorResponse(error: unknown): Response {
   );
 }
 
-export async function readJson<T>(request: Request): Promise<T> {
-  return readLimitedJson<T>(request);
+export async function readJson<T>(request: Request<unknown, unknown>): Promise<T> {
+  // JSON读取只依赖请求正文，保留实际请求的通用Cloudflare元数据类型。
+  return readLimitedJson<T, unknown, unknown>(request);
 }
 
 export function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -59,30 +61,42 @@ export function parsePositiveInt(value: string | undefined, fallback: number): n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export async function requireSession(request: Request, env: Env): Promise<SessionState> {
+export async function requireSession(request: Request<unknown, unknown>, env: Env): Promise<SessionState> {
   const authorization = request.headers.get('authorization');
   if (!authorization?.startsWith('Bearer ')) {
-    throw new HttpError(401, 'missing_session', '请先用钱包签名登录广场');
+    throw new HttpError(401, 'missing_session', '请先建立MLS设备会话');
   }
 
   const sessionToken = authorization.slice('Bearer '.length).trim();
   if (!sessionToken) {
-    throw new HttpError(401, 'missing_session', '请先用钱包签名登录广场');
+    throw new HttpError(401, 'missing_session', '请先建立MLS设备会话');
   }
 
   const session = await env.SQUARE_CACHE.get<SessionState>(
     await sessionCacheKey(sessionToken),
     'json'
   );
-  if (!session || session.expires_at <= Date.now()) {
-    throw new HttpError(401, 'expired_session', '钱包登录态已过期');
+  // 只接受唯一MLS会话结构，旧缓存或缺失字段不得被当成有效会话。
+  let valid = false;
+  if (session && typeof session === 'object' && !Array.isArray(session)) {
+    try {
+      assertCidNumber(session.cid_number); assertAccountId(session.account_id);
+      valid = Object.keys(session).sort().join(',') === 'account_id,binding_revision,cid_number,created_at,device_id,expires_at'
+        && typeof session.device_id === 'string' && /^[0-9a-f]{64}$/.test(session.device_id)
+        && Number.isSafeInteger(session.binding_revision) && session.binding_revision > 0
+        && Number.isSafeInteger(session.created_at) && session.created_at >= 0
+        && Number.isSafeInteger(session.expires_at) && session.expires_at > session.created_at;
+    } catch { valid = false; }
+  }
+  if (!valid || !session || session.expires_at <= Date.now()) {
+    throw new HttpError(401, 'expired_session', '设备会话已过期');
   }
 
   return session;
 }
 
 /// 可选登录态：带合法 Bearer 时返回 session，否则返回 null（用于公开可读、登录可增强的接口）。
-export async function maybeSession(request: Request, env: Env): Promise<SessionState | null> {
+export async function maybeSession(request: Request<unknown, unknown>, env: Env): Promise<SessionState | null> {
   const authorization = request.headers.get('authorization');
   if (!authorization?.startsWith('Bearer ')) {
     return null;

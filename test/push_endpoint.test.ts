@@ -6,7 +6,7 @@ import type { Env, SessionState } from '../src/types';
 const SESSION_TOKEN = 'test-session';
 const CID_NUMBER = 'CN220-CTZN2-198805200-2026';
 const ACCOUNT_ID = `0x${'1'.repeat(64)}`;
-const DEVICE_KEY_HASH = 'a'.repeat(64);
+const DEVICE_ID = 'a'.repeat(64);
 
 interface ExistingEndpoint {
   binding_revision: number;
@@ -66,7 +66,7 @@ class SessionCache {
       cid_number: CID_NUMBER,
       binding_revision: 3,
       account_id: ACCOUNT_ID,
-      device_key_hash: DEVICE_KEY_HASH,
+      device_id: DEVICE_ID,
       created_at: Date.now(),
       expires_at: Date.now() + 60_000,
     } as SessionState as T;
@@ -113,7 +113,7 @@ describe('ordinary application push endpoint', () => {
       CID_NUMBER,
       3,
       ACCOUNT_ID,
-      DEVICE_KEY_HASH,
+      DEVICE_ID,
     ]);
   });
 

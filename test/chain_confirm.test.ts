@@ -564,7 +564,7 @@ function session(): SessionState {
     cid_number: sessionCid,
     binding_revision: 1,
     account_id: accountId,
-    device_key_hash: "a".repeat(64),
+    device_id: "a".repeat(64),
     created_at: 1,
     expires_at: Date.now() + 100000,
   };

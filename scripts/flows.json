@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "product_id": "citizenserve",
+  "entry": "scripts/build.mjs",
+  "platforms": {
+    "cloudflare": {
+      "tools": [
+        {
+          "id": "git",
+          "version": "2.54.0"
+        },
+        {
+          "id": "node",
+          "version": "25.2.1"
+        },
+        {
+          "id": "posix",
+          "version": "27.0"
+        }
+      ],
+      "locks": [
+        {
+          "ecosystem": "npm",
+          "path": "package-lock.json"
+        }
+      ],
+      "ci": {
+        "entry": ".github/workflows/citizenserve-cloudflare-ci.yml",
+        "tools": [
+          {
+            "id": "git",
+            "version": "2.54.0"
+          },
+          {
+            "id": "node",
+            "version": "25.2.1"
+          }
+        ]
+      },
+      "release": {
+        "entry": ".github/workflows/citizenserve-cloudflare-release.yml",
+        "tools": [
+          {
+            "id": "git",
+            "version": "2.54.0"
+          },
+          {
+            "id": "node",
+            "version": "25.2.1"
+          }
+        ]
+      }
+    },
+    "linux-arm": {
+      "tools": [
+        {
+          "id": "git",
+          "version": "2.54.0"
+        },
+        {
+          "id": "node",
+          "version": "25.2.1"
+        },
+        {
+          "id": "posix",
+          "version": "27.0"
+        }
+      ],
+      "locks": [
+        {
+          "ecosystem": "npm",
+          "path": "package-lock.json"
+        }
+      ]
+    }
+  }
+}

@@ -5,8 +5,7 @@ import {
   bytesToHex,
   hexToBytes,
   signingMessage,
-  OP_SIGN_SQUARE_LOGIN,
-  OP_SIGN_SQUARE_DEVICE_BIND,
+  OP_SIGN_MLS_DEVICE_BIND,
 } from '../src/shared/signing_message';
 
 // 签名域金标锁(Worker ⇔ citizenchain)。
@@ -68,8 +67,7 @@ describe('Worker op_tag 常量与真源登记值一致', () => {
   const byName = new Map(canonical.vectors.map((vector) => [vector.name, vector]));
 
   const constants: ReadonlyArray<readonly [string, number]> = [
-    ['OP_SIGN_SQUARE_LOGIN', OP_SIGN_SQUARE_LOGIN],
-    ['OP_SIGN_SQUARE_DEVICE_BIND', OP_SIGN_SQUARE_DEVICE_BIND],
+    ['OP_SIGN_MLS_DEVICE_BIND', OP_SIGN_MLS_DEVICE_BIND],
   ];
 
   for (const [name, value] of constants) {

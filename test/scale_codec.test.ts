@@ -13,7 +13,7 @@ import {
 // 本文件**直接读真源**,Worker 侧不保存镜像副本(与 signing_message.test.ts 同策略)。
 //
 // 为什么需要:`scaleCompact` / `scaleString` / `u64Le` 是**手写**实现,而链端用
-// parity-scale-codec。此前唯一引用它们的 device_subkey.test.ts 是拿它们去**构造期望值**——
+// parity-scale-codec。此前唯一引用它们的 mls_authentication.test.ts 是拿它们去**构造期望值**——
 // 实现算错期望值同步错,测试照样绿。这些字节直接决定被签 payload,编码差一位
 // 签出来就是另一笔交易。
 //

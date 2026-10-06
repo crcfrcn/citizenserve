@@ -1,302 +1,232 @@
-import type { ContactCiphertextRow, Env } from './types';
+import type { Env, ContactMlsGroupRow, ContactMlsOperationRow } from './types';
 import { resourceLimit } from './limits/catalog';
-import { HttpError, jsonResponse, parsePositiveInt, readJson, requireSession } from './shared/http';
+import { HttpError, jsonResponse, readJson, requireSession } from './shared/http';
 
-const CONTACT_ID_PATTERN = /^[a-f0-9]{64}$/;
-const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = resourceLimit('contact_ciphertext').max_items ?? 100;
-const MAX_CIPHERTEXT_BYTES = 8 * 1024;
-const NONCE_BYTES = 12;
-const MAC_BYTES = 16;
-const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
-const ACCOUNT_ID_PATTERN = /^0x[a-f0-9]{64}$/;
-const CONTACT_BODY_FIELDS = new Set([
-  'binding_revision',
-  'account_id',
-  'ciphertext',
-  'nonce',
-  'mac',
-  'updated_at'
-]);
+const DEVICE = /^[0-9a-f]{64}$/;
+const ID = /^[0-9a-f]{32}$/;
+const HEX = /^(?:[0-9a-f]{2})+$/;
+const kinds = new Set(['create', 'add', 'remove', 'application']);
+const maximumDevices = 32;
+const maximumWireBytes = 48 * 1024;
 
-interface ContactCiphertextRequest {
-  binding_revision?: unknown;
-  account_id?: unknown;
-  ciphertext?: unknown;
-  nonce?: unknown;
-  mac?: unknown;
-  updated_at?: unknown;
+function invalid(): never { throw new HttpError(400, 'invalid_contact_mls', '通讯录 MLS 请求无效'); }
+function conflict(): never { throw new HttpError(409, 'contact_mls_conflict', '通讯录组状态已变化，请重试'); }
+function exact(value: unknown, keys: string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid();
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).length !== keys.length || keys.some(key => !(key in body))) invalid();
+  return body;
+}
+function devices(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > maximumDevices ||
+      value.some(item => typeof item !== 'string' || !DEVICE.test(item)) ||
+      new Set(value).size !== value.length) invalid();
+  return (value as string[]).slice().sort();
+}
+function wire(value: unknown): string {
+  if (typeof value !== 'string' || !HEX.test(value) || value.length > maximumWireBytes * 2) invalid();
+  return value;
+}
+function positive(value: unknown, zero = false): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < (zero ? 0 : 1)) invalid();
+  return value;
+}
+function same(a: string[], b: string[]): boolean {
+  return JSON.stringify(a.slice().sort()) === JSON.stringify(b.slice().sort());
 }
 
-interface ContactCursor {
-  updatedAt: number;
-  contactId: string;
-}
-
-/// GET /square/contacts —— 属主 cid_number 只从 Session 派生，按更新时间和不透明 ID 稳定分页。
-export async function listContactsRoute(request: Request, env: Env): Promise<Response> {
+/** 单一 MLS 传递接口；永久属主和当前设备只能来自已验证会话。 */
+export async function contactMlsRoute(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
-  const url = new URL(request.url);
-  const limit = Math.min(
-    parsePositiveInt(url.searchParams.get('limit') ?? undefined, DEFAULT_PAGE_SIZE),
-    MAX_PAGE_SIZE
-  );
-  const cursor = parseCursor(url.searchParams.get('cursor'));
-  const binds: Array<string | number> = [
-    session.cid_number,
-    session.binding_revision,
-    session.account_id
-  ];
-  let cursorClause = '';
-  if (cursor) {
-    cursorClause = ' AND (updated_at < ? OR (updated_at = ? AND contact_id < ?))';
-    binds.push(cursor.updatedAt, cursor.updatedAt, cursor.contactId);
+  const raw = await readJson<unknown>(request);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) invalid();
+  const action = (raw as Record<string, unknown>).action;
+  const cid = session.cid_number;
+  const device = session.device_id;
+  const active = await env.DB.prepare(
+    'SELECT device_id FROM mls_devices WHERE cid_number = ? AND binding_revision = ? AND account_id = ?'
+  ).bind(cid, session.binding_revision, session.account_id).all<{ device_id: string }>();
+  const eligible = (active.results ?? []).map(row => row.device_id).sort();
+  if (eligible.length > maximumDevices) throw new HttpError(429, 'contact_mls_devices_full', '通讯录设备数量超限');
+  if (!eligible.includes(device)) throw new HttpError(403, 'contact_mls_device', '当前 MLS 设备未获授权');
+
+  if (action === 'publish') {
+    const body = exact(raw, ['action', 'key_package']);
+    const packageHex = wire(body.key_package);
+    if (packageHex.length > 32 * 1024) invalid();
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO contact_mls_packages(cid_number,device_id,key_package,updated_at) VALUES (?,?,?,?) ' +
+        'ON CONFLICT(cid_number,device_id) DO UPDATE SET key_package=excluded.key_package,updated_at=excluded.updated_at'
+      ).bind(cid, device, packageHex, Date.now()),
+      env.DB.prepare(
+        'INSERT INTO contact_mls_groups(cid_number,group_id,creator_device_id,group_revision,member_device_ids) ' +
+        'VALUES (?,?,?,0,?) ON CONFLICT(cid_number) DO NOTHING'
+      ).bind(cid, crypto.randomUUID().replaceAll('-', ''), device, '[]')
+    ]);
+    return jsonResponse({ ok: true });
   }
-  // 多取一条只用于判断是否还有下一页，不向客户端泄露额外记录。
-  binds.push(limit + 1);
-  const result = await env.DB.prepare(
-    `SELECT cid_number, binding_revision, account_id, contact_id, ciphertext, nonce, mac, updated_at
-      FROM square_contacts
-      WHERE cid_number = ? AND binding_revision = ? AND account_id = ?${cursorClause}
-      ORDER BY updated_at DESC, contact_id DESC
-      LIMIT ?`
-  ).bind(...binds).all<ContactCiphertextRow>();
-  const rows = result.results ?? [];
-  const hasMore = rows.length > limit;
-  const items = rows.slice(0, limit).map(publicContactRow);
-  const tail = items[items.length - 1];
 
-  return jsonResponse({
-    ok: true,
-    items,
-    next_cursor: hasMore && tail ? formatCursor(tail.updated_at, tail.contact_id) : null
-  });
-}
-
-/// PUT /square/contacts/:contact_id —— 幂等写入端侧生成的密文，较早更新不得覆盖较新更新。
-export async function putContactRoute(
-  request: Request,
-  env: Env,
-  contactIdRaw: string
-): Promise<Response> {
-  const session = await requireSession(request, env);
-  const contactId = parseContactId(contactIdRaw);
-  const body = assertContactRequest(await readJson<unknown>(request));
-  const target = parseCipherBinding(
-    body.binding_revision,
-    body.account_id,
-    session.binding_revision,
-    session.account_id,
-    'write'
-  );
-  const ciphertext = parseBase64Url(
-    body.ciphertext,
-    'invalid_contact_ciphertext',
-    '通讯录密文格式不合法',
-    1,
-    MAX_CIPHERTEXT_BYTES
-  );
-  const nonce = parseBase64Url(
-    body.nonce,
-    'invalid_contact_nonce',
-    '通讯录 nonce 格式不合法',
-    NONCE_BYTES,
-    NONCE_BYTES
-  );
-  const mac = parseBase64Url(
-    body.mac,
-    'invalid_contact_mac',
-    '通讯录认证码格式不合法',
-    MAC_BYTES,
-    MAC_BYTES
-  );
-  const updatedAt = parseUpdatedAt(body.updated_at);
-
-  const result = await env.DB.prepare(
-    `INSERT INTO square_contacts
-      (cid_number, binding_revision, account_id, contact_id, ciphertext, nonce, mac, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(cid_number, binding_revision, account_id, contact_id) DO UPDATE SET
-        ciphertext = excluded.ciphertext,
-        nonce = excluded.nonce,
-        mac = excluded.mac,
-        updated_at = excluded.updated_at
-      WHERE excluded.updated_at >= square_contacts.updated_at`
-  ).bind(
-    session.cid_number,
-    target.bindingRevision,
-    target.accountId,
-    contactId,
-    ciphertext,
-    nonce,
-    mac,
-    updatedAt
-  ).run();
-
-  return jsonResponse({
-    ok: true,
-    contact_id: contactId,
-    updated_at: updatedAt,
-    applied: (result.meta?.changes ?? 0) > 0
-  });
-}
-
-/// DELETE /square/contacts/:contact_id —— 只能删除当前 Session 所属身份(cid)的记录。
-export async function deleteContactRoute(
-  request: Request,
-  env: Env,
-  contactIdRaw: string
-): Promise<Response> {
-  const session = await requireSession(request, env);
-  const contactId = parseContactId(contactIdRaw);
-  const url = new URL(request.url);
-  const target = parseCipherBinding(
-    url.searchParams.get('binding_revision'),
-    url.searchParams.get('account_id'),
-    session.binding_revision,
-    session.account_id,
-    'delete'
-  );
-  const result = await env.DB.prepare(
-    `DELETE FROM square_contacts
-      WHERE cid_number = ? AND binding_revision = ? AND account_id = ? AND contact_id = ?`
-  ).bind(
-    session.cid_number,
-    target.bindingRevision,
-    target.accountId,
-    contactId
-  ).run();
-
-  return jsonResponse({
-    ok: true,
-    contact_id: contactId,
-    deleted: (result.meta?.changes ?? 0) > 0
-  });
-}
-
-function parseContactId(value: string): string {
-  let contactId: string;
-  try {
-    contactId = decodeURIComponent(value);
-  } catch {
-    throw new HttpError(400, 'invalid_contact_id', '联系人不透明 ID 编码不合法');
+  const group = await env.DB.prepare('SELECT * FROM contact_mls_groups WHERE cid_number = ?')
+    .bind(cid).first<ContactMlsGroupRow>();
+  if (!group) conflict();
+  const members = devices(JSON.parse(group.member_device_ids));
+  if (action === 'state') {
+    exact(raw, ['action']);
+    const packages = await env.DB.prepare(
+      'SELECT p.device_id,p.key_package FROM contact_mls_packages p JOIN mls_devices d ' +
+      'ON d.cid_number=p.cid_number AND d.device_id=p.device_id ' +
+      'WHERE p.cid_number=? AND d.binding_revision=? AND d.account_id=? ORDER BY p.device_id'
+    ).bind(cid, session.binding_revision, session.account_id).all<{ device_id: string; key_package: string }>();
+    const messages = await env.DB.prepare(
+      'SELECT operation_id,sequence,message_type,mls_message,sender_device_id FROM contact_mls_messages ' +
+      'WHERE cid_number=? AND device_id=? ORDER BY sequence LIMIT 100'
+    ).bind(cid, device).all();
+    const pending = group.pending_operation_id
+      ? await env.DB.prepare('SELECT * FROM contact_mls_operations WHERE cid_number=? AND operation_id=?')
+          .bind(cid, group.pending_operation_id).first<ContactMlsOperationRow>()
+      : null;
+    return jsonResponse({
+      ok: true, group_id: group.group_id, group_revision: group.group_revision,
+      creator_device_id: group.creator_device_id, member_device_ids: members,
+      eligible_device_ids: eligible, key_packages: packages.results ?? [], messages: messages.results ?? [],
+      pending: pending?.device_id === device ? {
+        operation_id: pending.operation_id, operation_kind: pending.operation_kind,
+        target_device_ids: JSON.parse(pending.target_device_ids), group_revision: pending.group_revision
+      } : null,
+      busy: !!pending && pending.device_id !== device
+    });
   }
-  if (!CONTACT_ID_PATTERN.test(contactId)) {
-    throw new HttpError(400, 'invalid_contact_id', '联系人不透明 ID 必须是 64 位小写十六进制');
-  }
-  return contactId;
-}
 
-function assertContactRequest(value: unknown): ContactCiphertextRequest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpError(400, 'invalid_contact_request', '通讯录密文请求格式不合法');
-  }
-  const fields = Object.keys(value);
-  if (fields.some((field) => !CONTACT_BODY_FIELDS.has(field))) {
-    // 联系人 CID、账户、SS58、私人备注及客户端自报属主键一律拒绝，
-    // 避免任何关系明文进入 Worker 业务处理链。
-    throw new HttpError(400, 'invalid_contact_request', '通讯录接口只接受密文字段');
-  }
-  return value as ContactCiphertextRequest;
-}
-
-/// 当前 CID 控制者只能写当前绑定密文；finalized 后的新控制者可删除当前或紧邻的此前
-/// 版本。目标版本在换绑生效前只允许保存在客户端，Worker 不接受未生效账户预写。
-function parseCipherBinding(
-  revisionValue: unknown,
-  accountValue: unknown,
-  currentRevision: number,
-  currentAccountId: string,
-  operation: 'write' | 'delete'
-): { bindingRevision: number; accountId: string } {
-  const bindingRevision = typeof revisionValue === 'string'
-    ? Number(revisionValue)
-    : revisionValue;
-  if (
-    typeof bindingRevision !== 'number' ||
-    !Number.isSafeInteger(bindingRevision) ||
-    bindingRevision <= 0
-  ) {
-    throw new HttpError(400, 'invalid_contact_binding', '通讯录密文绑定版本不合法');
-  }
-  if (typeof accountValue !== 'string' || !ACCOUNT_ID_PATTERN.test(accountValue)) {
-    throw new HttpError(400, 'invalid_contact_binding', '通讯录密文 account_id 不合法');
-  }
-  const isCurrent =
-    bindingRevision === currentRevision && accountValue === currentAccountId;
-  const isPreviousDelete =
-    operation === 'delete' &&
-    bindingRevision + 1 === currentRevision &&
-    accountValue !== currentAccountId;
-  if (!isCurrent && !isPreviousDelete) {
-    throw new HttpError(403, 'contact_binding_not_allowed', '无权读写该通讯录密文版本');
-  }
-  return { bindingRevision, accountId: accountValue };
-}
-
-function parseBase64Url(
-  value: unknown,
-  code: string,
-  message: string,
-  minBytes: number,
-  maxBytes: number
-): string {
-  if (typeof value !== 'string' || !BASE64URL_PATTERN.test(value)) {
-    throw new HttpError(400, code, message);
-  }
-  try {
-    const padded = value
-      .replace(/-/g, '+')
-      .replace(/_/g, '/')
-      .padEnd(Math.ceil(value.length / 4) * 4, '=');
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    if (bytes.byteLength < minBytes || bytes.byteLength > maxBytes) {
-      throw new HttpError(400, code, message);
+  if (action === 'reserve') {
+    const body = exact(raw, ['action', 'group_revision', 'operation_kind', 'target_device_ids']);
+    const revision = positive(body.group_revision, true);
+    const kind = body.operation_kind;
+    const targets = devices(body.target_device_ids);
+    if (typeof kind !== 'string' || !kinds.has(kind)) invalid();
+    if (group.pending_operation_id) {
+      const previous = await env.DB.prepare('SELECT * FROM contact_mls_operations WHERE cid_number=? AND operation_id=?')
+        .bind(cid, group.pending_operation_id).first<ContactMlsOperationRow>();
+      if (previous?.device_id !== device) conflict();
+      return jsonResponse({ ok: true, operation_id: previous.operation_id,
+        operation_kind: previous.operation_kind, target_device_ids: JSON.parse(previous.target_device_ids),
+        group_revision: previous.group_revision });
     }
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
-    throw new HttpError(400, code, message);
+    if (group.group_revision !== revision) conflict();
+    if (kind === 'create') {
+      if (revision !== 0 || device !== group.creator_device_id || targets.length !== 0) conflict();
+    } else {
+      if (!members.includes(device)) conflict();
+      if (kind === 'add' && (!targets.length || targets.some(id => members.includes(id) || !eligible.includes(id)) ||
+          members.length + targets.length > maximumDevices)) invalid();
+      if (kind === 'remove' && (!targets.length || targets.includes(device) ||
+          targets.some(id => !members.includes(id) || eligible.includes(id)))) invalid();
+      if (kind === 'application' && targets.length !== 0) invalid();
+    }
+    const id = crypto.randomUUID().replaceAll('-', '');
+    await env.DB.prepare('DELETE FROM contact_mls_operations WHERE cid_number=? AND committed_at IS NOT NULL AND committed_at<?')
+      .bind(cid, Date.now() - 7 * 86400000).run();
+    const count = await env.DB.prepare('SELECT count(*) AS count FROM contact_mls_operations WHERE cid_number=?')
+      .bind(cid).first<{ count: number }>();
+    if ((count?.count ?? 0) >= 1024) throw new HttpError(429, 'contact_mls_queue_full', '通讯录操作队列已满');
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO contact_mls_operations(cid_number,operation_id,device_id,group_revision,operation_kind,target_device_ids) ' +
+        'SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM contact_mls_groups WHERE cid_number=? AND group_revision=? AND pending_operation_id IS NULL)'
+      ).bind(cid, id, device, revision, kind, JSON.stringify(targets), cid, revision),
+      env.DB.prepare(
+        'UPDATE contact_mls_groups SET pending_operation_id=? WHERE cid_number=? AND group_revision=? AND pending_operation_id IS NULL ' +
+        'AND EXISTS (SELECT 1 FROM contact_mls_operations WHERE cid_number=? AND operation_id=?)'
+      ).bind(id, cid, revision, cid, id)
+    ]);
+    const claimed = await env.DB.prepare('SELECT pending_operation_id FROM contact_mls_groups WHERE cid_number=?')
+      .bind(cid).first<{ pending_operation_id: string | null }>();
+    if (claimed?.pending_operation_id !== id) conflict();
+    return jsonResponse({ ok: true, operation_id: id, operation_kind: kind,
+      target_device_ids: targets, group_revision: revision });
   }
-  return value;
-}
 
-function parseUpdatedAt(value: unknown): number {
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value <= 0 ||
-    value > Date.now() + MAX_FUTURE_SKEW_MS
-  ) {
-    throw new HttpError(400, 'invalid_contact_updated_at', '联系人更新时间不合法');
+  if (action === 'commit') {
+    const body = exact(raw, ['action', 'operation_id', 'member_device_ids', 'messages']);
+    if (typeof body.operation_id !== 'string' || !ID.test(body.operation_id)) invalid();
+    const id = body.operation_id;
+    const operation = await env.DB.prepare('SELECT * FROM contact_mls_operations WHERE cid_number=? AND operation_id=?')
+      .bind(cid, id).first<ContactMlsOperationRow>();
+    if (!operation || operation.device_id !== device) conflict();
+    const nextMembers = devices(body.member_device_ids);
+    if (!Array.isArray(body.messages) || body.messages.length > 2) invalid();
+    const messages = body.messages.map(value => {
+      const message = exact(value, ['message_type', 'device_ids', 'mls_message']);
+      if (!['welcome', 'commit', 'application'].includes(message.message_type as string)) invalid();
+      return { message_type: message.message_type as string, device_ids: devices(message.device_ids), mls_message: wire(message.mls_message) };
+    });
+    const canonical = JSON.stringify({ member_device_ids: nextMembers, messages });
+    if (operation.committed_at !== null) {
+      if (operation.result_json !== canonical) conflict();
+      return jsonResponse({ ok: true, group_revision: operation.group_revision + 1 });
+    }
+    if (group.pending_operation_id !== id || group.group_revision !== operation.group_revision) conflict();
+    const targets = devices(JSON.parse(operation.target_device_ids));
+    const kind = operation.operation_kind;
+    const expected = kind === 'create' ? [device]
+      : kind === 'add' ? [...members, ...targets]
+      : kind === 'remove' ? members.filter(member => !targets.includes(member)) : members;
+    if (!same(nextMembers, expected)) invalid();
+    const recipients = members.filter(member => member !== device && (kind !== 'remove' || !targets.includes(member)));
+    const expectedMessages = kind === 'create' ? []
+      : kind === 'add' ? [{ type: 'commit', recipients }, { type: 'welcome', recipients: targets }]
+      : [{ type: kind === 'remove' ? 'commit' : 'application', recipients }];
+    if (messages.length !== expectedMessages.length || messages.some((message, index) =>
+        message.message_type !== expectedMessages[index].type || !same(message.device_ids, expectedMessages[index].recipients))) invalid();
+    const maximum = resourceLimit('contact_mls').max_items ?? 1024;
+    for (const recipient of new Set(messages.flatMap(message => message.device_ids))) {
+      const count = await env.DB.prepare('SELECT count(*) AS count FROM contact_mls_messages WHERE cid_number=? AND device_id=?')
+        .bind(cid, recipient).first<{ count: number }>();
+      if ((count?.count ?? 0) + messages.length > maximum) throw new HttpError(429, 'contact_mls_queue_full', '通讯录设备队列已满');
+    }
+    const queued = await env.DB.prepare('SELECT coalesce(sum(length(mls_message)/2),0) AS bytes FROM contact_mls_messages WHERE cid_number=?')
+      .bind(cid).first<{ bytes: number }>();
+    const addedBytes = messages.reduce((sum, message) => sum + message.device_ids.length * message.mls_message.length / 2, 0);
+    if ((queued?.bytes ?? 0) + addedBytes > 32 * 1024 * 1024) throw new HttpError(429, 'contact_mls_queue_full', '通讯录密文队列容量已满');
+    const statements = [
+      env.DB.prepare(
+        'UPDATE contact_mls_operations SET result_json=?,committed_at=? WHERE cid_number=? AND operation_id=? AND committed_at IS NULL ' +
+        'AND EXISTS (SELECT 1 FROM contact_mls_groups WHERE cid_number=? AND pending_operation_id=? AND group_revision=?)'
+      ).bind(canonical, Date.now(), cid, id, cid, id, operation.group_revision)
+    ];
+    messages.forEach((message, index) => message.device_ids.forEach(recipient => statements.push(
+      env.DB.prepare(
+        'INSERT INTO contact_mls_messages(cid_number,device_id,operation_id,sequence,message_type,mls_message,sender_device_id) ' +
+        'SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM contact_mls_operations WHERE cid_number=? AND operation_id=? AND result_json=?) ' +
+        'ON CONFLICT(cid_number,device_id,operation_id,message_type) DO NOTHING'
+      ).bind(cid, recipient, id, (operation.group_revision + 1) * 2 + index, message.message_type, message.mls_message, device, cid, id, canonical)
+    )));
+    if (kind === 'remove') for (const removed of targets) {
+      for (const table of ['contact_mls_messages', 'contact_mls_packages']) {
+        statements.push(env.DB.prepare('DELETE FROM ' + table + ' WHERE cid_number=? AND device_id=? ' +
+          'AND EXISTS (SELECT 1 FROM contact_mls_operations WHERE cid_number=? AND operation_id=? AND result_json=?)')
+          .bind(cid, removed, cid, id, canonical));
+      }
+    }
+    statements.push(env.DB.prepare(
+      'UPDATE contact_mls_groups SET group_revision=group_revision+1,member_device_ids=?,pending_operation_id=NULL ' +
+      'WHERE cid_number=? AND pending_operation_id=? AND group_revision=? ' +
+      'AND EXISTS (SELECT 1 FROM contact_mls_operations WHERE cid_number=? AND operation_id=? AND result_json=?)'
+    ).bind(JSON.stringify(nextMembers), cid, id, operation.group_revision, cid, id, canonical));
+    await env.DB.batch(statements);
+    const completed = await env.DB.prepare('SELECT result_json FROM contact_mls_operations WHERE cid_number=? AND operation_id=?')
+      .bind(cid, id).first<{ result_json: string | null }>();
+    if (completed?.result_json !== canonical) conflict();
+    return jsonResponse({ ok: true, group_revision: operation.group_revision + 1 });
   }
-  return value;
-}
 
-function parseCursor(value: string | null): ContactCursor | null {
-  if (!value) return null;
-  const match = /^(\d+)\.([a-f0-9]{64})$/.exec(value);
-  const updatedAt = match ? Number(match[1]) : Number.NaN;
-  if (!match || !Number.isSafeInteger(updatedAt) || updatedAt <= 0) {
-    throw new HttpError(400, 'invalid_contact_cursor', '通讯录分页游标不合法');
+  if (action === 'ack') {
+    const body = exact(raw, ['action', 'operation_id', 'message_type']);
+    if (typeof body.operation_id !== 'string' || !ID.test(body.operation_id) ||
+        !['welcome', 'commit', 'application'].includes(body.message_type as string)) invalid();
+    await env.DB.prepare('DELETE FROM contact_mls_messages WHERE cid_number=? AND device_id=? AND operation_id=? AND message_type=?')
+      .bind(cid, device, body.operation_id, body.message_type).run();
+    return jsonResponse({ ok: true });
   }
-  return { updatedAt, contactId: match[2] };
-}
-
-function formatCursor(updatedAt: number, contactId: string): string {
-  return `${updatedAt}.${contactId}`;
-}
-
-function publicContactRow(row: ContactCiphertextRow): Omit<ContactCiphertextRow, 'cid_number'> {
-  // 属主键 cid_number 只用于服务端隔离，响应不重复下发，降低客户端误信自报属主的风险。
-  return {
-    binding_revision: row.binding_revision,
-    account_id: row.account_id,
-    contact_id: row.contact_id,
-    ciphertext: row.ciphertext,
-    nonce: row.nonce,
-    mac: row.mac,
-    updated_at: row.updated_at
-  };
+  invalid();
 }

@@ -1,22 +1,11 @@
 import type { Env, SessionState } from '../types';
-import { normalizeP256SignatureHex, verifyP256Signature } from '../auth/device_subkey';
+import { consumeMlsAuthentication } from '../auth/mls_authentication';
 import { readUserByCidNumber } from '../account/user_repository';
 import { HttpError, requireSession } from '../shared/http';
 import { sha256Hex } from '../shared/hash';
-import {
-  OP_SIGN_SQUARE_LOGIN,
-  scaleString,
-  signingMessage
-} from '../shared/signing_message';
 import { nowMs } from '../shared/time';
-import { assertRequestBodyLimit, readLimitedBytes } from '../limits/request';
+import { assertRequestBodyLimit } from '../limits/request';
 
-const REQUEST_TIME_HEADER = 'x-device-time';
-const REQUEST_NONCE_HEADER = 'x-device-nonce';
-const REQUEST_SIGNATURE_HEADER = 'x-device-signature';
-// 请求证明只接受一分钟内的签名。nonce 继续参与签名规范，但禁止为每次
-// App 请求写 D1；HTTPS、短时间窗、会话绑定、P-256 验签和边缘限流共同门禁。
-const REQUEST_MAX_SKEW_MS = 60 * 1000;
 const DEFAULT_WEB_ORIGIN = 'https://www.crcfrcn.com';
 
 interface RateWindowRow {
@@ -51,7 +40,7 @@ export function applyCors(request: Request, env: Env, response: Response): Respo
   next.headers.set('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   next.headers.set(
     'access-control-allow-headers',
-    'authorization,content-type,x-device-time,x-device-nonce,x-device-signature'
+    'authorization,content-type,x-mls-proof'
   );
   next.headers.set('access-control-max-age', '600');
   next.headers.append('vary', 'origin');
@@ -68,14 +57,15 @@ function allowedOrigins(env: Env): Set<string> {
 }
 
 /**
- * 统一入口风控：预登录按 IP 粗限流，登录后按钱包精确限流；写接口和计费型读取
- * 必须提供 P-256 设备证明；R2 直传地址由受保护的 prepare 接口限时签发。
+ * 统一入口风控：预登录按 IP 粗限流，登录后按CID精确限流；写接口和计费型读取
+ * 必须提供 MLS 设备证明；R2 直传地址由受保护的 prepare 接口限时签发。
  */
 export async function guardRequest(request: Request, env: Env, path: string): Promise<void> {
+  if (new URL(request.url).protocol !== 'https:') throw new HttpError(400, 'https_required', '服务请求必须使用HTTPS');
   assertAllowedOrigin(request, env);
   assertRequestBodyLimit(request, path);
 
-  // 鉴权建立/自证路由(挑战、会话):由 Turnstile + 设备子钥签名门控,不依赖广场会话。
+  // 鉴权建立/自证路由(挑战、会话):由 当前CID投影、MLS持钥证明与一次性挑战门控,不依赖广场会话。
   // 一次冷启动握手 = challenge + session 两请求;客户端已 in-flight 去重,同账户并发只跑一套。
   if (
     path === '/square/auth/challenge' ||
@@ -85,7 +75,7 @@ export async function guardRequest(request: Request, env: Env, path: string): Pr
     await enforceEdgeRate(env, 'RATE_AUTH', `auth:${ipKey}`);
     return;
   }
-  // 设备子钥注册是每钱包一次的稀有操作,独立限流桶,避免与频繁的握手互相挤占配额。
+  // MLS身份登记是每CID设备的稀有操作,独立限流桶,避免与频繁的握手互相挤占配额。
   if (path === '/square/auth/device/register') {
     const ipKey = await requestIpKey(request, env);
     await enforceEdgeRate(env, 'RATE_AUTH', `authreg:${ipKey}`);
@@ -162,9 +152,9 @@ export async function guardRequest(request: Request, env: Env, path: string): Pr
   );
 
   if (requiresDeviceProof(path, request.method)) {
-    await requireDeviceProof(request, env, path, session);
+    await consumeMlsAuthentication(request, env, 'request', session);
   }
-  // 上传每小时硬顶必须跨 PoP 精确一致；设备证明通过后才写 D1，非法签名不能制造账单。
+  // 上传每小时硬顶必须跨 PoP 精确一致；MLS认证通过后才计入上传硬顶，非法签名不能消耗上传配额。
   if (path === '/square/uploads/prepare') {
     await enforcePersistentRateLimit(
       env,
@@ -189,7 +179,7 @@ function requiresDeviceProof(path: string, method: string): boolean {
     return false;
   }
   // Image.network 只能稳定携带 Bearer header；资料媒体仍由 handler 强制校验钱包
-  // session，但不要求它动态生成 P-256 请求签名。
+  // session，但不要求它动态生成 MLS 请求签名。
   if (path.startsWith('/square/media/')) return false;
   if (path === '/chain/extrinsics/relay') return true;
   return path.startsWith('/square/') && method !== 'OPTIONS';
@@ -209,80 +199,6 @@ function routeRate(path: string, method: string): { binding: RateBinding; key: s
   }
   if (method === 'GET') return { binding: 'RATE_READ', key: 'read' };
   return { binding: 'RATE_WRITE', key: 'write' };
-}
-
-async function requireDeviceProof(
-  request: Request,
-  env: Env,
-  path: string,
-  session: SessionState
-): Promise<void> {
-  const requestTime = Number.parseInt(request.headers.get(REQUEST_TIME_HEADER) ?? '', 10);
-  const nonce = (request.headers.get(REQUEST_NONCE_HEADER) ?? '').toLowerCase();
-  const signature = request.headers.get(REQUEST_SIGNATURE_HEADER) ?? '';
-  if (!Number.isSafeInteger(requestTime) || Math.abs(nowMs() - requestTime) > REQUEST_MAX_SKEW_MS) {
-    throw new HttpError(401, 'device_time_invalid', '设备请求时间已过期');
-  }
-  if (!/^[a-f0-9]{32}$/.test(nonce)) {
-    throw new HttpError(401, 'device_nonce_invalid', '设备请求 nonce 不合法');
-  }
-
-  // 子钥按 (cid_number, device_id) 精确定位;device_id == 会话记录的 device_key_hash(均 = sha256(p256))。
-  const subkey = await env.DB.prepare(
-    `SELECT p256_public_key, binding_revision, account_id
-      FROM square_device_subkeys
-      WHERE cid_number = ? AND device_id = ?`
-  )
-    .bind(session.cid_number, session.device_key_hash)
-    .first<{
-      p256_public_key: string;
-      binding_revision: number;
-      account_id: string;
-    }>();
-  if (!subkey) throw new HttpError(401, 'device_not_registered', '设备子钥未注册');
-  // 该设备子钥的所属账户须与会话一致(换绑等把它改到别的账户即视为失效)。
-  if (
-    subkey.binding_revision !== session.binding_revision
-    || subkey.account_id !== session.account_id
-  ) {
-    throw new HttpError(401, 'device_key_changed', '设备密钥已更换，请重新登录');
-  }
-
-  const bodyHash = await requestBodyHash(request, path);
-  const token = request.headers.get('authorization')!.slice('Bearer '.length).trim();
-  const tokenHash = await sha256Hex(token);
-  const url = new URL(request.url);
-  const canonicalPath = `${path}${url.search}`;
-  const canonical = [
-    'square_request',
-    request.method.toUpperCase(),
-    canonicalPath,
-    bodyHash,
-    String(requestTime),
-    nonce,
-    tokenHash
-  ].join('\n');
-  const message = signingMessage(OP_SIGN_SQUARE_LOGIN, scaleString(canonical));
-  // 跨端签名文本须为 `0x`+128hex（ADR-041）；裸/大写/错长与验签失败一律 401。
-  const signatureBare = normalizeP256SignatureHex(signature);
-  if (
-    signatureBare === null ||
-    !(await verifyP256Signature(message, signatureBare, subkey.p256_public_key))
-  ) {
-    throw new HttpError(401, 'device_signature_invalid', '设备请求签名校验失败');
-  }
-
-  // 禁止恢复服务端 nonce 台账：它会让每个只读、Chat 和业务请求至少写一行
-  // D1，过期清理再写一次，直接放大免费额度。nonce 仅作为签名唯一输入；业务
-  // 写入继续由各自既有业务唯一键收敛，边缘限流负责有界拒绝重复流量。
-}
-
-async function requestBodyHash(request: Request, path: string): Promise<string> {
-  if (request.method === 'GET' || request.method === 'HEAD' || request.method === 'DELETE') {
-    return sha256Hex('');
-  }
-  assertRequestBodyLimit(request, path);
-  return sha256Hex(await readLimitedBytes(request.clone()));
 }
 
 export async function requestIpKey(request: Request, env: Env): Promise<string> {
@@ -351,7 +267,7 @@ export async function enforcePersistentRateLimit(
 export async function cleanupSecurityState(env: Env): Promise<void> {
   const now = nowMs();
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM square_login_challenges WHERE expires_at <= ?').bind(now),
+    env.DB.prepare('DELETE FROM mls_authentication_challenges WHERE expires_at_millis <= ?').bind(now),
     env.DB.prepare('DELETE FROM rate_windows WHERE expires_at <= ?').bind(now)
   ]);
 }

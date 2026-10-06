@@ -6,12 +6,9 @@ import type { Miniflare } from 'miniflare';
 import worker from '../src/index';
 import { createUserFromFinalizedRegistration } from '../src/account/user_repository';
 import { sha256Hex } from '../src/shared/hash';
-import {
-  OP_SIGN_SQUARE_LOGIN,
-  scaleString,
-  signingMessage,
-} from '../src/shared/signing_message';
-import type { Env, SessionState } from '../src/types';
+import { createMlsChallenge } from '../src/auth/service';
+import { mlsAuthenticationMessage, MLS_PROOF_HEADER } from '../src/auth/mls_authentication';
+import type { Env, MlsAuthenticationProof, SessionState } from '../src/types';
 import { createTestMiniflare } from './miniflare';
 
 const ACCOUNT_A = `0x${'11'.repeat(32)}`;
@@ -31,6 +28,7 @@ interface TestAccount {
   cid_number: string;
   token: string;
   private_key: CryptoKey;
+  public_key: string;
 }
 
 interface Harness {
@@ -38,7 +36,6 @@ interface Harness {
   env: Env;
   accountA: TestAccount;
   accountB: TestAccount;
-  nonce: number;
 }
 
 let harness: Harness;
@@ -292,7 +289,6 @@ async function createHarness(): Promise<Harness> {
     env,
     accountA,
     accountB,
-    nonce: 0,
   };
 }
 
@@ -303,12 +299,12 @@ async function registerAccount(
   token: string,
 ): Promise<TestAccount> {
   const keyPair = await crypto.subtle.generateKey(
-    { name: 'ECDSA', namedCurve: 'P-256' },
+    { name: 'Ed25519' },
     true,
     ['sign', 'verify'],
-  );
-  const publicKey = toHex(await crypto.subtle.exportKey('raw', keyPair.publicKey));
-  const deviceId = await sha256Hex(publicKey);
+  ) as CryptoKeyPair;
+  const publicKey = '0x' + toHex(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+  const deviceId = publicKey.slice(2);
   const now = Date.now();
   await createUserFromFinalizedRegistration(env, {
     cid_number: cidNumber,
@@ -329,7 +325,7 @@ async function registerAccount(
     cid_number: cidNumber,
     binding_revision: 1,
     account_id: accountId,
-    device_key_hash: deviceId,
+    device_id: deviceId,
     created_at: now,
     expires_at: now + 60_000,
   };
@@ -338,8 +334,8 @@ async function registerAccount(
     JSON.stringify(session)
   );
   await env.DB.prepare(
-    `INSERT INTO square_device_subkeys
-      (cid_number, device_id, binding_revision, account_id, p256_public_key,
+    `INSERT INTO mls_devices
+      (cid_number, device_id, binding_revision, account_id, public_key,
         issued_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(cidNumber, deviceId, 1, accountId, publicKey, now, now, now).run();
@@ -348,6 +344,7 @@ async function registerAccount(
     cid_number: cidNumber,
     token,
     private_key: keyPair.privateKey,
+    public_key: publicKey,
   };
 }
 
@@ -436,35 +433,23 @@ async function seedPost(
   };
 }
 
-async function callWorker(
-  context: Harness,
-  account: TestAccount | null,
-  path: string,
-): Promise<Response> {
+async function callWorker(context: Harness, account: TestAccount | null, path: string): Promise<Response> {
   const headers = new Headers();
   if (account) {
-    const requestTime = Date.now();
-    const nonce = (++context.nonce).toString(16).padStart(32, '0');
-    const canonical = [
-      'square_request',
-      'GET',
-      path,
-      await sha256Hex(''),
-      String(requestTime),
-      nonce,
-      await sha256Hex(account.token),
-    ].join('\n');
-    const signature = await crypto.subtle.sign(
-      { name: 'ECDSA', hash: 'SHA-256' },
-      account.private_key,
-      signingMessage(OP_SIGN_SQUARE_LOGIN, scaleString(canonical)),
-    );
-    headers.set('authorization', `Bearer ${account.token}`);
-    headers.set('x-device-time', String(requestTime));
-    headers.set('x-device-nonce', nonce);
-    headers.set('x-device-signature', `0x${toHex(signature)}`);
+    const body = JSON.stringify({
+      account_id: account.account_id, public_key: account.public_key, purpose: 'request',
+      method: 'GET', request_target: path, body_sha256: '0x' + await sha256Hex(''),
+    });
+    const response = await createMlsChallenge(new Request('https://worker.test/square/auth/challenge', {
+      method: 'POST', headers: { authorization: 'Bearer ' + account.token, 'content-length': String(new TextEncoder().encode(body).length) }, body,
+    }), context.env);
+    const { ok: _ok, ...fields } = await response.json() as Record<string, unknown>;
+    const proof = { ...fields, signature: '0x' + '00'.repeat(64) } as unknown as MlsAuthenticationProof;
+    proof.signature = '0x' + toHex(await crypto.subtle.sign('Ed25519', account.private_key, mlsAuthenticationMessage(proof)));
+    headers.set('authorization', 'Bearer ' + account.token);
+    headers.set(MLS_PROOF_HEADER, btoa(JSON.stringify(proof)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''));
   }
-  return worker.fetch(new Request(`https://worker.test${path}`, { headers }), context.env);
+  return worker.fetch(new Request('https://worker.test' + path, { headers }), context.env);
 }
 
 function decodeBase64(value: string): Uint8Array {

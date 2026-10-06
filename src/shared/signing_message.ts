@@ -4,7 +4,7 @@ import { blake2AsU8a } from '@polkadot/util-crypto/blake2';
 // `runtime/primitives/src/sign.rs::signing_message` + 金标向量
 // `tests/fixtures/signing_domain_vectors.json`。
 //
-// 死规则：任何签名的被签消息一律 = signing_message(op_tag) =
+// 钱包授权的被签消息一律 = signing_message(op_tag) =
 // blake2_256( GMB(3B) || op_tag(1B) || SCALE(payload) )。禁止另造版本化字符串域；
 // 全仓唯一允许的版本化协议标识是 QR_V1。
 
@@ -13,13 +13,11 @@ export const GMB_SIGN_DOMAIN = [0x47, 0x4d, 0x42];
 
 // 本 Worker 会验签的链下哈希域 op_tag（单源 citizenchain primitives::sign）。
 // CID 换绑授权只在钱包与 runtime 间验证，Worker 不提供第二授权 endpoint。
-/// 广场 BFF 登录挑战（设备子钥 ES256 签 digest）。
-export const OP_SIGN_SQUARE_LOGIN = 0x1b;
-/// 广场 BFF 设备子钥绑定（sr25519 主钥签）。
-export const OP_SIGN_SQUARE_DEVICE_BIND = 0x1c;
+/// 当前钱包授权同一MLS公开身份的设备登记。
+export const OP_SIGN_MLS_DEVICE_BIND = 0x1c;
 
 /// 签名消息唯一原语：`blake2_256(GMB || op_tag || scalePayload)`，返回 32 字节摘要。
-/// 返回 ArrayBuffer 背衬的视图，便于直接喂给 Web Crypto（ECDSA 验签）。
+/// 返回ArrayBuffer背衬的视图，供钱包授权校验。
 export function signingMessage(opTag: number, scalePayload: Uint8Array): Uint8Array<ArrayBuffer> {
   const digest = blake2AsU8a(
     new Uint8Array([...GMB_SIGN_DOMAIN, opTag & 0xff, ...scalePayload]),

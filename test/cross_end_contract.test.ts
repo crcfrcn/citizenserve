@@ -152,7 +152,38 @@ describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
     const { resolve } = await import("node:path");
     const schema = await readFile(resolve(process.cwd(), "schema/citizenserve.sql"), "utf8");
 
-    expect(schema.match(/CREATE TABLE IF NOT EXISTS /g)?.length).toBe(25);
+    // 明确最终MLS表闭集，缺表、多表或旧设备表残留均失败。
+    const tables = [...schema.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((match) => match[1]).sort();
+    expect(tables).toEqual([
+      "chain_extrinsic_relays",
+      "chain_transaction_confirmations",
+      "contact_mls_groups",
+      "contact_mls_messages",
+      "contact_mls_operations",
+      "contact_mls_packages",
+      "membership_projection_cursor",
+      "mls_authentication_challenges",
+      "mls_devices",
+      "push_endpoints",
+      "rate_windows",
+      "resource_reservations",
+      "resource_totals",
+      "resource_usage",
+      "square_browse_days",
+      "square_creator_subscriptions",
+      "square_creator_tiers",
+      "square_follows",
+      "square_media_assets",
+      "square_memberships",
+      "square_notify_reads",
+      "square_posts",
+      "square_sessions",
+      "square_uploads",
+      "topup_orders",
+      "user_profiles",
+      "user_projection_cursor",
+      "users"
+    ]);
     expect(schema).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS )/);
     expect(schema).not.toMatch(/CREATE (?:UNIQUE )?INDEX (?!IF NOT EXISTS )/);
     expect(schema).toContain("CREATE TABLE IF NOT EXISTS push_endpoints");

@@ -11,7 +11,7 @@ function fakeEnv(): Env {
     cid_number: cidNumber,
     binding_revision: 1,
     account_id: accountId,
-    device_key_hash: 'a'.repeat(64),
+    device_id: 'a'.repeat(64),
     created_at: 0,
     expires_at: Date.now() + 60_000
   };

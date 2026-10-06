@@ -567,7 +567,7 @@ function fakeEnv(options: FakeEnvOptions = {}): Env {
     cid_number: cidForAccount(sessionAccount),
     binding_revision: 1,
     account_id: sessionAccount,
-    device_key_hash: 'a'.repeat(64),
+    device_id: 'a'.repeat(64),
     created_at: 0,
     expires_at: Date.now() + 60_000
   };

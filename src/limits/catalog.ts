@@ -18,9 +18,12 @@ export type ResourceKey =
   | 'chain_extrinsic'
   | 'chain_extrinsic_json'
   | 'chain_rpc_response'
+  | 'mls_authentication_body'
+  | 'mls_authentication_proof'
+  | 'mls_authentication_challenge'
   | 'session_cache'
   | 'session_index'
-  | 'contact_ciphertext'
+  | 'contact_mls'
   | 'api_json_small'
   | 'api_json';
 
@@ -127,10 +130,14 @@ export const resourceLimits: Readonly<Record<ResourceKey, ResourceLimit>> = {
   chain_extrinsic: { max_bytes: 64 * kib },
   chain_extrinsic_json: { max_bytes: 132 * kib },
   chain_rpc_response: { max_bytes: 4 * mib },
+  // 证明可包含8KiB路径；正文与SDK同限1MiB，每CID每用途最多64条未消费挑战。
+  mls_authentication_body: { max_bytes: mib },
+  mls_authentication_proof: { max_bytes: 16 * kib },
+  mls_authentication_challenge: { max_bytes: 16 * kib, max_count: 64, ttl_seconds: 300 },
   session_cache: { max_bytes: 4 * kib, max_count: 1 },
   session_index: { max_bytes: 4 * kib, max_count: 8 },
   // 单条联系人只包含小型端到端密文；限制整个 JSON 请求，防止借同步接口写入大对象。
-  contact_ciphertext: { max_bytes: 16 * kib, max_items: 100 },
+  contact_mls: { max_bytes: 256 * kib, max_items: 1024 },
   api_json_small: { max_bytes: 16 * kib },
   api_json: { max_bytes: 128 * kib },
 };
@@ -217,9 +224,7 @@ const routeLimits: readonly RouteLimit[] = [
   route('GET', /^\/square\/creator\/plan\/[^/]+$/),
   route('POST', /^\/square\/creator\/plan$/, 'api_json'),
   route('POST', /^\/square\/creator\/subscription\/confirm$/),
-  route('GET', /^\/square\/contacts$/),
-  route('PUT', /^\/square\/contacts\/[^/]+$/, 'contact_ciphertext'),
-  route('DELETE', /^\/square\/contacts\/[^/]+$/),
+  route('POST', /^\/square\/contacts\/mls$/, 'contact_mls'),
   route('POST', /^\/square\/uploads\/prepare$/, 'api_json'),
   route('PUT', /^\/square\/uploads\/manifest$/, 'square_manifest'),
   route('POST', /^\/square\/uploads\/complete$/),

@@ -29,7 +29,10 @@ interface ChatServerClaims {
 export async function issueChatServerAccess(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
   const body = await readJson<ChatServerAccessRequest>(request);
+  // 请求只能确认会话授权的同一MLS设备，不能指定另一设备取得聊天token。
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).join(',') !== 'device_id') throw new HttpError(400, 'invalid_device_id', '聊天设备标识不合法');
   const deviceId = requireDeviceId(body.device_id);
+  if (deviceId !== session.device_id) throw new HttpError(403, 'device_mismatch', '聊天设备与当前MLS会话不一致');
   const membership = await getMembership(env, session.cid_number);
   if (!membership || !subscriptionIsActive(membership)) {
     throw new HttpError(403, 'chat_membership_required', '需要有效会员才能使用聊天');
@@ -90,15 +93,7 @@ export async function signChatServerToken(
 }
 
 function requireDeviceId(value: unknown): string {
-  if (
-    typeof value !== 'string'
-    || value.length < 1
-    || value.length > 256
-    || value.includes(':')
-    || [...value].some((character) => character.charCodeAt(0) < 32)
-  ) {
-    throw new HttpError(400, 'invalid_device_id', '聊天设备标识不合法');
-  }
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new HttpError(400, 'invalid_device_id', '聊天设备标识不合法');
   return value;
 }
 

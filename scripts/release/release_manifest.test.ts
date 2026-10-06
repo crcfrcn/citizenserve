@@ -98,7 +98,7 @@ function withTypesProject(run: (directory: string, execute: (script: string) => 
   try {
     mkdirSync(join(directory, 'scripts'));
     copyFileSync(join(projectPath, 'package.json'), join(directory, 'package.json'));
-    for (const name of ['wrangler.toml', 'worker-configuration.d.ts']) {
+    for (const name of ['wrangler.toml', 'worker-configuration.d.ts', 'check-worker-types.mjs']) {
       copyFileSync(join(projectPath, 'scripts', name), join(directory, 'scripts', name));
     }
     symlinkSync(join(projectPath, 'src'), join(directory, 'src'), 'dir');
@@ -272,6 +272,16 @@ describe('CitizenServe产品发布输入', () => {
       expect(repaired.status, `${repaired.stdout}\n${repaired.stderr}`).toBe(0);
     });
   }, 60_000);
+
+  test('类型输入缺失必须失败，不能比较两个空摘要', () => {
+    withTypesProject((directory, execute) => {
+      rmSync(join(directory, 'scripts/worker-configuration.d.ts'));
+      const result = execute('types:check');
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('ENOENT');
+    });
+  });
 
   test('生成器失败即使文件摘要未变化也必须失败', () => {
     withTypesProject((directory, execute) => {

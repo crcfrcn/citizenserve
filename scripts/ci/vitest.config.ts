@@ -16,6 +16,8 @@ export default {
   root: projectRoot,
   cacheDir: resolve(cache, 'vitest'),
   test: {
+    // Node构建合同由同一npm test的Node阶段执行，Vitest只接纳业务TypeScript套件。
+    include: ['**/*.test.ts'],
     environment: 'node',
     globals: true,
     coverage: { reportsDirectory: resolve(cache, 'vitest/coverage') }

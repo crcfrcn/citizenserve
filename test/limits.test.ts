@@ -14,6 +14,12 @@ import { afterEach, vi } from 'vitest';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Cloudflare 统一资源限制', () => {
+  it('固定MLS证明、正文和未消费挑战上限', () => {
+    expect(resourceLimit('mls_authentication_body').max_bytes).toBe(1024 * 1024);
+    expect(resourceLimit('mls_authentication_proof').max_bytes).toBe(16 * 1024);
+    expect(resourceLimit('mls_authentication_challenge')).toMatchObject({ max_count: 64, ttl_seconds: 300 });
+  });
+
   it('固定压缩后的图片、视频和普通推送硬上限', () => {
     expect(resourceLimit('profile_avatar').max_bytes).toBe(512 * 1024);
     expect(resourceLimit('square_image_freedom').max_bytes).toBe(1_000_000);
@@ -21,7 +27,12 @@ describe('Cloudflare 统一资源限制', () => {
     expect(resourceLimit(videoResource('freedom')).max_bytes).toBe(16_000_000);
     expect(resourceLimit(videoResource('spark')).max_seconds).toBe(3 * 60 * 60);
     expect(resourceLimit('push_endpoint').max_bytes).toBe(16 * 1024);
-    expect(resourceLimit('contact_ciphertext').max_bytes).toBe(16 * 1024);
+    expect(resourceLimit('contact_mls').max_bytes).toBe(256 * 1024);
+  });
+
+  it('MLS正文流在1MiB上限处拒绝，不能依赖Content-Length声明', async () => {
+    const request = new Request('https://worker.test/square/profile/assets', { method: 'PUT', body: new Uint8Array(1024 * 1024 + 1) });
+    await expect(readLimitedBytes(request, 'mls_authentication_body')).rejects.toMatchObject({ code: 'request_too_large' });
   });
 
   it('在进入风控和 D1 前拒绝未登记路由', () => {
@@ -31,9 +42,9 @@ describe('Cloudflare 统一资源限制', () => {
       HttpError
     );
     expect(() => assertKnownRoute('PUT', '/square/uploads/media')).toThrowError(HttpError);
-    expect(assertKnownRoute('GET', '/square/contacts')).toBe('api_json_small');
+    expect(() => assertKnownRoute('GET', '/square/contacts')).toThrowError(HttpError);
     expect(assertKnownRoute('PUT', '/square/push-endpoint')).toBe('push_endpoint');
-    expect(assertKnownRoute('PUT', `/square/contacts/${'ab'.repeat(32)}`)).toBe('contact_ciphertext');
+    expect(assertKnownRoute('POST', '/square/contacts/mls')).toBe('contact_mls');
     expect(assertKnownRoute('GET', '/download/citizenapp/android')).toBe('api_json_small');
     for (const path of [
       '/download/citizenchain/macOS',

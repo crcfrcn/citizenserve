@@ -28,6 +28,9 @@ function fakeEnv(
       get: async (key: string) => key ===
         'square_session:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' ? {
         account_id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+        cid_number: 'CN220-CTZN2-198805200-2026',
+        binding_revision: 1,
+        device_id: 'a'.repeat(64),
         created_at: 0,
         expires_at: Date.now() + 60_000
       } : null

@@ -132,56 +132,45 @@ type RuntimeBindings =
 /// Worker 唯一环境类型 = Wrangler 生成的真实绑定 + 不可写入 scripts/wrangler.toml 的 Secret 名称。
 export type Env = RuntimeBindings & WorkerSecretsAndOptionalVars;
 
+/** 用户唯一身份是CID，设备复用MLS公钥公开值，不生成第二密钥。 */
 export interface SessionState {
-  /// 用户唯一身份主键。会话即以 cid_number 为身份。
-  cid_number: string;
-  /// 签发本会话时的 CID 单调绑定版本；每请求必须与 finalized 精确一致。
-  binding_revision: number;
-  /// 签发本会话时该 cid_number 链上绑定的钱包账户;用于定位设备子钥 + 每请求复查绑定。
-  account_id: string;
-  device_key_hash: string;
-  created_at: number;
-  expires_at: number;
-}
-
-export interface LoginChallengeRow {
-  challenge_id: string;
-  /// 挑战归属的唯一身份主键；account_id 只是该挑战要求的签名账户。
   cid_number: string;
   binding_revision: number;
   account_id: string;
-  signing_payload: string;
-  expires_at: number;
-  used_at: number | null;
-}
-
-export interface DeviceSubkeyRow {
-  /// 身份主键:设备子钥挂在其当前绑定钱包账户对应的 cid_number 下。
-  cid_number: string;
-  /// 设备标识 = P-256 公钥的 sha256(同一身份多设备各一行)。
   device_id: string;
-  /// 该设备证明被当前账户授权时的 CID 绑定版本。
-  binding_revision: number;
-  /// 生成该子钥的钱包账户(换绑后由链上绑定校验判活/失效)。
-  account_id: string;
-  p256_public_key: string;
-  issued_at: number;
   created_at: number;
-  updated_at: number;
+  expires_at: number;
+}
+export type MlsAuthenticationPurpose = 'session' | 'request' | 'registration';
+/** 与SDK固定证明逐字段一致；普通认证不携带钱包签名或私钥。 */
+export interface MlsAuthenticationProof {
+  user_id: string; device_id: string; public_key: string;
+  account_id: string; binding_revision: number; service_origin: string;
+  challenge: string; expires_at_millis: number; method: string;
+  request_target: string; body_sha256: string; signature: string;
+}
+/** 单一挑战表覆盖登录、请求和登记持钥证明，用途不可互换。 */
+export interface MlsAuthenticationChallengeRow {
+  challenge: string; purpose: MlsAuthenticationPurpose;
+  cid_number: string; device_id: string; binding_revision: number; account_id: string;
+  service_origin: string; method: string; request_target: string; body_sha256: string;
+  session_token_hash: string | null; created_at: number;
+  expires_at_millis: number;
+}
+/** 服务端只持有钱包授权的MLS公钥及当前绑定事实。 */
+export interface MlsDeviceRow {
+  cid_number: string; device_id: string; binding_revision: number; account_id: string;
+  public_key: string; issued_at: number; created_at: number; updated_at: number;
 }
 
-/// 端到端加密通讯录行。Worker 只保存不透明密文，绝不接收联系人账户或名称明文。
-/// 属主键 = 身份主键 cid_number(换绑后随身份保留)。
-export interface ContactCiphertextRow {
-  cid_number: string;
-  /// 密文派生上下文；只作钱包换绑版本隔离，不改变 CID 属主。
-  binding_revision: number;
-  account_id: string;
-  contact_id: string;
-  ciphertext: string;
-  nonce: string;
-  mac: string;
-  updated_at: number;
+export interface ContactMlsGroupRow {
+  cid_number: string; group_id: string; creator_device_id: string;
+  group_revision: number; member_device_ids: string; pending_operation_id: string | null;
+}
+export interface ContactMlsOperationRow {
+  cid_number: string; operation_id: string; device_id: string; group_revision: number;
+  operation_kind: 'create' | 'add' | 'remove' | 'application'; target_device_ids: string;
+  result_json: string | null; committed_at: number | null;
 }
 
 export interface MembershipRow {

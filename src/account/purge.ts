@@ -85,14 +85,17 @@ export async function purgeIdentity(
   //    所有有 CID 归属的身份、内容、关系、设备与用量数据均按 CID 删除。登录挑战
   //    记录 CID 归属，必须覆盖历次换绑账户，不能只删当前授权账户。
   const statements = [
-    env.DB.prepare(`DELETE FROM square_device_subkeys WHERE cid_number = ?`).bind(cidNumber),
+    env.DB.prepare(`DELETE FROM mls_devices WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM push_endpoints WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM square_sessions WHERE cid_number = ?`).bind(cidNumber),
-    env.DB.prepare(`DELETE FROM square_login_challenges WHERE cid_number = ?`).bind(cidNumber),
+    env.DB.prepare(`DELETE FROM mls_authentication_challenges WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM square_uploads WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM square_posts WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM square_media_assets WHERE cid_number = ?`).bind(cidNumber),
-    env.DB.prepare(`DELETE FROM square_contacts WHERE cid_number = ?`).bind(cidNumber),
+    env.DB.prepare('DELETE FROM contact_mls_messages WHERE cid_number = ?').bind(cidNumber),
+    env.DB.prepare('DELETE FROM contact_mls_operations WHERE cid_number = ?').bind(cidNumber),
+    env.DB.prepare('DELETE FROM contact_mls_packages WHERE cid_number = ?').bind(cidNumber),
+    env.DB.prepare('DELETE FROM contact_mls_groups WHERE cid_number = ?').bind(cidNumber),
     env.DB.prepare(`DELETE FROM chain_transaction_confirmations WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM topup_orders WHERE cid_number = ?`).bind(cidNumber),
     env.DB.prepare(`DELETE FROM resource_reservations WHERE cid_number = ?`).bind(cidNumber),

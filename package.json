@@ -10,9 +10,9 @@
     "dev": "wrangler dev --config scripts/wrangler.toml --local",
     "dev:local": "wrangler dev --config scripts/wrangler.toml --local",
     "generate:types": "CI=1 WRANGLER_SEND_METRICS=false wrangler types scripts/worker-configuration.d.ts --config scripts/wrangler.toml --env-interface CloudflareBindings && node -e 'const fs=require(\"node:fs\");const p=\"scripts/worker-configuration.d.ts\";const marker=/^(\\/\\/ Runtime types generated[^\\n]*\\n)/m;const text=fs.readFileSync(p,\"utf8\").replace(/[ \\t]+$/gm,\"\");if(!marker.test(text))throw new Error(\"缺少 Wrangler 运行时类型标记\");fs.writeFileSync(p,text.replace(marker,\"$1// 本生成文件把CitizenServe正式Wrangler绑定与workerd运行时声明投影为TypeScript类型，不手写第二份服务配置。\\n\"));'",
-    "types:check": "sh -ec 'before=$(shasum -a 256 scripts/worker-configuration.d.ts | cut -d \" \" -f 1); npm run generate:types >/dev/null; after=$(shasum -a 256 scripts/worker-configuration.d.ts | cut -d \" \" -f 1); if [ \"$before\" != \"$after\" ]; then echo \"scripts/worker-configuration.d.ts 已过期，请运行 npm run generate:types\" >&2; exit 1; fi'",
+    "types:check": "node scripts/check-worker-types.mjs",
     "typecheck": "npm run generate:types && tsc --project scripts/tsconfig.json --noEmit",
-    "test": "vitest run --config scripts/ci/vitest.config.ts --configLoader native",
+    "test": "vitest run --config scripts/ci/vitest.config.ts --configLoader native && node --test scripts/build-local.test.mjs scripts/build.test.mjs",
     "db:local": "wrangler d1 execute DB --config scripts/wrangler.toml --local --file schema/citizenserve.sql"
   },
   "dependencies": {

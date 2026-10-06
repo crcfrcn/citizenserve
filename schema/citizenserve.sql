@@ -114,91 +114,95 @@ CREATE TABLE IF NOT EXISTS membership_projection_cursor (
   updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
 );
 
--- 登录挑战绑定唯一身份主键 CID；account_id 仅记录本次必须签名的当前账户。
-CREATE TABLE IF NOT EXISTS square_login_challenges (
-  challenge_id TEXT PRIMARY KEY,
+-- 唯一MLS认证挑战绑定CID、设备、请求及会话；原子删除即消费，计数限制未消费记录。
+CREATE TABLE IF NOT EXISTS mls_authentication_challenges (
+  challenge TEXT PRIMARY KEY CHECK(length(challenge) = 66 AND substr(challenge, 1, 2) = '0x' AND substr(challenge, 3) NOT GLOB '*[^0-9a-f]*'),
+  purpose TEXT NOT NULL CHECK(purpose IN ('session', 'request', 'registration')),
   cid_number TEXT NOT NULL,
+  device_id TEXT NOT NULL CHECK(length(device_id) = 64 AND device_id NOT GLOB '*[^0-9a-f]*'),
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
-  signing_payload TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  used_at INTEGER
+  service_origin TEXT NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')),
+  request_target TEXT NOT NULL,
+  body_sha256 TEXT NOT NULL CHECK(length(body_sha256) = 66 AND substr(body_sha256, 1, 2) = '0x' AND substr(body_sha256, 3) NOT GLOB '*[^0-9a-f]*'),
+  session_token_hash TEXT CHECK(session_token_hash IS NULL OR (length(session_token_hash) = 64 AND session_token_hash NOT GLOB '*[^0-9a-f]*')),
+  created_at INTEGER NOT NULL CHECK(created_at > 0),
+  expires_at_millis INTEGER NOT NULL CHECK(expires_at_millis > created_at AND expires_at_millis <= created_at + 300000),
+  CHECK((purpose = 'request' AND session_token_hash IS NOT NULL) OR (purpose <> 'request' AND session_token_hash IS NULL))
 );
-CREATE INDEX IF NOT EXISTS idx_square_login_challenges_account_id
-  ON square_login_challenges(account_id, expires_at);
-CREATE INDEX IF NOT EXISTS idx_square_login_challenges_cid_number
-  ON square_login_challenges(cid_number, expires_at);
-CREATE INDEX IF NOT EXISTS idx_square_login_challenges_expires
-  ON square_login_challenges(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mls_authentication_challenges_cid ON mls_authentication_challenges(cid_number, expires_at_millis);
+CREATE INDEX IF NOT EXISTS idx_mls_authentication_challenges_expires ON mls_authentication_challenges(expires_at_millis);
 
--- 广场会话强一致索引。明文 token 只交给客户端，D1 与 KV 键仅保存其 SHA-256；
--- cid_number 是注销范围，account_id 只记录签发该凭证时的当前绑定账户，供换绑吊销筛选。
+-- 会话强一致索引保存当前MLS设备；明文token仅交给客户端，索引/KV键只保存SHA-256。
 CREATE TABLE IF NOT EXISTS square_sessions (
-  session_token_hash TEXT PRIMARY KEY CHECK(
-    length(session_token_hash) = 64
-    AND session_token_hash NOT GLOB '*[^0-9a-f]*'
-  ),
+  session_token_hash TEXT PRIMARY KEY CHECK(length(session_token_hash) = 64 AND session_token_hash NOT GLOB '*[^0-9a-f]*'),
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
+  device_id TEXT NOT NULL CHECK(length(device_id) = 64 AND device_id NOT GLOB '*[^0-9a-f]*'),
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_number
-  ON square_sessions(cid_number, expires_at);
-CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_account
-  ON square_sessions(cid_number, account_id, expires_at);
-CREATE INDEX IF NOT EXISTS idx_square_sessions_expires
-  ON square_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_number ON square_sessions(cid_number, expires_at);
+CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_account ON square_sessions(cid_number, account_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_square_sessions_expires ON square_sessions(expires_at);
 
--- 设备子钥:身份主键 cid_number(占即绑,挂当前绑定账户下)+ device_id(=P-256 公钥 sha256)。
--- 子钥由钱包 account_id 生成、属于该账户；换绑后此前账户子钥靠链上绑定校验判失效，不迁移。
-CREATE TABLE IF NOT EXISTS square_device_subkeys (
+-- 同一CID可登记多个MLS设备，编号就是公钥去前缀；只保存公开身份与钱包授权事实。
+CREATE TABLE IF NOT EXISTS mls_devices (
   cid_number TEXT NOT NULL,
-  device_id TEXT NOT NULL,
+  device_id TEXT NOT NULL CHECK(length(device_id) = 64 AND device_id NOT GLOB '*[^0-9a-f]*'),
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
-  p256_public_key TEXT NOT NULL CHECK(
-    length(p256_public_key) = 130
-    AND substr(p256_public_key, 1, 2) = '04'
-    AND p256_public_key NOT GLOB '*[^0-9a-f]*'
-  ),
-  issued_at INTEGER NOT NULL,
+  public_key TEXT NOT NULL CHECK(length(public_key) = 66 AND substr(public_key, 1, 2) = '0x' AND substr(public_key, 3) NOT GLOB '*[^0-9a-f]*' AND device_id = substr(public_key, 3)),
+  issued_at INTEGER NOT NULL CHECK(issued_at > 0),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY(cid_number, device_id)
 );
-CREATE INDEX IF NOT EXISTS idx_square_device_subkeys_cid_account
-  ON square_device_subkeys(cid_number, account_id);
+CREATE INDEX IF NOT EXISTS idx_mls_devices_cid_account ON mls_devices(cid_number, account_id);
 
--- 通讯录只保存端到端密文；联系人账户、名称和关系明文不得进入 Cloudflare。
--- 属主始终是 cid_number；binding_revision + account_id 只标明密文使用哪一版钱包钥匙，
--- 让换绑前后版本可并存并在 finalized 后原子切换读取，不构成第二身份主键。
-CREATE TABLE IF NOT EXISTS square_contacts (
-  cid_number TEXT NOT NULL,
-  binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
-  account_id TEXT NOT NULL CHECK(
-    length(account_id) = 66
-    AND substr(account_id, 1, 2) = '0x'
-    AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'
-  ),
-  contact_id TEXT NOT NULL CHECK(
-    length(contact_id) = 64 AND contact_id NOT GLOB '*[^0-9a-f]*'
-  ),
-  ciphertext TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  mac TEXT NOT NULL,
-  updated_at INTEGER NOT NULL CHECK(updated_at > 0),
-  PRIMARY KEY(cid_number, binding_revision, account_id, contact_id)
+-- 通讯录唯一 MLS 组与设备消息；只保存公开设备集合和不透明协议字节。
+CREATE TABLE IF NOT EXISTS contact_mls_groups (
+  cid_number TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL UNIQUE,
+  creator_device_id TEXT NOT NULL,
+  group_revision INTEGER NOT NULL CHECK(group_revision >= 0),
+  member_device_ids TEXT NOT NULL,
+  pending_operation_id TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_square_contacts_cid_number_updated
-  ON square_contacts(
-    cid_number,
-    binding_revision,
-    account_id,
-    updated_at DESC,
-    contact_id DESC
-  );
+CREATE TABLE IF NOT EXISTS contact_mls_packages (
+  cid_number TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  key_package TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(cid_number, device_id)
+);
+CREATE TABLE IF NOT EXISTS contact_mls_operations (
+  cid_number TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  group_revision INTEGER NOT NULL,
+  operation_kind TEXT NOT NULL CHECK(operation_kind IN ('create','add','remove','application')),
+  target_device_ids TEXT NOT NULL,
+  result_json TEXT,
+  committed_at INTEGER,
+  PRIMARY KEY(cid_number, operation_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_mls_pending
+  ON contact_mls_operations(cid_number) WHERE committed_at IS NULL;
+CREATE TABLE IF NOT EXISTS contact_mls_messages (
+  cid_number TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  operation_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence > 0),
+  message_type TEXT NOT NULL CHECK(message_type IN ('welcome','commit','application')),
+  mls_message TEXT NOT NULL,
+  sender_device_id TEXT NOT NULL,
+  PRIMARY KEY(cid_number, device_id, operation_id, message_type)
+);
+CREATE INDEX IF NOT EXISTS idx_contact_mls_delivery
+  ON contact_mls_messages(cid_number, device_id, sequence);
 
 -- 只保存必须跨 PoP 精确一致的低频上传与外部 RPC 硬顶；普通请求走原生 RateLimit binding。
 CREATE TABLE IF NOT EXISTS rate_windows (
@@ -485,7 +489,7 @@ CREATE TABLE IF NOT EXISTS push_endpoints (
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
-  device_key_hash TEXT NOT NULL CHECK(length(device_key_hash) = 64 AND device_key_hash NOT GLOB '*[^0-9a-f]*'),
+  device_id TEXT NOT NULL CHECK(length(device_id) = 64 AND device_id NOT GLOB '*[^0-9a-f]*'),
   push_provider TEXT NOT NULL CHECK(push_provider IN ('apns', 'fcm')),
   push_token TEXT NOT NULL,
   -- APNs Token 与签名环境绑定；FCM 没有该维度，必须为空。
@@ -496,7 +500,7 @@ CREATE TABLE IF NOT EXISTS push_endpoints (
   ),
   expires_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY(cid_number, device_key_hash)
+  PRIMARY KEY(cid_number, device_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_push_endpoints_token
   ON push_endpoints(push_provider, push_token);
