@@ -147,3 +147,37 @@ test('GNU固定镜像的连接恢复摘要失败与来源闭集', async () => {
     assert.equal(corrupted,1); assert.equal(existsSync(rejected),false);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
+
+
+// 合成已安装包快照验证依赖选择，不联网、安装包或运行本机Ubuntu工具。
+test('Ubuntu虚拟依赖保留提供包的Depends与Pre-Depends闭包',async()=>{
+  const {resolveBootstrapPackages:resolve}=await import('./execute.mjs');
+  const status='install ok installed',roots=[{name:'compiler',version:'1'}],compare=(a,operator,b)=>operator==='='?a===b:operator==='>='&&Number(a)>=Number(b);
+  const rows=[{name:'compiler',version:'1',status,depends:'awk'},
+    {name:'mawk',version:'99',status,provides:'awk',depends:'libc (>= 2)',preDepends:'loader'},
+    {name:'libc',version:'2',status},{name:'loader',version:'1',status}];
+  assert.deepEqual(resolve(rows,roots,compare).map(row=>row.name),['compiler','libc','loader','mawk']);
+  assert.deepEqual(resolve([{...rows[0],depends:'missing | awk'},...rows.slice(1)],roots,compare).map(row=>row.name),['compiler','libc','loader','mawk']);
+  assert.deepEqual(resolve([...rows,{name:'awk',version:'1',status}],roots,compare).map(row=>row.name),['awk','compiler']);
+  for(const changed of [rows.filter(row=>row.name!=='mawk'),rows.map(row=>row.name==='mawk'?{...row,status:'deinstall ok config-files'}:row),
+    rows.filter(row=>row.name!=='loader'),rows.map(row=>row.name==='libc'?{...row,version:'1'}:row)])assert.throws(()=>resolve(changed,roots,compare));
+  assert.throws(()=>resolve(rows,[{name:'awk',version:'99'}],compare));
+  assert.throws(()=>resolve(rows,[{name:'compiler',version:'2'}],compare));
+  assert.throws(()=>resolve([...rows,rows[0]],roots,compare));
+  assert.throws(()=>resolve([{...rows[0],depends:'invalid [amd64]'},...rows.slice(1)],roots,compare));
+  assert.throws(()=>resolve([{...rows[0],depends:'libc (>= 2)'},...rows.slice(1)],roots,()=>{throw Error('比较器失败');}),/比较器失败/u);
+});
+test('UbuntuProvides按声明版本匹配并保留同名不同版本',async()=>{
+  const {resolveBootstrapPackages:resolve}=await import('./execute.mjs');
+  const status='install ok installed',roots=[{name:'compiler',version:'1'}],compare=(a,operator,b)=>operator==='='&&a===b;
+  const rows=[{name:'compiler',version:'1',status,depends:'dpkg-build-api (= 1), debhelper-compat (= 13)'},
+    {name:'dpkg-dev',version:'99',status,provides:'dpkg-build-api (= 0), dpkg-build-api (= 1)'},
+    {name:'debhelper',version:'99',status,provides:'debhelper-compat (= 9), debhelper-compat (= 10), debhelper-compat (= 11), debhelper-compat (= 12), debhelper-compat (= 13)'}];
+  for(const api of ['0','1'])for(const compat of ['9','10','11','12','13'])assert.deepEqual(
+    resolve([{...rows[0],depends:'dpkg-build-api (= '+api+'), debhelper-compat (= '+compat+')'},...rows.slice(1)],roots,compare).map(row=>row.name),
+    ['compiler','debhelper','dpkg-dev']);
+  for(const depends of ['dpkg-build-api (= 2)','dpkg-build-api (= 99)','debhelper-compat (= 14)'])assert.throws(()=>resolve([{...rows[0],depends},...rows.slice(1)],roots,compare));
+  for(const provides of ['dpkg-build-api','dpkg-build-api (= 0), dpkg-build-api (= 0)',
+    'dpkg-build-api (=0), dpkg-build-api (= 0)','dpkg-build-api, dpkg-build-api','dpkg-build-api (>= 1)'])assert.throws(
+    ()=>resolve([rows[0],{...rows[1],provides},rows[2]],roots,compare));
+});

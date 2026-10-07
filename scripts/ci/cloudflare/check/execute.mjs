@@ -623,6 +623,47 @@ export function runShellTests(environment = process.env, execute = runExactProce
   if (result.error || result.status!==0) shellFailure('测试命令失败');
   return result;
 }
+
+// Ubuntu虚拟依赖仅由已安装包的官方Provides满足，提供包自身依赖仍进入完整闭包。
+export function resolveBootstrapPackages(records, roots, compare) {
+  const packages=new Map(records.map(record=>[record.name,record]));
+  if(packages.size!==records.length)shellFailure('Ubuntu包身份重复');
+  const ready=record=>record?.status==='install ok installed',providers=new Map();
+  for(const record of [...packages.values()].filter(ready).sort((a,b)=>a.name.localeCompare(b.name))) {
+    const seen=new Set();
+    for(const item of (record.provides||'').split(',').map(value=>value.trim()).filter(Boolean)) {
+      const match=/^([a-z0-9+.-]+)(?:\s*\(=\s*([^()\s]+)\))?$/u.exec(item);
+      if(!match)shellFailure('Ubuntu虚拟包声明无效');
+      const identity=JSON.stringify([match[1],match[2]??null]);
+      if(seen.has(identity))shellFailure('Ubuntu虚拟包声明重复');seen.add(identity);
+      const list=providers.get(match[1])||[];list.push({record,version:match[2]});providers.set(match[1],list);
+    }
+  }
+  for(const root of roots) {
+    const actual=packages.get(root.name);
+    if(!ready(actual)||actual.version!==root.version)shellFailure('基础根包不符：'+root.name+'；预期='+root.version+'；实际='+(actual?.version||'缺失'));
+  }
+  const selected=new Map(),queue=roots.map(root=>root.name);
+  while(queue.length) {
+    const name=queue.shift();if(selected.has(name))continue;const record=packages.get(name);
+    if(!ready(record))shellFailure('Ubuntu内部包未安装');
+    selected.set(name,{name,version:record.version});
+    for(const clause of [record.depends,record.preDepends].filter(Boolean).join(',').split(',').map(value=>value.trim()).filter(Boolean)) {
+      let dependency;
+      for(const alternative of clause.split('|')) {
+        const match=/^([a-z0-9+.-]+)(?::(?:any|native|amd64))?(?:\s*\((<<|<=|=|>=|>>)\s*([^()\s]+)\))?$/u.exec(alternative.trim());
+        if(!match)shellFailure('内部依赖语法未支持');
+        const candidate=packages.get(match[1]);
+        if(ready(candidate)&&(!match[2]||compare(candidate.version,match[2],match[3]))) {dependency=candidate.name;break;}
+        const provider=(providers.get(match[1])||[]).find(item=>!match[2]||(item.version&&compare(item.version,match[2],match[3])));
+        if(provider) {dependency=provider.record.name;break;}
+      }
+      if(!dependency)shellFailure('Ubuntu内部依赖闭包缺失：'+clause);queue.push(dependency);
+    }
+  }
+  return [...selected.values()].sort((a,b)=>a.name.localeCompare(b.name));
+}
+
 function shellBootstrap(environment, execute) {
   shellContext(environment);
   if (process.platform!=='linux' || process.arch!=='x64'
@@ -631,33 +672,14 @@ function shellBootstrap(environment, execute) {
   const env={HOME:environment.HOME,PATH:'',LANG:'C',LC_ALL:'C'};
   const call=(command,args)=>String(execute(shellFile(command,true),args,{env,encoding:'utf8',timeout:20_000,maxBuffer:4*1024*1024})).trim();
   const query='/usr/bin/dpkg-query',dpkg='/usr/bin/dpkg';
-  const format=['Package','Architecture','Status','Version','Depends','Pre-Depends'].map(name=>'$'+'{'+name+'}').join('\t')+'\n';
-  const records=call(query,['-W','-f='+format]).split('\n').filter(Boolean).map(line=>line.split('\t')).filter(r=>['all','amd64'].includes(r[1]));
-  const packages=new Map(records.map(([name,architecture,status,version,depends,preDepends])=>[name,{name,status,version,depends,preDepends}]));
-  if (packages.size!==records.length) shellFailure('Ubuntu包身份重复');
-  for (const root of TEST_SHELL_BOOTSTRAP.packages) {
-    const actual=packages.get(root.name);
-    if (!actual || actual.status!=='install ok installed' || actual.version!==root.version) shellFailure('基础根包不符：'+root.name+'；预期='+root.version+'；实际='+(actual?.version||'缺失'));
-  }
-  const selected=new Map(),queue=TEST_SHELL_BOOTSTRAP.packages.map(p=>p.name);
-  while(queue.length) {
-    const name=queue.shift();if(selected.has(name))continue;const record=packages.get(name);
-    if(!record || record.status!=='install ok installed')shellFailure('Ubuntu内部包未安装');
-    selected.set(name,{name,version:record.version});
-    for(const clause of [record.depends,record.preDepends].filter(Boolean).join(',').split(',').map(x=>x.trim()).filter(Boolean)) {
-      let dependency;
-      for(const alternative of clause.split('|')) {
-        const match=/^([a-z0-9+.-]+)(?::(?:any|native|amd64))?(?:\s*\((<<|<=|=|>=|>>)\s*([^()\s]+)\))?$/u.exec(alternative.trim());
-        if(!match)shellFailure('内部依赖语法未支持');const candidate=packages.get(match[1]);
-        if(candidate?.status!=='install ok installed')continue;
-        if(match[2]){try{execute(dpkg,['--compare-versions',candidate.version,match[2],match[3]],{env,encoding:'utf8',timeout:20_000});}
-          catch(error){if(error.status===1)continue;throw error;}}
-        dependency=match[1];break;
-      }
-      if(!dependency)shellFailure('Ubuntu内部依赖闭包缺失：'+clause);queue.push(dependency);
-    }
-  }
-  for(const record of selected.values())if(call(dpkg,['--verify',record.name]))shellFailure('Ubuntu包文件漂移：'+record.name);
+  const format=['Package','Architecture','Status','Version','Depends','Pre-Depends','Provides'].map(name=>'$'+'{'+name+'}').join('\t')+'\n';
+  const records=call(query,['-W','-f='+format]).split('\n').filter(Boolean).map(line=>line.split('\t')).filter(row=>['all','amd64'].includes(row[1]))
+    .map(([name,architecture,status,version,depends,preDepends,provides])=>({name,status,version,depends,preDepends,provides}));
+  const selected=resolveBootstrapPackages(records,TEST_SHELL_BOOTSTRAP.packages,(actual,operator,expected)=>{
+    try {execute(dpkg,['--compare-versions',actual,operator,expected],{env,encoding:'utf8',timeout:20_000});return true;}
+    catch(error) {if(error.status===1)return false;throw error;}
+  });
+  for(const record of selected)if(call(dpkg,['--verify',record.name]))shellFailure('Ubuntu包文件漂移：'+record.name);
   const commands=TEST_SHELL_BOOTSTRAP.commands.map(record=>{
     const path=shellFile(record.path,true);
     if(!call(query,['-S',path]).split('\n').some(line=>line===record.package+': '+path || line===record.package+':amd64: '+path))shellFailure('基础命令包归属不符');
@@ -665,7 +687,7 @@ function shellBootstrap(environment, execute) {
   });
   const clang=commands.find(p=>p.name==='clang');
   if(!clang || !/^Ubuntu clang version 18\.1\.3(?:\s|$)/u.test(call(clang.path,['--version'])))shellFailure('编译器版本不符');
-  return {commands,packages:[...selected.values()].sort((a,b)=>a.name.localeCompare(b.name))};
+  return {commands,packages:selected};
 }
 export async function shellOriginal(record, destination, request = fetch) {
   const {response} = await requestGNUOriginal(record, request);
