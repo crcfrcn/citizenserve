@@ -1,6 +1,7 @@
 import type { Env, SquareNotifyJob } from './types';
 import { errorResponse } from './shared/http';
 import { routeRequest } from './routes';
+import { ETHEREUM_RPC_HOST, handleEthereumRpc } from './chain/ethereum_rpc';
 import { fanOutPage } from './feeds/notify_fanout';
 import { runExpiredMembershipContentCleanup } from './membership/expiration_cleanup';
 import { applyCors, cleanupSecurityState } from './security/request_guard';
@@ -51,6 +52,7 @@ async function runIndependentScheduledJobs(
 }
 export default {
   async fetch(request: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
+    if (new URL(request.url).hostname === ETHEREUM_RPC_HOST) return handleEthereumRpc(request, env);
     try {
       return applyCors(request, env, await routeRequest(request, env));
     } catch (error) {

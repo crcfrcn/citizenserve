@@ -18,6 +18,7 @@ export type ResourceKey =
   | 'chain_extrinsic'
   | 'chain_extrinsic_json'
   | 'chain_rpc_response'
+  | 'ethereum_rpc_request'
   | 'mls_authentication_body'
   | 'mls_authentication_proof'
   | 'mls_authentication_challenge'
@@ -129,6 +130,7 @@ export const resourceLimits: Readonly<Record<ResourceKey, ResourceLimit>> = {
   push_notification: { max_bytes: 4 * kib },
   chain_extrinsic: { max_bytes: 64 * kib },
   chain_extrinsic_json: { max_bytes: 132 * kib },
+  ethereum_rpc_request: { max_bytes: 64 * kib, max_items: 20 },
   chain_rpc_response: { max_bytes: 4 * mib },
   // 证明可包含8KiB路径；正文与SDK同限1MiB，每CID每用途最多64条未消费挑战。
   mls_authentication_body: { max_bytes: mib },

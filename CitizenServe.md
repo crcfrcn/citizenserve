@@ -7,6 +7,20 @@
 第8、9步完成目录与路径实现、根文档迁移及测试源码维护，未运行测试、门禁、编译或安装。本文唯一原件位于/Users/rhett/citizenserve/CitizenServe.md；产品接口及流程直接以本仓实际代码和声明为准，业务字典库与其检查已撤销，不另建登记副本。历史验收事实不表示本轮改造已经通过验收，统一测试在第10步进行。根技术文档由本仓门禁按原文、JSON解码值及既有补丁快照扫描机密，仅报告路径；文档迁出不减少资料安全检查。
 
 
+## 公共钱包 RPC 与 Cloudflare TLS（2026年10月7日）
+
+公共钱包使用 https://rpc.crcfrcn.com/，由同一 CitizenServe Worker 的独立域名入口处理。Wrangler 为该域名声明 custom_domain=true，由 Cloudflare 管理 DNS 和公网边缘证书；既有 www.crcfrcn.com/api/* 路由不变。公共入口只接受 HTTPS 根路径的 JSON-RPC 2.0 POST 和必要的 CORS 预检，无 App 会话前提；允许公开跨来源调用，不发送凭据型 CORS。其他 App 接口继续执行既有来源、会话与 MLS 门禁。
+
+公开方法仅包含实际 SDK 提供的钱包读方法及 eth_sendRawTransaction；eth_sendTransaction、personal/admin/debug、原生 state/author RPC 和 HTTP 下的订阅均拒绝。请求体最大64KiB，一批最多20项，ID须唯一且类型匹配；逐方法计读预算，已签名广播另计写预算。日志查询只接受指定区块哈希或不超过1000块的显式数值范围，费用历史最多1024块及100个有序百分位。上游复用受保护 CHAIN_URL、服务端 CHAIN_ID/CHAIN_SECRET、3秒超时、现有4MiB响应硬顶和手工重定向拒绝，不自动重试已签名交易；公开响应不复制上游头、Cookie、异常正文或 error.data。eth_chainId 和 net_version 必须实际返回0x7eb及2027，余额、gas报价和手续费不伪造。
+
+服务端继续复用既有 nrcgch-rpc Tunnel 与 Access Service Auth。目标链路为公共 Worker → 受保护的 chain.crcfrcn.com → HTTPS回环网关18080 → HTTPS回环节点9944。公网使用 Cloudflare 边缘证书，回源使用 Cloudflare Origin CA；源证书SAN为chain.crcfrcn.com，私钥在生产服务器生成，只有CSR提交Cloudflare。cloudflared 配置 originServerName、httpHostHeader 和 caPool，Nginx 对节点配置可信CA、SNI及证书域名校验；禁止 noTLSVerify、跳过校验或明文回退。Origin CA不用于MetaMask直接访问回环节点。
+
+2026年10月7日只读核实生产节点仍是 citizenchain 1.0.1-babef11d9a7，18080与9944仅回环监听，现有Nginx回源为HTTP，9944的TLS握手返回WRONG_VERSION_NUMBER。部署二进制的原生RPC方法标识存在，eth_chainId、eth_sendRawTransaction、eth_estimateGas和新TLS配置标识均未检出；这属于部署静态证据，不替代真实Ethereum RPC验收。生产证书签发、具备TLS及Ethereum接口的节点部署和真实链ID核对尚未完成，故公共域名尚未发布，不能宣称MetaMask已可连接或转账。上线前须完成实际TLS链路、真实方法、链身份、广播回执和费用核对。
+
+公共入口的生产激活顺序为：旧Node先承载新Runtime升级；链上新Runtime的创世身份与真实块0一致且继续出块/最终确认后，才增加Node对应创世身份守卫并更新各节点软件；随后完成Cloudflare证书与HTTPS回源验证，再激活公共域名。证书及网关候选可提前准备，源码中的身份API或编译常量不得冒充链上升级成功的证据。
+
+候选使用锁内77个既有npm原件离线验真物化，公共RPC模块69项与既有限额10项、链身份5项，共84项通过、0失败；候选全部生产TypeScript依赖闭包及上述测试在TypeScript6.0.2下608份文件、0诊断。上游替身覆盖协议、限流、响应校验、失败及泄露拒绝，只代表代码合同验收，不代表生产链或MetaMask实际UI通过。
+
 ## 聊天功能的唯一产品归属
 
 **聊天客户端的逻辑功能只能在 TataChatSDK 中实现；聊天服务端的逻辑功能只能在 TataChatServer 中实现。公民、途遇及其他产品只依赖使用。**
@@ -494,3 +508,17 @@ Pod由pods中的name、version、checksum匹配当前Podfile.lock；spec保存�
 资源回归使用自带固定提交、源码字节和spec的合成Pod，不借用产品真实Pod清单提供测试输入；无真实Pod需求的平台也验证来源、摘要、链接、循环、取消和物化失败。测试现场仍位于本产品target的准确平台，不写源码或其它产品目录。资源声明与生产依赖坐标不因测试夹具改变。
 
 资源取消对同一真实进程组每轮只发送一次信号；组不存在或Windows时才发送给主进程。仍等待主进程和后代实际退出，8秒未退出才强杀，12秒仍未确认则保留现场并失败；取消不能成为成功。
+
+
+本产品scripts/build.mjs的模块初始化与CLI执行分离：私有异步runCLI承载原命令主体，仅在直接执行文件时启动，拒绝时输出错误并以退出码1失败。模块求值先完成，scripts/resources.mjs可反向导入同一checkWork、requirements和平台校验，不复制实现或增加启动入口；普通import不启动CLI。现有公开参数、JSON请求、--offline、锁定Node验真和必要重入、资源/准备/编译/适用签名安装回读步骤以及取消与结果合同保持。离线缺件和非法输入必须真实失败，禁止以未完成顶层await退出替代完整结果。对应真实CLI回归只在自有target测试现场替换资源供给边界，验证反向导入、参数与错误传播，不据此声称实际产品编译通过。
+
+
+本产品scripts/resources.mjs的普通inventory清单保持独占文件要求；工具原件toolInventory复用同一扫描实现，只允许全部真实名称均位于同一规范payload内的硬链接组。扫描按dev/ino分组，实际名称数量必须与nlink闭合；工具普通文件以O_NOFOLLOW打开，打开及读取后复验身份、计数、权限和字节相关元数据，扫描结束再回读全部目录、文件及链接身份与规范目标。原件外额外名称、目录或链接越界、特殊项、读取期间替换/权限/内容变化均失败。清单仍逐路径保留原有path/sha256/executable或directory/target格式，继续由既有回执、准确官方归档/版本、配方和编译输入证明验真；regular与其它资源默认独占校验不放宽。不新增公开命令、参数、声明字段或原件登记，不改版本、锁、配方和工具原件，不以拆分内部链接、重新安装或下载解决验真。回归复制本仓完整实现到所属target测试现场，仅替换文件IO边界以确定性制造读取变化，并在夹具内暴露已有私有验真函数；纯合成对象覆盖正常、拒绝与回执漂移，不据此宣称真实工具或产品编译通过。
+
+
+本产品资源验真将下载运输元数据与源码工具编译身份分开：仅在源码工具证明和本产品声明的比较副本中，验证并移除archive.mirrors与upstream_patches各项mirrors。镜像须为非空、无重复、无控制字符/空白、无账号/口令/片段的准确规范HTTPS地址数组；错误格式直接失败。官方来源URL、版本、归档字节摘要、kind/root/executable、补丁来源/摘要/顺序、前置与依赖闭包、其它位置同名字段及未知字段继续严格比较。Xcode/POSIX输入、recipe.source和source.archive/source.gem摘要、原回执清单及入口独占规则不变；比较不改写原证明、声明或回执，不改变原件/登记/配方/版本/锁和实际下载策略，不读取控制台登记作为产品版本或策略来源。既有回归使用完整本仓资源实现及纯合成物理证明，逐次重算清单，验证运输差异可复用与真正输入漂移必须失败；测试不启动工具或冒充真实编译交付。
+
+
+本仓平台命名门禁仍扫描完整Git跟踪路径和正文，仅在内存副本识别scripts/resources.mjs中唯一规范的toolDefinitions与flutterPatch声明。规范JSON回读及唯一工具身份阻断重复键、转义、歧义和重复声明；使用Flutter时核验准确官方来源、版本对应归档和本仓补丁来源与全文摘要，未使用Flutter时只接受已核实固定来源与全文SHA-256的共同原补丁。仅处理官方native_assets_host.dart中与准确文件头、行号、lipoDylibs签名及紧邻调用同时闭合的一行原上下文注释，其它新增、删除、上下文、源码和路径的旧平台名称继续拒绝；实际资源源码、补丁、版本、锁和原件不变。目录边界回归以unlinkSync删除自身合成目录符号链接，继续完整验证根target普通目录可用、嵌套target/目录链接/普通文件拒绝；生产目录边界规则不变。回归使用本仓真实门禁与完整Git跟踪合成文件，只在本产品准确target测试现场运行，不将扫描夹具作为真实产品编译或发布证据。
+
+本仓门禁的测试子进程白名单仅保留已有PRODUCT_GIT_BIN准确执行器路径，供完整Git索引夹具使用；缺少该准确入口时回归失败，不查询PATH、不回退系统Git、不传凭据或其它产品材料。不新增工具版本、声明字段、公开参数或生产资源获取步骤。

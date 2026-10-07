@@ -1,4 +1,5 @@
 import type { Env } from "../types";
+import type { EthereumRpcMethod } from "./ethereum_rpc";
 import { HttpError } from "../shared/http";
 import { resourceLimit } from "../limits/catalog";
 
@@ -23,7 +24,7 @@ type JsonRpcId = number | string;
 interface ChainRpcRequest {
   jsonrpc: "2.0";
   id: JsonRpcId;
-  method: ChainRpcMethod;
+  method: ChainRpcMethod | EthereumRpcMethod;
   params: unknown[];
 }
 
@@ -217,7 +218,8 @@ export async function callChainRpc(
   return rpcResult(await requestChainRpc(env, payload), requestId);
 }
 
-async function requestChainRpc(
+/** 公开钱包入口复用同一受保护传输；方法校验由各调用入口承担。 */
+export async function requestChainRpc(
   env: Env,
   requestBody: ChainRpcRequest | ChainRpcRequest[],
 ): Promise<unknown> {

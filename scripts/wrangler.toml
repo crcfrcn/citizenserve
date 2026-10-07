@@ -4,7 +4,10 @@ main = "../src/index.ts"
 compatibility_date = "2026-07-23"
 workers_dev = false
 preview_urls = false
-routes = [{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }]
+routes = [
+  { pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" },
+  { pattern = "rpc.crcfrcn.com", custom_domain = true },
+]
 
 # Free 计划由平台固定 CPU 与 50 次外部 subrequest 上限；显式提交 limits 会被当前
 # Workers Versions API 当作付费 CPU limit 拒绝。这里不覆盖平台边界，业务代码继续执行更严限制。
