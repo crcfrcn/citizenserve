@@ -12,7 +12,7 @@ test('citizenserve.cloudflare.release的check远端Job物理独立', () => {
 
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
+import { testRoot as tmpdir } from '../../../build.mjs';
 import { createHash } from 'node:crypto';
 import { validateTestShell, runShellTests, prepareTestShell, shellOriginal,
   TEST_SHELL_SOURCE, TEST_SHELL_BOOTSTRAP, EXACT_REMOTE_JOB_IDENTITY } from './execute.mjs';
@@ -104,7 +104,7 @@ test('GNU固定镜像的连接恢复摘要失败与来源闭集', async () => {
   const {sourceMirrors, requestGNUOriginal} = await import("./execute.mjs");
   const {shellOriginal:readOriginal} = await import('./execute.mjs');
   const {mkdtempSync, readFileSync, existsSync, rmSync} = await import('node:fs');
-  const {join} = await import('node:path'); const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path'); const {testRoot:tmpdir} = await import('../../../build.mjs');
   const {createHash} = await import('node:crypto');
   const bytes = Buffer.from('same locked GNU fixture'), file = 'bash/bash-5.3.tar.gz';
   const record = {url:'https://ftp.gnu.org/gnu/' + file,

@@ -16,6 +16,18 @@
         {
           "id": "posix",
           "version": "27.0"
+        },
+        {
+          "id": "bash",
+          "version": "5.3.20"
+        },
+        {
+          "id": "grep",
+          "version": "3.12"
+        },
+        {
+          "id": "sed",
+          "version": "4.10"
         }
       ],
       "locks": [
@@ -34,6 +46,10 @@
           {
             "id": "node",
             "version": "25.2.1"
+          },
+          {
+            "id": "bash",
+            "version": "5.3.20"
           }
         ]
       },
@@ -47,9 +63,28 @@
           {
             "id": "node",
             "version": "25.2.1"
+          },
+          {
+            "id": "bash",
+            "version": "5.3.20"
           }
-        ]
-      }
+        ],
+        "version_source": {
+          "kind": "json",
+          "path": "package.json"
+        },
+        "record_source": {
+          "kind": "manifest",
+          "asset_names": [],
+          "metadata_asset": "release-manifest.json",
+          "source_field": "git_commit_sha",
+          "version_field": "software_version",
+          "marker_prefix": "GMB",
+          "immutable": false
+        }
+      },
+      "completion": "compile-only",
+      "files": []
     },
     "linux-arm": {
       "tools": [
@@ -64,6 +99,18 @@
         {
           "id": "posix",
           "version": "27.0"
+        },
+        {
+          "id": "bash",
+          "version": "5.3.20"
+        },
+        {
+          "id": "grep",
+          "version": "3.12"
+        },
+        {
+          "id": "sed",
+          "version": "4.10"
         }
       ],
       "locks": [
@@ -71,7 +118,34 @@
           "ecosystem": "npm",
           "path": "package-lock.json"
         }
-      ]
+      ],
+      "completion": "compile-only",
+      "files": []
     }
-  }
+  },
+  "remote_routes": [
+    {
+      "canonicalID": "citizenserve.cloudflare.ci",
+      "repository": "citizenserve",
+      "productID": "citizenserve",
+      "productTitle": "公民服务端",
+      "flow": "ci",
+      "platform": "cloudflare",
+      "expectedTitle": "公民服务端 · CI · Cloudflare",
+      "tagPrefix": null,
+      "recordsFormalRelease": false
+    },
+    {
+      "canonicalID": "citizenserve.cloudflare.release",
+      "repository": "citizenserve",
+      "productID": "citizenserve",
+      "productTitle": "公民服务端",
+      "flow": "release",
+      "platform": "cloudflare",
+      "expectedTitle": "公民服务端 · Release · Cloudflare",
+      "tagPrefix": "citizenserve-cloudflare-v",
+      "recordsFormalRelease": true
+    }
+  ],
+  "flow_entry": "scripts/flow.mjs"
 }

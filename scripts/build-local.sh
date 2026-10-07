@@ -7,16 +7,18 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 platform="$1"; project="$2"; output="$3"
 : "${NODE:?缺少Node入口}" "${NPM_CLI:?缺少npm公开入口}"
 # 验真视图仍消费本产品真实清单，不能用相邻产品或将输出写入源码。
-"$NODE" --input-type=module - "$root" "$project" "$output" <<'VERIFY_BUILD_INPUT'
+"$NODE" --input-type=module - "$root" "$project" "$output" "$platform" <<'VERIFY_BUILD_INPUT'
 import { realpathSync, readFileSync } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
-const [root, project, output] = process.argv.slice(2);
+import { join, relative, isAbsolute, sep } from 'node:path';
+const [root, project, output, platform] = process.argv.slice(2);
 for (const file of ['package.json', 'package-lock.json']) {
   if (!readFileSync(join(project, file)).equals(readFileSync(join(root, file)))) throw Error('Build源码视图不属于本产品');
 }
 const actual = realpathSync(output.slice(0, output.lastIndexOf('/')));
-const difference = relative(root, actual);
-if (!difference.startsWith('..') && !isAbsolute(difference)) throw Error('Build输出不得进入源码');
+const declared = JSON.parse(readFileSync(join(root, 'scripts/flows.json'), 'utf8'));
+const target = join(root, 'target', ...(Object.keys(declared.platforms).length === 1 ? [] : [platform]));
+const difference = relative(target, actual);
+if (actual !== output.slice(0, output.lastIndexOf('/')) || isAbsolute(difference) || difference === '..' || difference.startsWith('..' + sep)) throw Error('Build输出必须归本产品平台target');
 VERIFY_BUILD_INPUT
 cd "$project"
 # 两个平台只消费本产品工程；Cloudflare编译命令及真实候选失败条件由本仓维护。

@@ -136,21 +136,21 @@ jobs:
     - name: 签署公民服务端正式归档来源
       uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
       with:
-        subject-path: "${{ runner.temp }}/citizenserve-cloudflare-release.tgz"
+        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-release.tgz"
     - name: 签署公民服务端正式清单来源
       uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
       with:
-        subject-path: "${{ runner.temp }}/citizenserve-cloudflare-candidate/release-manifest.json"
+        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json"
     - name: 签署公民服务端校验清单来源
       uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
       with:
-        subject-path: "${{ runner.temp }}/citizenserve-cloudflare-candidate/SHA256SUMS"
+        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS"
     - name: 验真三个正式资产的构建证明
       shell: bash
       run: |-
-        gh attestation verify "$RUNNER_TEMP/citizenserve-cloudflare-release.tgz" --repo "$GITHUB_REPOSITORY"
-        gh attestation verify "$RUNNER_TEMP/citizenserve-cloudflare-candidate/release-manifest.json" --repo "$GITHUB_REPOSITORY"
-        gh attestation verify "$RUNNER_TEMP/citizenserve-cloudflare-candidate/SHA256SUMS" --repo "$GITHUB_REPOSITORY"
+        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-release.tgz" --repo "$GITHUB_REPOSITORY"
+        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json" --repo "$GITHUB_REPOSITORY"
+        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS" --repo "$GITHUB_REPOSITORY"
     - name: 固化正式 Release
       shell: bash
       run: |-
@@ -160,6 +160,6 @@ jobs:
           --title "公民服务端 · Cloudflare · Release" \
           --notes "公民服务端 Cloudflare 版本 $GMB_SOFTWARE_VERSION。" \
           --latest false \
-          --assets "$RUNNER_TEMP/citizenserve-cloudflare-release.tgz" \
-            "$RUNNER_TEMP/citizenserve-cloudflare-candidate/release-manifest.json" \
-            "$RUNNER_TEMP/citizenserve-cloudflare-candidate/SHA256SUMS"
+          --assets "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-release.tgz" \
+            "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json" \
+            "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS"
