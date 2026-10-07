@@ -192,7 +192,8 @@ function candidateFixture() {
   const project=join(root,'project with space'),runtime=join(root,'runner-temp');
   const repository=fileURLToPath(new URL('../../../../',import.meta.url));
   for(const path of ['package.json','package-lock.json','scripts/wrangler.toml','schema/citizenserve.sql','schema/download.sql',
-    'scripts/ci/cloudflare/index.mjs','scripts/release/cloudflare/index.mjs']) {
+    'scripts/ci/cloudflare/index.mjs','scripts/release/cloudflare/index.mjs',
+    'scripts/ci/cloudflare/check/execute.mjs','scripts/release/cloudflare/check/execute.mjs']) {
     mkdirSync(dirname(join(project,path)),{recursive:true});copyFileSync(join(repository,path),join(project,path));
   }
   mkdirSync(join(runtime,'citizenserve-cloudflare-bundle'),{recursive:true});
@@ -203,12 +204,13 @@ function candidateStep(fixture,kind) {
   const source=readFileSync(join(fixture.repository,'scripts',kind,'cloudflare/check/execute.mjs'),'utf8');
   const match=/const workflowSteps = Object.freeze\((\{[\s\S]*?\n\})\);/u.exec(source);
   assert.ok(match,'缺少准确流程阶段登记');
-  const steps=Object.values(JSON.parse(match[1])).filter(s=>s.source.includes(' action --project '));
+  const steps=Object.entries(JSON.parse(match[1])).filter(([,s])=>s.source.includes(' action --project '));
   assert.equal(steps.length,1,'候选打包阶段必须唯一');
-  // 门禁只透传已准备的PATH，执行前核对同一GNU Bash版本。
-  assert.match(execFileSync('bash',['--version'],{encoding:'utf8'}),/^GNU bash, version 5\.3\.20\(/u);
-  return execFileSync('bash',['--noprofile','--norc','-e','-o','pipefail','-c',steps[0].source],{
-    cwd:fixture.root,encoding:'utf8',env:{...process.env,GITHUB_WORKSPACE:fixture.project,RUNNER_TEMP:fixture.runtime,GMB_SOURCE_SHA:'a'.repeat(40)},
+  // 调用同一产品阶段入口；只提供本地回归的公开身份字段，不访问GitHub或准备工具。
+  return execFileSync(process.execPath,[join(fixture.project,'scripts',kind,'cloudflare/check/execute.mjs'),'workflow-step',steps[0][0]],{
+    cwd:fixture.root,encoding:'utf8',env:{...process.env,GITHUB_REPOSITORY:'crcfrcn/citizenserve',
+      GITHUB_WORKSPACE:fixture.project,RUNNER_TEMP:fixture.runtime,GMB_SOURCE_SHA:'a'.repeat(40),
+      SOURCE_SHA:'a'.repeat(40),CI_RUN_ID:'1',SOFTWARE_VERSION:'1.0.0',VERSION_TAG:'citizenserve-cloudflare-v1.0.0'},
   });
 }
 test('CI与Release从准确工作区实际打包，支持不同cwd及含空格的根路径',()=>{
