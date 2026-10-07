@@ -88,12 +88,14 @@ test('本流程Shell拒绝阶段失败与未经所属身份的工具准备',asyn
 test('本流程GNU原件拒绝摘要漂移网络失败和重定向越界',async()=>{
   const root=realpathSync(mkdtempSync(join(tmpdir(),'citizenserve-original-')));
   const bytes=Buffer.from('GNU fixture'),record={...TEST_SHELL_SOURCE,sha256:createHash('sha256').update(bytes).digest('hex')};
+  // 从同一登记坐标构造明文输入，只验证拒绝分支，不登记运行地址或发出网络请求。
+  const insecure=new URL(record.url);insecure.protocol='http:';
   try {
     await shellOriginal(record,join(root,'accepted'),async(_url,options)=>{assert.equal(options.redirect,'manual');return new Response(bytes);});
-    await assert.rejects(shellOriginal({...record,url:'http://ftp.gnu.org/original'},join(root,'rejected'),async()=>assert.fail('非法来源不能联网')));
+    await assert.rejects(shellOriginal({...record,url:insecure.href},join(root,'rejected'),async()=>assert.fail('非法来源不能联网')));
     for(const response of [new Response('wrong'),new Response('',{status:404}),new Response('',{status:302}),
       new Response('',{status:302,headers:{location:'https://example.invalid/original'}}),
-      new Response('',{status:302,headers:{location:'http://ftp.gnu.org/original'}})])await assert.rejects(shellOriginal(record,join(root,'rejected'),async()=>response));
+      new Response('',{status:302,headers:{location:insecure.href}})])await assert.rejects(shellOriginal(record,join(root,'rejected'),async()=>response));
   } finally {rmSync(root,{recursive:true});}
 });
 
