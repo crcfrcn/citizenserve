@@ -205,7 +205,9 @@ function candidateStep(fixture,kind) {
   assert.ok(match,'缺少准确流程阶段登记');
   const steps=Object.values(JSON.parse(match[1])).filter(s=>s.source.includes(' action --project '));
   assert.equal(steps.length,1,'候选打包阶段必须唯一');
-  return execFileSync(process.env.PRODUCT_BASH_BIN,['--noprofile','--norc','-e','-o','pipefail','-c',steps[0].source],{
+  // 门禁只透传已准备的PATH，执行前核对同一GNU Bash版本。
+  assert.match(execFileSync('bash',['--version'],{encoding:'utf8'}),/^GNU bash, version 5\.3\.20\(/u);
+  return execFileSync('bash',['--noprofile','--norc','-e','-o','pipefail','-c',steps[0].source],{
     cwd:fixture.root,encoding:'utf8',env:{...process.env,GITHUB_WORKSPACE:fixture.project,RUNNER_TEMP:fixture.runtime,GMB_SOURCE_SHA:'a'.repeat(40)},
   });
 }
