@@ -85,6 +85,11 @@ jobs:
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
       with:
         node-version: 25.2.1
+    - name: 准备并验真本流程正式测试Shell
+      shell: node {0}
+      run: |
+        const child = require("node:child_process");
+        child.execFileSync(process.execPath, ["scripts/ci/cloudflare/check/execute.mjs", "prepare-test-shell"], {stdio:"inherit"});
     - id: citizenserve_ci_cloudflare__check__ci_cache
       env:
         GH_TOKEN: "${{ github.token }}"
