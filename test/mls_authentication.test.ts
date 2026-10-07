@@ -178,13 +178,14 @@ describe('一次性挑战、实际请求和会话绑定', () => {
       .rejects.toMatchObject({ code: 'invalid_mls_challenge' });
   });
 
+  // 两个用例覆盖整批 64/65 次真实 D1 请求；独立给予 30 秒总预算，普通用例仍保持默认时限。
   it('实际D1每用途并发签发最多保留64条未消费记录', async () => {
     const body = JSON.stringify({ account_id: accountId, public_key: publicKey, purpose: 'session', method: 'POST',
       request_target: '/square/auth/session', body_sha256: '0x' + await sha256Hex('{}') });
     const results = await Promise.allSettled(Array.from({ length: 65 }, () => createMlsChallenge(request('/square/auth/challenge', 'POST', body), env)));
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(64);
     expect(results.find((r) => r.status === 'rejected')).toMatchObject({ reason: { code: 'mls_challenge_limit_reached' } });
-  });
+  }, 30_000);
 
   it('预登录用途占满配额不能挤占已认证请求用途', async () => {
     const challengeBody = JSON.stringify({ account_id: accountId, public_key: publicKey, purpose: 'session', method: 'POST',
@@ -192,7 +193,7 @@ describe('一次性挑战、实际请求和会话绑定', () => {
     for (let i = 0; i < 64; i++) await createMlsChallenge(request('/square/auth/challenge', 'POST', challengeBody), env);
     const proof = await issue('request', 'GET', '/square/membership', '', 'token-a');
     await consumeMlsAuthentication(request('/square/membership', 'GET', '', proof, 'token-a'), env, 'request', session);
-  });
+  }, 30_000);
 
   it('错误签名不消费合法挑战，正确证明随后仍可消费', async () => {
     const proof = await issue('session', 'POST', '/square/auth/session', '{}');
