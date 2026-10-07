@@ -7,7 +7,8 @@
   ],
   "node_tests": [
     "scripts/ci/cloudflare/check/test.mjs",
-    "scripts/release/cloudflare/check/test.mjs"
+    "scripts/release/cloudflare/check/test.mjs",
+    "test/chain_source.test.mjs"
   ],
   "checks": [
     "repository-contracts"

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readChainSource } from './chain_source.mjs';
 
 vi.mock('../src/chain/rpc', () => ({
   fetchChainStorage: vi.fn()
@@ -18,13 +17,8 @@ import type { Env } from '../src/types';
 
 const mockFetch = fetchChainStorage as unknown as ReturnType<typeof vi.fn>;
 
-/// 真源：runtime 内置的宪法全文 SCALE（= 裸 ChaptersOf 编码）。
-const CONSTITUTION_SCALE = readFileSync(
-  resolve(
-    __dirname,
-    '../../citizenchain/runtime/public/legislation-yuan/src/constitution.scale'
-  )
-);
+// 宪法SCALE字节只读取已锁定摘要的公开链真源。
+const CONSTITUTION_SCALE = await readChainSource('runtime/public/legislation-yuan/src/constitution.scale');
 
 // ── SCALE 编码小工具（仅测试构造夹具用）──
 function compactLen(value: number): Uint8Array {

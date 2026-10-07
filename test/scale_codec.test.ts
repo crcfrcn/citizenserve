@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readChainSource } from './chain_source.mjs';
 import {
   bytesToHex,
   scaleCompact,
@@ -8,24 +7,7 @@ import {
   u64Le,
 } from '../src/shared/signing_message';
 
-// SCALE 编码原语金标锁(Worker ⇔ citizenchain)。
-//
-// 本文件**直接读真源**,Worker 侧不保存镜像副本(与 signing_message.test.ts 同策略)。
-//
-// 为什么需要:`scaleCompact` / `scaleString` / `u64Le` 是**手写**实现,而链端用
-// parity-scale-codec。此前唯一引用它们的 mls_authentication.test.ts 是拿它们去**构造期望值**——
-// 实现算错期望值同步错,测试照样绿。这些字节直接决定被签 payload,编码差一位
-// 签出来就是另一笔交易。
-//
-// 真源:citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json
-// 生成器:citizenchain/runtime/primitives/tests/scale_codec_golden.rs
-//        (SCALE_GOLDEN_UPDATE=1 重新生成)
-
-const REPO_ROOT = join(import.meta.dirname, '../..');
-const VECTORS_PATH = join(
-  REPO_ROOT,
-  'citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json',
-);
+// 金标直接读取同一准确公开提交，验真失败即拒绝，不依赖本机链目录。
 
 interface CompactVector {
   value: number;
@@ -41,7 +23,7 @@ interface U64Vector {
   hex: string;
 }
 
-const canonical = JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as {
+const canonical = JSON.parse((await readChainSource('runtime/primitives/tests/fixtures/scale_codec_vectors.json')).toString('utf8')) as {
   compact_u32: CompactVector[];
   scale_string: StringVector[];
   u64_le: U64Vector[];

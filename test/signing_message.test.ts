@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readChainSource } from './chain_source.mjs';
 import {
   bytesToHex,
   hexToBytes,
@@ -8,24 +7,7 @@ import {
   OP_SIGN_MLS_DEVICE_BIND,
 } from '../src/shared/signing_message';
 
-// 签名域金标锁(Worker ⇔ citizenchain)。
-//
-// 本文件**直接读真源**,Worker 侧不保存镜像副本 —— 沿用 cross_end_contract.test.ts
-// 的做法(直接读另一端的源文件)。原先向量是硬编码在本文件里的常量数组:那种形态下,
-// 同时改实现与改向量,本端测试依旧全绿,两端就此静默分叉;而 Worker 是**服务端校验方**,
-// 算错的表现是静默放行或静默拒绝合法请求,开发期不会暴露。直读真源让这种漂移在
-// 物理上不可能发生,比"复制一份再靠 CI 比对"更强,因此本端不登记进
-// .github/scripts/gmb-repository/ci-repository.mjs golden-vectors 的 mirrors。
-//
-// 真源:citizenchain/runtime/primitives/tests/fixtures/signing_domain_vectors.json
-// 规范实现:citizenchain/runtime/primitives/src/sign.rs::signing_message
-// 契约:被签消息 = blake2_256( GMB(3B) || op_tag(1B) || SCALE(payload) )
-
-const REPO_ROOT = join(import.meta.dirname, '../..');
-const VECTORS_PATH = join(
-  REPO_ROOT,
-  'citizenchain/runtime/primitives/tests/fixtures/signing_domain_vectors.json',
-);
+// 金标直接读取同一准确公开提交，验真失败即拒绝，不依赖本机链目录。
 
 interface SigningVector {
   name: string;
@@ -34,7 +16,7 @@ interface SigningVector {
   message_hex: string;
 }
 
-const canonical = JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as {
+const canonical = JSON.parse((await readChainSource('runtime/primitives/tests/fixtures/signing_domain_vectors.json')).toString('utf8')) as {
   domain: string;
   vectors: SigningVector[];
 };

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readChainSource } from "./chain_source.mjs";
 
 // 真实scheduled入口使用可控投影及独立清理，验证完成时序与失败隔离。
 const scheduled = vi.hoisted(() => ({
@@ -52,7 +53,6 @@ describe('定时身份与会员依赖', () => {
 
 // CitizenServe 只验证自身产品合同，以及必须与链运行时一致的链上存储项。
 // 聊天通用协议由TataChatSDK与TataChatServer各自验证，本产品只保留短期授权控制面。
-const REPOSITORY_ROOT = join(import.meta.dirname, "../..");
 const WRANGLER_CONFIGURATION = readFileSync(
   join(import.meta.dirname, "../scripts/wrangler.toml"),
   "utf8",
@@ -67,13 +67,11 @@ describe("链上 storage 项名锁(Worker ⇔ citizenchain pallet)", () => {
     join(import.meta.dirname, "../src/chain/identity.ts"),
     "utf8",
   );
-  const palletPath = join(
-    REPOSITORY_ROOT,
-    "citizenchain/runtime/misc/citizen-identity/src/lib.rs",
-  );
 
-  it("Worker 用的 storage 项名必须存在于 citizen-identity pallet", () => {
-    const pallet = readFileSync(palletPath, "utf8");
+
+  it("Worker 用的 storage 项名必须存在于 citizen-identity pallet", async () => {
+    // 存储名锁读取经过同一链提交与摘要验真的Pallet源码。
+    const pallet = (await readChainSource("runtime/misc/citizen-identity/src/lib.rs")).toString("utf8");
     for (const storageName of [
       "AccountIdByCid",
       "CidByAccountId",
