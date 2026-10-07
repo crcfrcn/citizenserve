@@ -521,7 +521,7 @@ const workflowSteps = Object.freeze({
   },
   "10": {
     "shell": "bash",
-    "source": "node \"$GITHUB_WORKSPACE/scripts/ci/cloudflare/index.mjs\" action --project citizenserve --bundle \"$RUNNER_TEMP/citizenserve-cloudflare-bundle/index.js\" --output \"$RUNNER_TEMP/citizenserve-cloudflare-candidate\" --git-sha \"$GMB_SOURCE_SHA\" --archive \"$RUNNER_TEMP/citizenserve-cloudflare-release.tgz\""
+    "source": "node \"$GITHUB_WORKSPACE/scripts/ci/cloudflare/index.mjs\" action --project \"$GITHUB_WORKSPACE\" --bundle \"$RUNNER_TEMP/citizenserve-cloudflare-bundle/index.js\" --output \"$RUNNER_TEMP/citizenserve-cloudflare-candidate\" --git-sha \"$GMB_SOURCE_SHA\" --archive \"$RUNNER_TEMP/citizenserve-cloudflare-release.tgz\""
   },
   "11": {
     "shell": "bash",

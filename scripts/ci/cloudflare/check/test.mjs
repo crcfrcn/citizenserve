@@ -181,3 +181,65 @@ test('UbuntuProvides按声明版本匹配并保留同名不同版本',async()=>{
     'dpkg-build-api (=0), dpkg-build-api (= 0)','dpkg-build-api, dpkg-build-api','dpkg-build-api (>= 1)'])assert.throws(
     ()=>resolve([rows[0],{...rows[1],provides},rows[2]],roots,compare));
 });
+
+import {execFileSync} from 'node:child_process';
+import {copyFileSync,existsSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+
+// 执行两身份登记的实际打包命令；Worker正文仅为此隔离打包测试的固定输入。
+function candidateFixture() {
+  const root=realpathSync(mkdtempSync(join(tmpdir(),'citizenserve-candidate-root-')));
+  const project=join(root,'project with space'),runtime=join(root,'runner-temp');
+  const repository=fileURLToPath(new URL('../../../../',import.meta.url));
+  for(const path of ['package.json','package-lock.json','scripts/wrangler.toml','schema/citizenserve.sql','schema/download.sql',
+    'scripts/ci/cloudflare/index.mjs','scripts/release/cloudflare/index.mjs']) {
+    mkdirSync(dirname(join(project,path)),{recursive:true});copyFileSync(join(repository,path),join(project,path));
+  }
+  mkdirSync(join(runtime,'citizenserve-cloudflare-bundle'),{recursive:true});
+  writeFileSync(join(runtime,'citizenserve-cloudflare-bundle/index.js'),'export default {fetch(){return new Response("fixture");}};\n');
+  return {root,project,runtime,repository,close:()=>rmSync(root,{recursive:true})};
+}
+function candidateStep(fixture,kind) {
+  const source=readFileSync(join(fixture.repository,'scripts',kind,'cloudflare/check/execute.mjs'),'utf8');
+  const match=/const workflowSteps = Object.freeze\((\{[\s\S]*?\n\})\);/u.exec(source);
+  assert.ok(match,'缺少准确流程阶段登记');
+  const steps=Object.values(JSON.parse(match[1])).filter(s=>s.source.includes(' action --project '));
+  assert.equal(steps.length,1,'候选打包阶段必须唯一');
+  return execFileSync(process.env.PRODUCT_BASH_BIN,['--noprofile','--norc','-e','-o','pipefail','-c',steps[0].source],{
+    cwd:fixture.root,encoding:'utf8',env:{...process.env,GITHUB_WORKSPACE:fixture.project,RUNNER_TEMP:fixture.runtime,GMB_SOURCE_SHA:'a'.repeat(40)},
+  });
+}
+test('CI与Release从准确工作区实际打包，支持不同cwd及含空格的根路径',()=>{
+  for(const kind of ['ci','release']) {
+    const f=candidateFixture();try {
+      assert.match(candidateStep(f,kind),/候选已生成：1\.0\.0/u);
+      const candidate=join(f.runtime,'citizenserve-cloudflare-candidate');
+      const manifest=JSON.parse(readFileSync(join(candidate,'release-manifest.json'),'utf8'));
+      assert.equal(manifest.software_version,'1.0.0');assert.equal(manifest.git_commit_sha,'a'.repeat(40));
+      assert.equal(readFileSync(join(candidate,'package.json'),'utf8'),readFileSync(join(f.project,'package.json'),'utf8'));
+      assert.ok(existsSync(join(f.runtime,'citizenserve-cloudflare-release.tgz')));
+      assert.match(execFileSync(process.execPath,[join(f.project,'scripts',kind,'cloudflare/index.mjs'),'action','--verify',candidate,'--expected-git-sha','a'.repeat(40)],{
+        cwd:f.root,env:{...process.env,GITHUB_WORKSPACE:f.project},encoding:'utf8',
+      }),/候选校验通过/u);
+    }finally{f.close();}
+  }
+});
+test('两身份的版本锁漂移直接拒绝，不能落盘候选或归档',()=>{
+  for(const kind of ['ci','release']) {
+    const f=candidateFixture();try {
+      const file=join(f.project,'package-lock.json'),lock=JSON.parse(readFileSync(file,'utf8'));lock.version='1.0.1';writeFileSync(file,JSON.stringify(lock));
+      assert.throws(()=>candidateStep(f,kind),/后端软件版本不一致/u);
+      assert.ok(!existsSync(join(f.runtime,'citizenserve-cloudflare-candidate')));
+      assert.ok(!existsSync(join(f.runtime,'citizenserve-cloudflare-release.tgz')));
+    }finally{f.close();}
+  }
+});
+test('两身份拒绝随机multipart候选输入，保持归档验真条件',()=>{
+  for(const kind of ['ci','release']) {
+    const f=candidateFixture();try {
+      writeFileSync(join(f.runtime,'citizenserve-cloudflare-bundle/index.js'),'------formdata-undici-fixture');
+      assert.throws(()=>candidateStep(f,kind),/随机 multipart outfile/u);
+      assert.ok(!existsSync(join(f.runtime,'citizenserve-cloudflare-candidate')));
+    }finally{f.close();}
+  }
+});
