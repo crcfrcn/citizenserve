@@ -15,7 +15,7 @@
 
 服务端继续复用既有 nrcgch-rpc Tunnel 与 Access Service Auth。目标链路为公共 Worker → 受保护的 chain.crcfrcn.com → HTTPS回环网关18080 → HTTPS回环节点9944。公网使用 Cloudflare 边缘证书，回源使用 Cloudflare Origin CA；源证书SAN为chain.crcfrcn.com，私钥在生产服务器生成，只有CSR提交Cloudflare。cloudflared 配置 originServerName、httpHostHeader 和 caPool，Nginx 对节点配置可信CA、SNI及证书域名校验；禁止 noTLSVerify、跳过校验或明文回退。Origin CA不用于MetaMask直接访问回环节点。
 
-2026年10月7日只读核实生产节点仍是 citizenchain 1.0.1-babef11d9a7，18080与9944仅回环监听，现有Nginx回源为HTTP，9944的TLS握手返回WRONG_VERSION_NUMBER。部署二进制的原生RPC方法标识存在，eth_chainId、eth_sendRawTransaction、eth_estimateGas和新TLS配置标识均未检出；这属于部署静态证据，不替代真实Ethereum RPC验收。生产证书签发、具备TLS及Ethereum接口的节点部署和真实链ID核对尚未完成，故公共域名尚未发布，不能宣称MetaMask已可连接或转账。上线前须完成实际TLS链路、真实方法、链身份、广播回执和费用核对。
+2026年10月7日只读核实生产节点仍是 citizenchain 1.0.1-babef11d9a7，18080与9944仅回环监听，现有Nginx回源为HTTP，9944的TLS握手返回WRONG_VERSION_NUMBER。部署二进制的原生RPC方法标识存在，eth_chainId、eth_sendRawTransaction、eth_estimateGas和新TLS配置标识均未检出；这属于部署静态证据，不替代真实Ethereum RPC验收。服务器CSR已生成，chain.crcfrcn.com的Cloudflare Origin CA证书已签发并通过CA链、主机名和CSR公钥匹配验证；生产叶证书及CA根已安装并在服务器实际验证通过；具备TLS及Ethereum接口的节点部署和真实链ID核对尚未完成，故公共域名尚未发布，不能宣称MetaMask已可连接或转账。上线前须完成实际TLS链路、真实方法、链身份、广播回执和费用核对。
 
 公共入口的生产激活顺序为：旧Node先承载新Runtime升级；链上新Runtime的创世身份与真实块0一致且继续出块/最终确认后，才增加Node对应创世身份守卫并更新各节点软件；随后完成Cloudflare证书与HTTPS回源验证，再激活公共域名。证书及网关候选可提前准备，源码中的身份API或编译常量不得冒充链上升级成功的证据。
 
