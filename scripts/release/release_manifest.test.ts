@@ -262,8 +262,8 @@ describe('CitizenServe产品发布输入', () => {
     withTypesProject((directory, execute) => {
       const types = join(directory, 'scripts/worker-configuration.d.ts');
       const original = readFileSync(types, 'utf8');
-      expect(original).toContain('CHAT_SERVER_URL: "https://chat.crcfrcn.com"');
-      writeFileSync(types, original.replace('CHAT_SERVER_URL: "https://chat.crcfrcn.com"', 'CHAT_SERVER_URL: "https://invalid.example.test"'));
+      expect(original).toContain('WEB_ORIGIN: "https://www.crcfrcn.com"');
+      writeFileSync(types, original.replace('WEB_ORIGIN: "https://www.crcfrcn.com"', 'WEB_ORIGIN: "https://invalid.example.test"'));
       const failed = execute('types:check');
       expect(failed.status).toBe(1);
       expect(`${failed.stdout}\n${failed.stderr}`).toContain('已过期');

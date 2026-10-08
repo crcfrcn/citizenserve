@@ -484,7 +484,7 @@ CREATE INDEX IF NOT EXISTS idx_chain_extrinsic_relays_tx_hash
   ON chain_extrinsic_relays(tx_hash)
   WHERE tx_hash IS NOT NULL;
 
--- 普通应用通知端点只服务广场公开提醒和会员存储清理预告；聊天推送由CitizenChatServer独立保存。
+-- 普通应用通知端点只服务广场公开提醒和会员存储清理预告。
 CREATE TABLE IF NOT EXISTS push_endpoints (
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),

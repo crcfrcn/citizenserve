@@ -180,10 +180,10 @@ test('增量防护执行真实归属判断并支持超过argv单项限制的输�
 });
 
 // 中文注释：真实拒绝测试保留明文负向输入，成功断言、伪装文本和额外地址继续拒绝。
-test('明文负向输入只归属本仓三个完整执行拒绝测试', async () => {
+test('明文负向输入只归属本仓链请求完整执行拒绝测试', async () => {
   const { insecureTransportLines } = await import('./index.mjs');
   const { readFileSync } = await import('node:fs');
-  for (const path of ['test/chain_confirm.test.ts', 'test/chatserver_access.test.ts']) {
+  for (const path of ['test/chain_confirm.test.ts']) {
     const source = readFileSync(new URL('../../' + path, import.meta.url), 'utf8');
     assert.deepEqual(insecureTransportLines(path, source), []);
     assert.ok(insecureTransportLines(path, source.replaceAll('.rejects.toMatchObject', '.resolves.toMatchObject')).length > 0);

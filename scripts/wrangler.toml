@@ -24,7 +24,6 @@ required = [
   "CHAIN_ID", "CHAIN_SECRET", "APNS_KEY", "FCM_KEY",
   "HASH_KEY", "TURNSTILE_SECRET", "SETTLE_TOKEN", "TOPUP_INTENT_SECRET",
   "CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET",
-  "CHAT_AUTH_ED25519_PRIVATE_KEY",
 ]
 
 # CitizenServe Cloudflare只保留唯一生产环境。普通变量与Secret都由产品发布器在发布
@@ -104,7 +103,6 @@ SQUARE_PUBLIC_MEDIA_BASE_URL = "https://media.crcfrcn.com"
 MEDIA_TTL_SECONDS = "300"
 WEB_ORIGIN = "https://www.crcfrcn.com"
 # CitizenServe 只签发短期访问授权；客户端随后直连该唯一 HTTPS 聊天服务根地址。
-CHAT_SERVER_URL = "https://chat.crcfrcn.com"
 TURNSTILE_SITEKEY = "0x4AAAAAAD0GQRiB2O3a0DYJ"
 
 # 稳定币充值只允许 Base 主网。结算令牌和付款意图密钥必须使用 Worker Secret。

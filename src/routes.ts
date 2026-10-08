@@ -4,7 +4,6 @@ import {
   inspectCachedUserProjectionHealth,
 } from "./account/user_projection";
 import { createMlsChallenge, createSession, registerMlsDevice } from "./auth/service";
-import { issueChatServerAccess } from "./auth/chatserver_access";
 import { registerPushEndpoint } from "./auth/push_endpoint";
 import { chainBootstrapRoute, citizenSdkBootstrapRoute } from "./chain/bootstrap";
 import { constitutionRoute } from "./chain/constitution";
@@ -116,9 +115,6 @@ export async function routeRequest(
   }
   if (request.method === "POST" && path === "/square/auth/device/register") {
     return registerMlsDevice(request, env);
-  }
-  if (request.method === "POST" && path === "/auth/chatserver/access") {
-    return issueChatServerAccess(request, env);
   }
   if (request.method === "GET" && path === "/square/membership") {
     return membershipRoute(request, env);

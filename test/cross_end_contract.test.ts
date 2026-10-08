@@ -202,24 +202,11 @@ describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
 
 // 中文注释：Wrangler 配置新增公开绑定后必须同步生成类型，避免正式 CI 才发现绑定声明过期。
 describe("CitizenServe Worker 绑定类型保持同步", () => {
-  it("公开 R2 账户标识和聊天服务根地址必须进入配置与生成类型", async () => {
+  it("公开 R2 账户标识必须进入配置与生成类型", async () => {
     const { readFile } = await import("node:fs/promises");
     const { resolve } = await import("node:path");
     const types = await readFile(resolve(process.cwd(), "scripts/worker-configuration.d.ts"), "utf8");
     expect(types).toMatch(/\bCF_ACCOUNT_ID:/);
-    expect(WRANGLER_CONFIGURATION).toContain(
-      'CHAT_SERVER_URL = "https://chat.crcfrcn.com"',
-    );
-    expect(types).toContain(
-      'CHAT_SERVER_URL: "https://chat.crcfrcn.com";',
-    );
   });
 
-  it("聊天授权只保留唯一正式路由", async () => {
-    const { readFile } = await import("node:fs/promises");
-    const { resolve } = await import("node:path");
-    const routes = await readFile(resolve(process.cwd(), "src/routes.ts"), "utf8");
-    expect(routes).toContain('path === "/auth/chatserver/access"');
-    expect(routes.match(/path === "\/auth\/chatserver\/access"/gu)).toHaveLength(1);
-  });
 });

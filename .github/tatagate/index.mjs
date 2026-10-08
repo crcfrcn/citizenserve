@@ -557,10 +557,6 @@ export function insecureTransportLines(path, source) {
   const knownRejections = {
   "test/chain_confirm.test.ts": [
     "it(\"rejects non-HTTPS RPC configuration before making a request\", async () => {\n    const fetchMock = vi.fn();\n    vi.stubGlobal(\"fetch\", fetchMock);\n\n    await expect(\n      fetchChainStorage(\n        chainRpcEnv({ CHAIN_URL: \"http://127.0.0.1:9944\" }),\n        \"0x1234\",\n      ),\n    ).rejects.toMatchObject({ code: \"chain_rpc_invalid_config\" });\n    expect(fetchMock).not.toHaveBeenCalled();\n  });"
-  ],
-  "test/chatserver_access.test.ts": [
-    "it('rejects an invalid authorization issuer origin', async () => {\n    const { env, request } = await setup(activeMembership());\n    env.WEB_ORIGIN = 'http://www.crcfrcn.com';\n    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({\n      status: 503,\n      code: 'chat_issuer_not_configured',\n    });\n  });",
-    "it('rejects a cleartext ChatServer deployment URL', async () => {\n    const { env, request } = await setup(activeMembership());\n    env.CHAT_SERVER_URL = 'http://chat.example.test';\n    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({\n      status: 503,\n      code: 'chat_server_not_configured',\n    });\n  });"
   ]
 };
   const opaque = [...source.matchAll(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/gu)]

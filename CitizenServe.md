@@ -1,5 +1,7 @@
 # CitizenServe 技术文档
 
+旧独立聊天授权接口与专属声明已删除；当前未集成TataChatServer聊天模块。公民宿主Rust重建与实际业务验收由当前主任务继续执行。
+
 ## 当前工作目录归属（第8步，2026-10-06）
 
 本产品全部测试、编译临时数据和产物归 `/Users/rhett/citizenserve/target`。多平台先使用声明中的完整平台身份，再在平台内按build、ci、release、publish、test、tmp隔离。独立入口与控制台调用消费同一产品流程；控制台仅创建任务、调用与跟踪，不准备产品专用版本、依赖或步骤。下载半包、工具编译候选、工程视图、Runner步骤临时状态和测试夹具均属于当前产品工作区；永久工具与依赖原件继续归原件库。整个根target不进入Git、源码快照、程序摘要或打包输入。准确流程短锁、活跃任务保护、成功产物保护和原清理规则继续适用。
@@ -53,8 +55,6 @@ TypeScript、Vitest、Wrangler 配置和生成的 Worker 类型统一位于 `cit
 CitizenServe 是独立的 Cloudflare 云服务产品，源码唯一根目录为 `citizenserve/`。
 CitizenApp 只包含 iOS 与 Android 移动端；CitizenWeb 只包含官网前端。三者不得共享产品 ID、
 版本状态、候选、Tag、产物、发布记录或清理配额。
-
-TataChatServer 是 tuyutata/tatachatserver的独立公开聊天服务产品，产品 ID 和源码目录统一为 `tatachatserver`。CitizenChatServer 是 crcfrcn/citizenchatserver中的独立公民聊天服务实例，正式地址固定为 `https://chat.crcfrcn.com` 与 `wss://chat.crcfrcn.com/realtime`。CitizenServe 是公民身份、会员权益和设备会话的唯一产品授权签发方，并把验证结果签成受众唯一为 `citizenchatserver` 的短期 EdDSA 授权；该过程只属于授权控制面。CitizenChatServer 独立验签并承载通用密文邮箱、附件对象、实时连接和通知触发，CitizenServe 不进入任何聊天数据链路，也不保留第二套聊天数据面。
 
 #### 自动化合同
 
@@ -136,37 +136,14 @@ CitizenServe 日常发布使用 `PUT /workers/scripts/citizenserve` 原子替换
 
 #### CitizenServe 聊天最终边界
 
-CitizenServe 不是聊天服务端。它只在合法 CitizenServe 会话、finalized CID 绑定和有效会员状态全部成立时，
-通过 POST /auth/chatserver/access 签发十五分钟 EdDSA 短期授权；响应只包含 CitizenChatServer HTTPS 根、
-短期 Token 和到期时间。客户端随后直接连接 CitizenChatServer，CitizenServe 不参与消息或附件传输。
-
-CitizenServe 源码、路由、D1、R2、Durable Object、Cron、限额和测试不得保存或处理聊天消息、密文邮箱、
-KeyPackage、信令、ICE、ACK、聊天附件或聊天推送端点。CHAT_SERVER_URL 与
-CHAT_AUTH_ED25519_PRIVATE_KEY 只属于短期授权控制面，缺失或非 HTTPS 时失败关闭。
-
 普通应用通知与聊天完全分离：PUT /square/push-endpoint 使用已验签 Session 的 device_id 登记
 push_endpoints，只服务广场公开提醒和会员存储清理预告。APNs/FCM 传输位于 src/shared/push.ts，端点登记
 位于 src/auth/push_endpoint.ts；任何通知载荷都不得携带聊天消息、会话、附件或聊天唤醒状态。
-
-CitizenServe 的唯一最终数据库结构只包含 push_endpoints 普通通知表，不包含任何聊天前缀表。Worker 不导出
-聊天 Durable Object，不声明聊天数据面资源，也不运行聊天清理任务。注销用户只删除该 CID 的普通通知端点；
-聊天数据的生命周期完全属于 CitizenChatServer。
 
 测试必须正向覆盖短期授权、普通推送端点、广场通知和存储清理提醒，并反向证明聊天数据面路由、表、DO、
 源码目录和生成绑定不存在。
 
 ### 2026-08-31 TataChatServer 访问授权适配
-
-- 新增 `POST /auth/chatserver/access`。请求必须同时通过当前 Bearer 会话、同一MLS身份的请求证明、账户/CID 投影和 D1 有效会员校验。
-- 成功响应只返回 `chat_server_url`、`chat_server_token` 与 `expires_at_millis`；JWT 有效期固定 15 分钟，签名使用 `CHAT_AUTH_ED25519_PRIVATE_KEY`。
-- JWT 只包含通用授权：用户、设备、聊天开关、附件字节上限、签发方、受众、生效时间和到期时间；不把会员名称、链状态或 CitizenServe 会话交给 TataChatServer。
-- `CHAT_SERVER_URL` 必须由正式环境显式配置为严格 HTTPS 根地址；公民实例目标地址为 `https://chat.crcfrcn.com`，但源码接线不等于生产部署。
-- 2026-09-11 第1步已在 `scripts/wrangler.toml` 固定
-  `CHAT_SERVER_URL=https://chat.crcfrcn.com`，并用锁定 Wrangler 4.121.0 重新生成 Worker 类型。
-  缺失地址和非 HTTPS 地址继续失败关闭为 `chat_server_not_configured`；授权、配置和 Release
-  专项合同 22/22 通过。本步骤没有执行 Build、CI、Release、发布或部署。
-- CitizenServe 只测试短期授权、HTTPS 根、普通应用推送端点及自身产品合同；聊天消息、附件、
-  KeyPackage、邮箱、实时帧和聊天推送全部由 TataChatServer 验证。
 
 ## 2026-08-31 TataChatServer 第 6 步运行时依赖边界
 
@@ -181,15 +158,6 @@ CitizenServe 的唯一最终数据库结构只包含 push_endpoints 普通通知
 - 本步骤未执行 CI、Release、发布或部署。
 
 ## 第 5 步：聊天授权签发边界验收（2026-09-02）
-
-- CitizenServe 仅签发 `audience=citizenchatserver` 的短期 Ed25519 授权，并返回 HTTPS 聊天服务入口。
-- 授权主体只包含当前账户、当前设备、会员聊天开关和附件上限；禁止包含聊天正文、附件、收件人或离线邮箱数据。
-- CitizenServe 不代理 TataChatServer 的 WSS 控制面和 HTTPS 附件面，也不参与消息发送、拉取、ACK 或推送转发。
-- 本步骤未修改 CitizenServe 生产职责，也未执行部署或发布。
-
-## CitizenChatServer 授权边界
-
-CitizenServe 只持有 `CHAT_AUTH_ED25519_PRIVATE_KEY` 并签发短期聊天授权；CitizenChatServer 只持有对应公钥并验证 `aud=citizenchatserver`。聊天消息、附件、推送、信令、D1、R2 与 Durable Object 均不进入 CitizenServe。
 
 ## CitizenChain macOS updater 路由（GMB 第 2.5 步，2026-09-02）
 
@@ -246,18 +214,6 @@ CitizenServe 只持有 `CHAT_AUTH_ED25519_PRIVATE_KEY` 并签发短期聊天授�
 
 ## 聊天接入第 2.1 步：Miniflare 5 测试运行时收口（2026-09-11）
 
-- 新增 `test/miniflare.ts` 作为 CitizenServe 测试唯一 Miniflare 构造 helper，直接使用
-  Miniflare 5 原生 `workers[].config.env` 登记 D1、KV、R2 与文本 binding；没有调用 v4 转换器，
-  也没有保留 `script/modules/d1Databases/r2Buckets/kvNamespaces/bindings` 顶层兼容配置。
-- `account.test.ts`、`users.test.ts`、`user_projection.test.ts`、
-  `subscription_projection.test.ts`、`post_local_copy.test.ts` 与
-  `citizenchain_download_publication.test.ts` 六处测试已统一改用该 helper。
-- Wrangler 继续精确使用 `4.121.0`，类型生成与 TypeScript 检查通过；六文件专项 44/44 通过，
-  CitizenServe 全量 39 个测试文件、334/334 通过。原先 40 项失败已确认全部来自旧 Miniflare
-  顶层 API，并已关闭。
-- 第 1 步补入的 `CHAT_SERVER_URL=https://chat.crcfrcn.com` 与授权端点源码合同保持不变；
-  本步骤没有部署 Worker、修改生产 binding/Secret/数据、执行远程 CI 或 Release。
-
 ## CitizenChain Release 资产身份校验（GMB 第 2.7 步，2026-09-02）
 
 - CitizenServe 对四个内部发布键继续使用 `linux-arm`、`linux-amd`、`macos`、`windows`，但
@@ -284,31 +240,7 @@ CitizenServe 只持有 `CHAT_AUTH_ED25519_PRIVATE_KEY` 并签发短期聊天授�
   同版本新 Release，并在受控维护事务中切换 publication；禁止让旧指针与新校验形成确定性
   不兼容窗口。
 
-## CitizenChatServer 授权边界
-
-CitizenServe 只持有 `CHAT_AUTH_ED25519_PRIVATE_KEY` 并签发短期聊天授权；CitizenChatServer 只持有对应公钥并验证 `aud=citizenchatserver`。聊天消息、附件、推送、信令、D1、R2 与 Durable Object 均不进入 CitizenServe。
-
 ## CitizenServe Release 部署供应商身份（GMB 第 2.10 步，2026-09-02）
-
-- CitizenServe 正式 `release-manifest.json` 使用精确七字段闭集：`product_id`、
-  `deployment_provider`、`software_version`、`git_commit_sha`、`tools`、`files`、`resources`；
-  产品固定为 `citizenserve`，部署供应商固定为 `cloudflare`。缺失、错误值、旧 `platform`、
-  新旧双写和任意额外字段均失败关闭。
-- CI 与 Release 两个产品入口继续内嵌逐字节相同的动作实现，当前均为 21,637 bytes，SHA-256
-  均为 `818d36f8fea1aef801873796adba99122e7a321d0113e802907d7594ab795793`。测试读取当前
-  `tataconsole/console/citizenserve/{ci-cloudflare,release-cloudflare}.mjs`，不再引用已经不存在的
-  `gmb/scripts/citizenserve-*-global.mjs`。
-- 新字段没有改变确定性 payload、Wrangler 资源摘要、逐文件 SHA-256、`SHA256SUMS`、规范 tar、
-  普通文件限制、解包回验或私密材料拒绝语义。非 CitizenChatServer 候选继续要求外部 manifest
-  与 `SHA256SUMS` 和归档内字节完全一致。
-- TataConsole 原生发布器只在 `input.productID == "citizenserve"` 时启用专用七字段验证，并在
-  QR 授权和任何 Cloudflare 控制面写入前失败关闭。CitizenWeb、CitizenChatServer、TuyuWeb 及
-  `CloudPublishInput.platform`、恢复状态、目标键中的既有 `platform=cloudflare` wire 均未改变。
-- 本机定向验证通过：CitizenServe Release 6/6、GMB `repo_guard` 18/18、
-  CloudflarePublisher XCTest 43/43，共 68 项。首次 Vitest 调用因命令遗漏
-  旧外部流程根在收集阶段退出，0项测试执行；补齐当时流程根后完整重跑6/6通过。现行CI与Release已归入产品`scripts`。
-  XCTest 使用命令级排除正式打包入口才提供的 `tataconsole` 与 `node` 运行资源，只证明当前
-  Swift 源码与测试合同，不冒充正式 TataConsole 安装包。
 
 ## CitizenChain publication 负向夹具收口
 

@@ -12,7 +12,6 @@ export type ResourceKey =
   | 'square_video_freedom'
   | 'square_video_democracy'
   | 'square_video_spark'
-  | 'chat_server_access'
   | 'push_endpoint'
   | 'push_notification'
   | 'chain_extrinsic'
@@ -125,7 +124,6 @@ export const resourceLimits: Readonly<Record<ResourceKey, ResourceLimit>> = {
     max_height: 1920,
     max_count: 1,
   },
-  chat_server_access: { max_bytes: 4 * kib },
   push_endpoint: { max_bytes: 16 * kib, max_count: 8, ttl_seconds: 90 * 24 * 60 * 60 },
   push_notification: { max_bytes: 4 * kib },
   chain_extrinsic: { max_bytes: 64 * kib },
@@ -211,7 +209,6 @@ const routeLimits: readonly RouteLimit[] = [
   route('POST', /^\/chain\/extrinsics\/relay$/, 'chain_extrinsic_json'),
   route('POST', /^\/square\/auth\/(challenge|session)$/),
   route('POST', /^\/square\/auth\/device\/register$/),
-  route('POST', /^\/auth\/chatserver\/access$/, 'chat_server_access'),
   route('GET', /^\/square\/membership$/),
   route('POST', /^\/square\/membership\/confirm$/),
   route('POST', /^\/square\/users\/confirm$/),

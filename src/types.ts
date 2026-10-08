@@ -73,9 +73,6 @@ export interface SquareNotifyJob {
 /// Wrangler 根据 scripts/wrangler.toml 生成固定变量与资源绑定；发布期变量和 Secret 只保留名称契约，
 /// 实际值由产品发布环境分别通过`--var`与受保护Secret输入注入。
 interface WorkerSecretsAndOptionalVars {
-  // ChatServer 私钥只签发短期 EdDSA JWT；服务地址是公开 HTTPS 配置。
-  CHAT_AUTH_ED25519_PRIVATE_KEY?: string;
-  CHAT_SERVER_URL?: string;
   // 普通应用通知只发送广场公开提醒和会员存储清理预告；私钥只允许使用Worker Secret配置。
   APNS_KEY?: string;
   APNS_KID?: string;

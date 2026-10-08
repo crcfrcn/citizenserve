@@ -20,7 +20,6 @@ interface __BaseEnv_CloudflareBindings {
 	SQUARE_PUBLIC_MEDIA_BASE_URL: "https://media.crcfrcn.com";
 	MEDIA_TTL_SECONDS: "300";
 	WEB_ORIGIN: "https://www.crcfrcn.com";
-	CHAT_SERVER_URL: "https://chat.crcfrcn.com";
 	TURNSTILE_SITEKEY: "0x4AAAAAAD0GQRiB2O3a0DYJ";
 	TOPUP_NETWORK: "mainnet";
 	TOPUP_RECV_ADDRESS: "0x5ce9b56b9d1812a7cf29841e21756f09ca7d223b";
@@ -48,7 +47,6 @@ interface __BaseEnv_CloudflareBindings {
 	SETTLE_TOKEN: string;
 	TOPUP_INTENT_SECRET: string;
 	CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET: string;
-	CHAT_AUTH_ED25519_PRIVATE_KEY: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

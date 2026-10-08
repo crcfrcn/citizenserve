@@ -166,7 +166,6 @@ export async function guardRequest(request: Request, env: Env, path: string): Pr
 }
 
 function requiresDeviceProof(path: string, method: string): boolean {
-  if (path === '/auth/chatserver/access') return method === 'POST';
   if (path.startsWith('/square/auth/')) return false;
   // 这些回执对应的链上业务已经由账户签名并 finalized；再次要求设备签名会让同一业务
   // 产生第二次签名。handler 仍强制校验 Bearer 会话、交易哈希和 finalized 链状态。
@@ -188,9 +187,6 @@ function requiresDeviceProof(path: string, method: string): boolean {
 type RateBinding = 'RATE_AUTH' | 'RATE_WRITE' | 'RATE_READ';
 
 function routeRate(path: string, method: string): { binding: RateBinding; key: string } {
-  if (path === '/auth/chatserver/access') {
-    return { binding: 'RATE_AUTH', key: 'chatserver_access' };
-  }
   if (path === '/square/contacts' && method === 'GET') {
     return { binding: 'RATE_READ', key: 'contacts_read' };
   }
