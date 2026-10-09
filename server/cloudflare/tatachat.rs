@@ -18,9 +18,9 @@ use serde_json::{json, Value};
 use worker::Env;
 
 mod attachment;
-pub(crate) mod lifecycle;
 pub(crate) mod config;
 mod key;
+pub(crate) mod lifecycle;
 mod mailbox;
 pub(crate) mod maintenance;
 mod push;
@@ -154,9 +154,15 @@ impl D1Store {
     ) -> citizenserve::tatachat::Result<Vec<Vec<Value>>> {
         access.ensure_current(config::now())?;
         let guard=format!("INSERT INTO tatachat_assert VALUES(CASE WHEN ?1>{} AND NOT EXISTS(SELECT 1 FROM account_deletion_fences WHERE user_id=?2) THEN 1 ELSE 0 END) ON CONFLICT(value) DO NOTHING",Self::CLOCK);
-        let mut all = vec![(guard.as_str(), vec![json!(access.deadline()),json!(access.actor().user_id)])];
+        let mut all = vec![(
+            guard.as_str(),
+            vec![json!(access.deadline()), json!(access.actor().user_id)],
+        )];
         all.extend(commands);
-        all.push((guard.as_str(), vec![json!(access.deadline()),json!(access.actor().user_id)]));
+        all.push((
+            guard.as_str(),
+            vec![json!(access.deadline()), json!(access.actor().user_id)],
+        ));
         let mut rows = self.transaction(all).await?;
         rows.pop();
         rows.remove(0);
@@ -235,7 +241,9 @@ impl Host {
             return Err(Error::new(503, "chat_clock_changed"));
         }
         let authority = guard::session_authority(&identity, &a, &d, &s, &self.config, now)?;
-        lifecycle::admit(&self.env,&s.cid_number,a.human_verified_at_millis).await.map_err(business)?;
+        lifecycle::admit(&self.env, &s.cid_number, a.human_verified_at_millis)
+            .await
+            .map_err(business)?;
         let subject = Subject::verified(&authority, &d, &s, &self.config, now)?;
         let permissions = Permissions::current(&member, &identity, now)?;
         Ok((subject, permissions, d.issued_at))

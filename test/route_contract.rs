@@ -301,21 +301,32 @@ fn push_endpoint_exact_actual_api_targets_and_budgets() {
 
 #[test]
 fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority() {
-    use citizenserve::server::routes::{protected_target,Permission};
+    use citizenserve::server::routes::{protected_target, Permission};
     use citizenserve::user::routes::ProtectedUserRoute;
-    assert_eq!(route("POST","/api/user/deletion/challenges").unwrap(),Route::ProtectedUser(ProtectedUserRoute::DeletionChallenge));
-    assert_eq!(route("POST","/api/user/deletion").unwrap(),Route::ProtectedUser(ProtectedUserRoute::Delete));
-    for p in ["/api/user/deletion/challenges","/api/user/deletion"] {
-        assert!(protected_target("POST",p).is_ok());
-        assert!(route("GET",p).is_err());
-        assert!(protected_target("POST",&format!("{p}?cid_number=other")).is_err());
+    assert_eq!(
+        route("POST", "/api/user/deletion/challenges").unwrap(),
+        Route::ProtectedUser(ProtectedUserRoute::DeletionChallenge)
+    );
+    assert_eq!(
+        route("POST", "/api/user/deletion").unwrap(),
+        Route::ProtectedUser(ProtectedUserRoute::Delete)
+    );
+    for p in ["/api/user/deletion/challenges", "/api/user/deletion"] {
+        assert!(protected_target("POST", p).is_ok());
+        assert!(route("GET", p).is_err());
+        assert!(protected_target("POST", &format!("{p}?cid_number=other")).is_err());
     }
-    for r in [UserRoute::DeletionStatusChallenge,UserRoute::DeletionStatus] {
-        let resolved=route("POST",&r.external()).unwrap();
-        assert_eq!(resolved.permission(),Permission::Account);
-        assert!(!resolved.protected());assert!(!r.registration());assert!(!r.requires_mls());
-        assert!(protected_target("POST",&r.external()).is_err());
+    for r in [
+        UserRoute::DeletionStatusChallenge,
+        UserRoute::DeletionStatus,
+    ] {
+        let resolved = route("POST", &r.external()).unwrap();
+        assert_eq!(resolved.permission(), Permission::Account);
+        assert!(!resolved.protected());
+        assert!(!r.registration());
+        assert!(!r.requires_mls());
+        assert!(protected_target("POST", &r.external()).is_err());
     }
-    assert!(route("POST","/api/square/account/delete/challenge").is_err());
-    assert!(route("POST","/api/square/account/delete").is_err());
+    assert!(route("POST", "/api/square/account/delete/challenge").is_err());
+    assert!(route("POST", "/api/square/account/delete").is_err());
 }

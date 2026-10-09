@@ -204,15 +204,24 @@ impl Storage for R2Storage {
             if keys.len() > 221 {
                 return Err(fail());
             }
-            if bucket==Bucket::Public {
+            if bucket == Bucket::Public {
                 // 空对象永远保留：旧If-None-Match:*直传即便仍在途也不能重建已删内容。
                 // 所有公开删除共用此入口，普通维护不能再次移除这个封堵对象。
                 for key in keys {
-                    if !key.starts_with("square/") || key.contains("..") {return Err(fail());}
-                    self.public.put(key,Vec::<u8>::new()).http_metadata(HttpMetadata{
-                        content_type:Some("application/octet-stream".into()),
-                        cache_control:Some("no-store".into()),..Default::default()
-                    }).execute().await.map_err(|_|fail())?.ok_or_else(fail)?;
+                    if !key.starts_with("square/") || key.contains("..") {
+                        return Err(fail());
+                    }
+                    self.public
+                        .put(key, Vec::<u8>::new())
+                        .http_metadata(HttpMetadata {
+                            content_type: Some("application/octet-stream".into()),
+                            cache_control: Some("no-store".into()),
+                            ..Default::default()
+                        })
+                        .execute()
+                        .await
+                        .map_err(|_| fail())?
+                        .ok_or_else(fail)?;
                 }
                 return Ok(());
             }

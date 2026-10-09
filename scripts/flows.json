@@ -43,23 +43,23 @@
   "tatachat": {
     "protocol": {
       "source": "https://github.com/tuyutata/tatachatsdk.git",
-      "commit": "29b7e4377833802a0a9f833c44c3e92036bd8493",
+      "commit": "b0485cf0a2c0922791741a748fdec0a49003089f",
       "files": [
         {
           "name": "message.proto",
-          "source_path": "lib/src/protocol/message.proto",
+          "source_path": "lib/protocol/message.proto",
           "sha256": "f51d9fc81a1128d6fb522af4ba8b785154e94c31b09147cfba274916097f1dd3",
           "bytes": 778
         },
         {
           "name": "attachment.proto",
-          "source_path": "lib/src/protocol/attachment.proto",
+          "source_path": "lib/protocol/attachment.proto",
           "sha256": "e70307165a76a053408a9a7a47fdce5902dd1282e0547dbdd1af732aa48d39b2",
           "bytes": 558
         },
         {
           "name": "chat_frame.proto",
-          "source_path": "lib/src/protocol/chat_frame.proto",
+          "source_path": "lib/protocol/chat_frame.proto",
           "sha256": "0efeeac8d579a250e44cae3a34f07989c1127c3d834d7cf372129671a04a478d",
           "bytes": 2534
         }

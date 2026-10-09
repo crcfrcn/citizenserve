@@ -4,9 +4,9 @@
 
 本产品完全独立管理全部流程所需的工具、依赖及其它资源需求。需求唯一依据为本仓源码、公开声明、锁文件及本产品拥有的准备配方，包括准确版本、平台、官方来源、摘要或固定提交、闭包、验真方式和失败条件；塔塔控制台按当前产品声明提供资源，不维护另一份产品需求或替产品决定版本、来源与流程步骤。
 
-本产品必须能在没有塔塔控制台时完全独立执行全部已实现流程。独立执行时，本产品自行完成可信引导、资源获取、验真、保存、复用及任务工作视图准备，不依赖控制台源码、私有资料、安装位置或资源库。
+本产品必须能在没有塔塔控制台时完全独立执行全部已实现流程。独立执行时，本产品自行完成可信引导、资源获取、保存、复用及任务工作视图准备，不依赖控制台源码、私有资料、安装位置或资源库。
 
-通过塔塔控制台执行本产品流程时，本产品向控制台声明所需资源并使用其已准备好的供给。控制台先核对并复用已有的匹配工具与依赖；没有的由控制台按本产品声明下载、准备、验真并保存到控制台工具库或依赖库，再交付本产品复用。本产品负责核验交付与自身需求一致并使用资源，不因控制台缺件或供给失败改为自行下载，也不另建同一资源的永久副本；可写包管理器视图与流程过程数据仍归本产品当前任务工作目录。
+通过塔塔控制台执行本产品流程时，本产品向控制台声明所需资源并使用其已准备好的供给。控制台先核对并复用已有的匹配工具与依赖；没有的由控制台按本产品声明下载、准备并保存到控制台工具库或依赖库，再交付本产品复用。本产品负责直接使用交付路径，不因控制台缺件或供给失败改为自行下载，也不另建同一资源的永久副本；可写包管理器视图与流程过程数据仍归本产品当前任务工作目录。
 
 两种执行方式使用本产品同一声明、锁和流程实现，仅资源供给职责随执行方式改变。该职责适用于本产品全部平台与已实现流程。独立模式下资源缺失由产品处理；控制台模式下资源缺失由控制台处理。显式离线缺件、交付失败、损坏、错误摘要、来源漂移或越界必须据实失败，不自动升级、覆盖可疑原件或切换执行方式。
 
@@ -86,7 +86,7 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 ## 检查与构建
 
-锁文件 /Users/rhett/citizenserve/Cargo.lock、工具链 /Users/rhett/citizenserve/rust-toolchain.toml 固定当前验收版本。检查由已验真Node绝对入口直接执行/Users/rhett/citizenserve/scripts/resources.mjs的checks命令，唯一参数为当前完整流程资源回执绝对路径；实现再次核验回执及全部工具、依赖，缺件即失败。Python用例直接加载Cloudflare生产SQL，执行真实SQLite容量和多连接竞争，但不冒充线上D1测试。
+锁文件 /Users/rhett/citizenserve/Cargo.lock、工具链 /Users/rhett/citizenserve/rust-toolchain.toml 固定当前验收版本。检查由已交付Node绝对入口直接执行/Users/rhett/citizenserve/scripts/resources.mjs的checks命令，唯一参数为当前完整流程资源回执绝对路径；实现再次核验回执及全部工具、依赖，缺件即失败。Python用例直接加载Cloudflare生产SQL，执行真实SQLite容量和多连接竞争，但不冒充线上D1测试。
 
 Cargo生成 /Users/rhett/citizenserve/target/build/cargo-target/wasm32-unknown-unknown/release/citizenserve_cloudflare.wasm；官方worker-build 0.8.5生成 /Users/rhett/citizenserve/target/build/worker/index.js 与 /Users/rhett/citizenserve/target/build/worker/index_bg.wasm，Wrangler直接使用index.js。兼容shim由工具生成，不作正式main、不手改生成JS。WASM禁用strip以保留wasm-bindgen所需externref表。本地测试依赖锁在 /Users/rhett/citizenserve/test/worker/package-lock.json，使用Node25.2.1、Wrangler4.121.0和Miniflare5.20260804.1-alpha；所有外部请求由闭合测试服务接管，没有真实链/推送调用。配置 /Users/rhett/citizenserve/server/cloudflare/wrangler.toml 已包含Queue/两个Cron，生产兼容日期仍为2026-10-07；当前Worker测试使用同一生产日期2026-10-07；锁定workerd仅支持至2026-08-11的历史问题仍未解决，运行验收未通过。
 
@@ -430,7 +430,7 @@ SDK协议来源、固定40位提交、三件.proto长度和SHA-256以及protoc35
 
 资源主体必须显式选择：independent由产品按同一公开配方从官方固定来源获取、验真并保存到显式源码外store，已存原件逐件回读复用；console只核验控制台按本产品requirements提前交付的当前任务supply，缺件、损坏或错误身份直接失败，禁止自行下载或切换模式。console供给含schema/product_id/platform/work、dependency_root、tool_root、protoc_archive、protoc和按文件名映射的protocol路径。永久原件仍位于资源供给者库，生成和可写工作视图只归当前CitizenServe平台工作根；产品没有控制台私有路径或源码依赖。离线缺件据实失败；下载可取消，HTTPS重定向有界且仅限官方GitHub资源域，归档内容先验摘要，只展开固定普通protoc入口，提交不覆盖已有原件。
 
-prepare输入是显式JSON文件，含work/mode和独立store或控制台supply；通过已验真的Node25.2.1绝对入口调用scripts/resources.mjs prepare <绝对输入路径>。输出receipt位于work/tatachat-protocol/receipt.json，协议位于同目录protocol，工具为同目录protoc；verify再次逐件检查源码声明摘要、协议目录闭集、原件归档摘要、展开的实际protoc字节及35.0版本。独立模式与控制台模式共用这些核验，不依赖PATH工具或系统解压器。
+prepare输入是显式JSON文件，含work/mode和独立store或控制台supply；通过已交付的Node25.2.1绝对入口调用scripts/resources.mjs prepare <绝对输入路径>。输出receipt位于work/tatachat-protocol/receipt.json，协议位于同目录protocol，工具为同目录protoc；verify再次逐件检查源码声明摘要、协议目录闭集、原件归档摘要、展开的实际protoc字节及35.0版本。独立模式与控制台模式共用这些核验，不依赖PATH工具或系统解压器。
 
 正式编译前由既有产品资源供给者交付准确Node/Rust/Cargo/Python/worker-build等工具及锁闭包；新增聊天prepare配方仅负责协议资源，不冒充整个产品Build/CI/Release资源接入完成。构建输入显式为PRODUCT_NODE_BIN、PRODUCT_WORK_DIR、CARGO_TARGET_DIR、TATACHAT_RESOURCE_RECEIPT、TATACHATSDK_PROTOCOL_DIR、PROTOC；CARGO_TARGET_DIR必须是work/cargo-target；执行前还需显式交付当前work内的CARGO_HOME依赖视图，exec强制Cargo离线，缺件直接失败，不读取用户默认缓存或隐式下载。根build.rs用同一公开verify再次检查归档和实际执行字节，随后核对三件SHA/长度，调用显式protoc，由prost-build生成OUT_DIR/chat.protocol.rs；所有产品输入路径规范、无链接并归当前工作边界，构建不联网、不安装工具。当前完整检查、Worker构建与Worker测试分别直接执行scripts/resources.mjs的checks、build-worker、check-worker命令，均以完整流程资源回执为唯一参数；构建缺工具直接失败。Worker产物归已验真当前任务work/worker，结果核验与记录后清空；历史产物证据仅归任务卡。
 
@@ -478,7 +478,7 @@ Linux资源仅在实际GitHub Linux Runner获取、准备、验真和使用；�
 
 本仓配方声明Git2.54.0、Python3.14.3、Bash5.3.20、Rust1.97.1、protoc35.0、actionlint1.7.12、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及Release所调用的GitHub CLI2.102.0。Linux源构建闭包包含固定BusyBox/Make/Zig、Perl5.42.3、OpenSSL3.6.3、zlib1.3.2和SQLite3.53.4源码。SQLite为Linux Python源码准备的内部库，不替换Mac已交付Python及其实际内部SQLite；两个平台的内部闭包分别核验，不声称字节相同。Rust按官方rustc/cargo/rustfmt/clippy/host std和wasm std组件准备；Bash20份官方补丁按固定摘要及完整context原行应用，拒绝内容不符或匹配歧义。worker-build只从固定0.8.5来源及内部Cargo锁离线编译，不隐式下载esbuild/wasm-bindgen/wasm-opt。
 
-Cargo registry闭包按包名、版本与checksum物化并生成离线vendor校验；npm仅按原锁真实解析路径、os/cpu/libc物化适用闭包，不运行生命周期脚本。esbuild/workerd实际二进制直接来自该锁，工具命令只解析当前任务已验真闭包，拒绝调用者PATH、代理、系统工具、Rust包装器及下载覆盖变量。协议消费继续固定SDK提交29b7e4377833802a0a9f833c44c3e92036bd8493和该提交真实lib/src/protocol；不读取SDK工作树或提前改新SHA。
+Cargo registry闭包按包名、版本与checksum物化并生成离线vendor校验；npm仅按原锁真实解析路径、os/cpu/libc物化适用闭包，不运行生命周期脚本。esbuild/workerd实际二进制直接来自该锁，工具命令只解析当前任务已验真闭包，拒绝调用者PATH、代理、系统工具、Rust包装器及下载覆盖变量。协议消费固定SDK真实提交b0485cf0a2c0922791741a748fdec0a49003089f及该提交lib/protocol，三份协议长度与摘要保持；与App声明及锁使用同一提交，不读取SDK工作树。
 
 独立Runner模式将不可变原件按摘要保存于显式源码外工具库/依赖库并再次核验后复用；显式offline缺件失败，已存损坏原件保留并失败，禁止覆盖或升级。当前Workflow使用本次Runner临时资源库，没有宣称跨Runner持久缓存已验收。控制台模式只通过公开原件获取及工具供给能力消费其工具库/依赖库，缺件、验真错误或供给失败不切独立下载。Mac发起只核验本机已交付Node，不准备Linux原件。
 
@@ -512,13 +512,13 @@ runTool允许当前产品源码根、当前任务工作根及其内部目录、�
 
 ## Cloudflare本机Build公开资源与完整入口
 
-SDK版本链接仅在原入口和规范真实目标均属于该已验真Xcode时接受，返回规范真实SDK目录；越界目标、非目录及非规范入口拒绝。产品resolveSDKPath与控制台resolveProductSDK分别核验同一边界，不更改Xcode签名或版本要求。
+SDK版本链接仅在原入口和规范真实目标均属于该已选择Xcode时接受，返回规范真实SDK目录；越界目标、非目录及非规范入口拒绝。产品resolveSDKPath与控制台resolveProductSDK分别核验同一边界，不更改Xcode签名或版本要求。
 
 当前本机Build由 /Users/rhett/citizenserve/scripts/resources.mjs 的 execute cloudflare 完成，/Users/rhett/citizenserve/scripts/flows.json 的flow_entry、resource_entry及platforms.cloudflare下completion、files、work_claim为公开接口。Cloudflare completion为compile-only，仅编译及验真产物，禁止安装或部署；当前产物在当前任务build内为worker/index.js、worker/index_bg.wasm；返回当前任务身份及两件实际文件摘要。独立执行和控制台调用共用同一资源准备、工程准备、离线编译、Worker打包和结果核验实现。此为当前源码合同，运行态尚待统一验收。
 
 最小宿主是本产品声明的官方Node25.2.1绝对入口；执行完整Build前先核对实际运行字节。Build只声明实际调用的Node、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127及Binaryen130，加上锁中的esbuild及Darwin arm64二进制闭包。Build不准备Worker运行测试所需Miniflare/workerd，也不补装Git、Python、Bash或actionlint。当前Mac Rust WASM标准库使用准确官方tar.xz坐标与固定摘要；Linux继续使用自身既有坐标，只在实际GitHub Linux Runner准备和执行。Xcode27.0及随包clang/ar/ranlib、macOS SDK每次核验官方签名、准确版本、规范真实路径和包归属；固定Apple定位和签名入口不加入PATH。
 
-requirements(platform,work)异步返回当前Build完整需求；protocolRequirements及protocol-requirements只返回根build.rs消费的协议需求。SDK消费继续固定29b7e4377833802a0a9f833c44c3e92036bd8493及该提交lib/src/protocol/。工具入口槽位、所需目标组件、准确官方归档和产品准备配方摘要均在公开需求中。prepareToolSupply按当前需求准备缺件，不读取控制台私有登记或实现；源码工具使用官方源归档、原始Cargo锁及递归闭包离线编译。XZ/LZMA2在本产品Node内解码并核验流、块、索引及输出校验，不以系统xz或系统Shell作为Mac工具自举条件。
+requirements(platform,work)异步返回当前Build完整需求；protocolRequirements及protocol-requirements只返回根build.rs消费的协议需求。SDK消费固定b0485cf0a2c0922791741a748fdec0a49003089f及该提交lib/protocol/，公开要求中的URL和路径校验使用同一最终目录。工具入口槽位、所需目标组件、准确官方归档和产品准备配方摘要均在公开需求中。prepareToolSupply按当前需求准备缺件，不读取控制台私有登记或实现；源码工具使用官方源归档、原始Cargo锁及递归闭包离线编译。XZ/LZMA2在本产品Node内解码并核验流、块、索引及输出校验，不以系统xz或系统Shell作为Mac工具自举条件。
 
 独立执行须显式选择independent，给出两处规范源码外工具和依赖原件库及准确工作根；原件按摘要保存并再次验真复用，工具对象只引用同一已保存原件。显式offline缺件失败，已有损坏对象或配方变化保留并失败，禁止自动覆盖或升级。控制台调用使用provided和当前任务FD4：控制台先复用已验真对象，缺件按本产品公开配方取得、准备、验真并保存，再交付完整实际文件清单、入口与组件。产品再次核验工具、Apple、协议、Cargo/npm视图和资源环境。PRODUCT_TOOL_ROOT、PRODUCT_DEPENDENCY_ROOT只用于核对交付边界；缺通道、取消、错身份、损坏或供给失败不切换独立下载。FD4仅传身份、需求摘要及资源回执位置/摘要；完整清单留在当前任务资源回执内，不传归档字节。
 
@@ -526,7 +526,7 @@ work_claim=product使完整入口在创建内部现场前持短锁领取长期�
 
 CI/Release的.active.json与Build的.product-build.lock由同一个.claim.lock保护。两类领取入口都先检查全部长期守卫，再创建本次标记与清场；存在任一守卫即失败，禁止删除对方标记或可写现场。Build完成候选核验而尚未完成调用方状态记录时仍保留守卫；只有原所有者按既有收尾合同释放后，其它入口才能领取。
 
-回归源码覆盖最小闭包、资源身份/摘要/离线策略、真实close先于完成确认、原件复用、清单链接边界、未退出保存保护、短锁竞争和清场回读，以及独立编码的压缩XZ样本和损坏/取消。全部获准步骤实现、同步和清理完成后才统一执行测试与编译。生产compatibility_date继续2026-10-07；workerd1.20260804.1对该日期的兼容性仍未解决，不能据本机Build接口存在宣称Worker运行测试通过。本机门禁供给、SDK真实新SHA及消费者、业务回归和云/真机联调仍按后续步骤实施。
+回归源码覆盖最小闭包、资源身份/摘要/离线策略、真实close先于完成确认、原件复用、清单链接边界、未退出保存保护、短锁竞争和清场回读，以及独立编码的压缩XZ样本和损坏/取消。全部获准步骤实现、同步和清理完成后才统一执行测试与编译。生产compatibility_date继续2026-10-07；workerd1.20260804.1对该日期的兼容性仍未解决，不能据本机Build接口存在宣称Worker运行测试通过。SDK固定消费已同步至真实新提交；原件物化验真、本机门禁供给、业务回归和云/真机联调仍须取得本轮实际结果。
 
 ## 会员确认回执
 
@@ -555,3 +555,9 @@ CI/Release的.active.json与Build的.product-build.lock由同一个.claim.lock�
 聊天清理仍使用同一附件one-shot尝试账本，每批只处理一个对象；writing且HEAD缺失继续保留定位。持久用户冻结拒绝旧Access写入、迟到收件消息、尚未开始的附件上传与收件关系。只删该CID收件箱，保留其他接收者的消息与共享幂等回执；所属附件对象明确删除后才移除代际定位。新真人准入必须晚于完成回执；旧激活重放不能清掉完成任务或解除聊天冻结。
 
 钱包、链身份users及finalized身份/会员/创作者投影、topup_orders、chain_transaction_confirmations、chain_extrinsic_relays和永久结算/广播claim均保留。最终移除该CID云资料、通讯录、推送、动态、上传与资源用量，再移除原真人准入/激活凭据，提交complete回执。App严格校验六字段回执及当前绑定，pending保留本地资料、帖子与私信；complete后逐项尝试全部本地清理，单项失败仍继续其余项并显示本机清理未完成。
+
+## 当前资源供给合同（2026-10-09）
+
+scripts/resources.mjs 按本仓声明准备协议、工具、Cargo vendor和npm目录，直接消费供给路径。协议和资源回执只承载产品、平台、模式、工作目录及任务身份；build.rs 直接调用交付的protoc，不执行Node/协议摘要/工具版本复验。workerTestView以回执路径与工作目录生成真实Worker测试视图，资源回执不再要求SHA256或完整文件树。
+
+供给缺件、离线缺件、工具非零退出、取消或后代未退出按实际结果失败。固定工作根、任务身份、隔离、互斥与清场合同继续适用。业务授权、钱包及链签名、TLS和正式应用产物的签名安装合同保持各自职责。

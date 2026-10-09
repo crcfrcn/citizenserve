@@ -40,7 +40,10 @@ impl Route {
             Self::Topup(_) | Self::Downloads(_) | Self::Chain(_) | Self::Health => {
                 Permission::Public
             }
-            Self::User(crate::user::routes::UserRoute::DeletionStatusChallenge | crate::user::routes::UserRoute::DeletionStatus) => Permission::Account,
+            Self::User(
+                crate::user::routes::UserRoute::DeletionStatusChallenge
+                | crate::user::routes::UserRoute::DeletionStatus,
+            ) => Permission::Account,
             Self::User(_) => Permission::Registration,
             _ => Permission::Account,
         }

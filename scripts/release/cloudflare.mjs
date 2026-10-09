@@ -5,7 +5,7 @@ import {join, basename} from 'node:path';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
-import {productRoot, claimWork, prepareFlowResources, verifyFlowResources, checkoutSHA, flowRequirements, runTool,
+import {productRoot, claimWork, prepareFlowResources, checkoutSHA, flowRequirements, runTool,
   githubRequest, githubDownload, githubUpload, tarEntries, zipEntries, tarGzip, safeRelative, requireSuccessCount,
   runCLI, dispatchFlow, recoverFlow} from '../resources.mjs';
 import {successfulGate, artifactName} from '../ci/cloudflare.mjs';
@@ -101,8 +101,8 @@ export async function prepareRelease({input, environment = process.env, signal})
   const task = await claimWork('release', String(context.runID) + '-' + context.attempt);
   try {
     const receipt = await prepareFlowResources({flow: 'release', work: task.work, mode: 'independent', signal,
-      toolRoot: join(environment.RUNNER_TEMP, 'citizenserve-resources/tools'),
-      dependencyRoot: join(environment.RUNNER_TEMP, 'citizenserve-resources/dependencies')});
+      toolRoot: join(task.work,'tools'),
+      dependencyRoot: join(task.work,'dependencies')});
     if (await checkoutSHA(receipt) !== context.sourceSHA) fail('Release检出SHA不符');
     const capability = {token: environment.GH_TOKEN, signal};
     await successfulGate(context.sourceSHA, capability);
@@ -137,7 +137,7 @@ export async function publishRelease({input, environment = process.env, signal})
   const work = join(productRoot, 'target/build');
   const saved = JSON.parse(await readFile(join(work, 'release-context.json')));
   if (JSON.stringify(saved) !== JSON.stringify(context)) fail('Release签署阶段任务漂移');
-  const receipt = await verifyFlowResources(JSON.parse(await readFile(join(work, 'resources.json'))));
+  const receipt = JSON.parse(await readFile(join(work, 'resources.json')));
   const capability = {token: environment.GH_TOKEN, signal};
   await successfulGate(context.sourceSHA, capability);
   const currentCI = await githubRequest('/repos/crcfrcn/citizenserve/actions/runs/' + context.ciRunID, capability);

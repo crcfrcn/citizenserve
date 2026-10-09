@@ -4,8 +4,8 @@
 pub mod attachment;
 pub mod auth;
 pub mod key;
-pub mod mailbox;
 pub mod lifecycle;
+pub mod mailbox;
 pub mod protocol;
 pub mod push;
 pub mod realtime;

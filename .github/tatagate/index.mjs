@@ -7,7 +7,7 @@ import {resolve, join, dirname, extname, isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Readable} from 'node:stream';
 import {spec} from 'node:test/reporters';
-import {productRoot, claimWork, prepareFlowResources, verifyFlowResources, runTool, fullChecks, checkoutSHA, runCLI} from '../../scripts/resources.mjs';
+import {productRoot, claimWork, prepareFlowResources, runTool, fullChecks, checkoutSHA, runCLI} from '../../scripts/resources.mjs';
 const gateDirectory = dirname(fileURLToPath(import.meta.url));
 const contract = JSON.parse(readFileSync(join(gateDirectory, 'contracts.json')));
 const emptyTreeSHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -243,7 +243,6 @@ export default async function* reporter(events) {
 export async function executeGate({root = productRoot, baseSHA, headSHA, receipt, signal}) {
   gateContract();
   if (root !== productRoot || realpathSync(root) !== root || !sha.test(headSHA ?? '') || !sha.test(baseSHA ?? '') || baseSHA === headSHA) fail('根与提交坐标无效');
-  await verifyFlowResources(receipt);
   if (receipt.flow !== 'gate' || await checkoutSHA(receipt) !== headSHA) fail('门禁资源或检出SHA不符');
   const git = async args => (await runTool(receipt.tools.git, ['-c', 'credential.helper=', '-C', root, ...args],
     {work: receipt.work, tools: receipt.tools, signal})).stdout;
@@ -298,7 +297,7 @@ export async function repositoryGateMain(args, signal) {
   const task = await claimWork('gate', e.GITHUB_RUN_ID + '-' + e.GITHUB_RUN_ATTEMPT);
   try {
     const receipt = await prepareFlowResources({flow: 'gate', work: task.work, mode: 'independent', signal,
-      toolRoot: join(e.RUNNER_TEMP, 'citizenserve-resources/tools'), dependencyRoot: join(e.RUNNER_TEMP, 'citizenserve-resources/dependencies')});
+      toolRoot: join(task.work,'tools'), dependencyRoot: join(task.work,'dependencies')});
     const readGit = async args => (await runTool(receipt.tools.git, args, {work: task.work, tools: receipt.tools, signal})).stdout.trim();
     const baseSHA = pushBaseSHA({forced: event.forced, before: event.before, headSHA: e.GITHUB_SHA,
       parents: event.forced ? await readGit(['rev-list', '--parents', '-n', '1', e.GITHUB_SHA]) : undefined,

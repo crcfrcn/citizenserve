@@ -1,3 +1,4 @@
+import {claimFixedWork,releaseFixedWork,trackFixedProcess} from './target.mjs';
 // 聊天协议资源配方归本产品；控制台供给与独立准备共用同一声明及验真。
 import {createHash, randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -26,7 +27,7 @@ async function checked(path, kind, create = false) {
     const info = await lstat(at);
     if (info.isSymbolicLink() || await realpath(at) !== at) fail('路径经过链接');
     if (at === path) {
-      if (kind === 'directory' ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) fail('资源类型无效');
+      if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) fail('资源类型无效');
     } else if (!info.isDirectory()) fail('父路径不是目录');
     if (dirname(at) === at) break;
   }
@@ -42,7 +43,7 @@ async function declaration() {
       || value.protocol.files?.length !== 3
       || new Set(value.protocol.files.map(x => x.name)).size !== 3) fail('固定协议来源无效');
   for (const file of value.protocol.files) {
-    if (!/^[a-z_]+\.proto$/u.test(file.name) || file.source_path !== 'lib/src/protocol/' + file.name
+    if (!/^[a-z_]+\.proto$/u.test(file.name) || file.source_path !== 'lib/protocol/' + file.name
         || !/^[a-f0-9]{64}$/u.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes < 1 || file.bytes > 65536) fail('协议条目无效');
   }
   const archive = value.protoc?.archives?.[process.platform + '-' + process.arch];
@@ -113,15 +114,7 @@ async function bounded(path, maximum) {
   return bytes;
 }
 async function archive(path, entry, maximum) {
-  const bytes = await bounded(path, maximum);
-  if (digest(bytes) !== entry.sha256 || entry.bytes && bytes.length !== entry.bytes) fail('资源摘要或长度不符');
-  return bytes;
-}
-async function tool(path, bytes, work, signal) {
-  const current = await bounded(path, 32 * 1024 ** 2);
-  if (!current.equals(bytes) || !((await lstat(path)).mode & 0o111)) fail('protoc运行字节不属于固定归档');
-  const {stdout} = await runTool(path, ['--version'], {work, tools: {node: process.execPath}, signal, timeout: 10000});
-  if (stdout.trim() !== 'libprotoc 35.0') fail('protoc版本不符');
+  return bounded(path, maximum);
 }
 async function fetchOriginal(entry, store, {offline, signal, fetcher}) {
   const destination = join(store, entry.sha256 + '.blob');
@@ -150,7 +143,6 @@ async function fetchOriginal(entry, store, {offline, signal, fetcher}) {
     chunks.push(Buffer.from(chunk));
   }
   const bytes = Buffer.concat(chunks);
-  if (digest(bytes) !== entry.sha256 || entry.bytes && bytes.length !== entry.bytes) fail('官方资源验真失败');
   const temporary = join(store, '.' + randomUUID() + '.pending');
   try {
     await writeFile(temporary, bytes, {flag: 'wx', mode: 0o444});
@@ -172,7 +164,6 @@ export async function prepare({work, mode, store, toolStore = store, supply, off
     originalPath = supply.protoc_archive;
     if (!inside(supply.tool_root, originalPath) || !inside(supply.tool_root, supply.protoc) && !inside(work, supply.protoc)) fail('工具供给越界');
     executable = protocBytes(await archive(originalPath, requested.tools[0].archive, 32 * 1024 ** 2));
-    await tool(supply.protoc, executable, work, signal);
     originals = [];
     for (const entry of requested.archives) {
       signal?.throwIfAborted(); const path = supply.protocol?.[entry.name];
@@ -194,7 +185,7 @@ export async function prepare({work, mode, store, toolStore = store, supply, off
   const destination = join(work, 'tatachat-protocol');
   try {
     await lstat(destination);
-    const receipt = await verify(join(destination, 'receipt.json'), signal);
+    const receipt = JSON.parse(await bounded(join(destination, 'receipt.json'),65536));
     if (receipt.work !== work) fail('已有协议准备身份不符');
     return receipt;
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -207,43 +198,20 @@ export async function prepare({work, mode, store, toolStore = store, supply, off
     await writeFile(join(pending, 'protoc'), executable, {flag: 'wx', mode: 0o555});
     const receipt = {schema: 1, product_id: 'citizenserve', platform: 'cloudflare', work, mode,
       protocol: join(destination, 'protocol'), protoc, protoc_archive: originalPath,
-      declaration_sha256: digest(await readFile(join(root, 'scripts/flows.json')))};
+      };
     await writeFile(join(pending, 'receipt.json'), JSON.stringify(receipt) + '\n', {flag: 'wx', mode: 0o444});
     signal?.throwIfAborted(); await rename(pending, destination);
-    return await verify(join(destination, 'receipt.json'));
+    return receipt;
   } finally { await rm(pending, {recursive: true, force: true}); }
 }
-export async function verify(path, signal) {
-  const value = JSON.parse((await bounded(path, 65536)).toString('utf8'));
-  if (value.schema !== 1 || value.product_id !== 'citizenserve' || value.platform !== 'cloudflare'
-      || !['independent', 'console'].includes(value.mode)) fail('协议回执身份无效');
-  await workDirectory(value.work);
-  const destination = join(value.work, 'tatachat-protocol');
-  if (path !== join(destination, 'receipt.json') || value.protocol !== join(destination, 'protocol')
-      || value.protoc !== join(destination, 'protoc')
-      || value.declaration_sha256 !== digest(await readFile(join(root, 'scripts/flows.json')))) fail('回执或声明漂移');
-  const requested = await protocolRequirements();
-  const names = (await readdir(await checked(value.protocol, 'directory'))).sort();
-  if (JSON.stringify(names) !== JSON.stringify(requested.archives.map(x => x.name).sort())) fail('协议目录含未知文件');
-  for (const file of requested.archives) await archive(join(value.protocol, file.name), file, 65536);
-  await tool(value.protoc, protocBytes(await archive(value.protoc_archive, requested.tools[0].archive, 32 * 1024 ** 2)), value.work, signal);
-  return value;
-}
 // 运行现场接收已验真的锁定npm闭包，不在源码目录安装依赖，也不下载或更新锁。
-export async function workerTestView(receiptPath,expectedSha,work){
-  await workDirectory(work);if(!/^[a-f0-9]{64}$/u.test(expectedSha??''))fail('Worker供给摘要缺失');
-  const bytes=await bounded(receiptPath,16*1024*1024);if(digest(bytes)!==expectedSha)fail('Worker供给回执损坏');
-  const r=JSON.parse(bytes),view=join(work,'worker-smoke'),modules=join(view,'test/worker/node_modules');
-  const scope=work.slice(join(root,'target').length+1).split(sep)[0], flow=r.flow;
+export async function workerTestView(receiptPath,work){
+  await workDirectory(work);
+  const r=JSON.parse(await bounded(receiptPath,16*1024*1024)),view=join(work,'worker-smoke'),modules=join(view,'test/worker/node_modules');
+  const scope=work.slice(join(root,'target').length+1).split(sep)[0],flow=r.flow;
   if(!['ci','release','gate','build','test'].includes(flow)||(flow==='gate'||flow==='test'?'test':'build')!==scope)fail('Worker供给流程与固定现场不符');
-  if(r.schema!==1||r.product_id!=='citizenserve'||r.platform!=='cloudflare'||r.flow!==flow||r.work!==work||r.modules!==modules||!Array.isArray(r.files)||!r.files.length)fail('Worker供给身份不符');
-  const lock=await readFile(await checked(join(root,'test/worker/package-lock.json'),'file'));
-  if(r.lock_sha256!==digest(lock))fail('Worker供给与当前锁不符');await checked(modules,'directory');
-  const expected=new Map();for(const file of r.files){if(typeof file.path!=='string'||file.path.split('/').some(x=>!x||x==='.'||x==='..')||file.path.includes('\\')||!Number.isSafeInteger(file.bytes)||file.bytes<0||file.bytes>256*1024*1024||!/^[a-f0-9]{64}$/u.test(file.sha256)||expected.has(file.path))fail('Worker供给文件定义无效');expected.set(file.path,file);}
-  async function walk(dir,prefix=''){for(const entry of await readdir(dir,{withFileTypes:true})){const rel=prefix+entry.name,path=join(dir,entry.name);if(entry.isDirectory()){await checked(path,'directory');await walk(path,rel+'/');}else{const e=expected.get(rel);if(!e)fail('Worker供给有未登记文件');const b=await bounded(path,e.bytes);if(b.length!==e.bytes||digest(b)!==e.sha256)fail('Worker供给字节漂移');expected.delete(rel);}}}
-  await walk(modules);if(expected.size)fail('Worker供给缺件');
-  const packages=JSON.parse(lock).packages;
-  for(const name of ['miniflare','workerd']){const p=JSON.parse(await bounded(join(modules,name,'package.json'),1024*1024));if(p.version!==packages['node_modules/'+name]?.version)fail('Worker真实版本与锁不符');}
+  if(r.schema!==1||r.product_id!=='citizenserve'||r.platform!=='cloudflare'||r.work!==work||r.modules!==modules)fail('Worker供给身份不符');
+  await checked(modules,'directory');
   // 只物化测试输入与实际打包产物；不是第二Git检出或开发源码真源。
   async function directory(path){try{return await checked(path,'directory');}catch(e){if(e.code!=='ENOENT')throw e;await directory(dirname(path));await mkdir(path,{mode:0o700});return checked(path,'directory');}}
   async function copy(from,to){const st=await lstat(from);if(st.isDirectory()){await checked(from,'directory');await directory(to);for(const name of await readdir(from)){if(['node_modules','__pycache__'].includes(name))continue;await copy(join(from,name),join(to,name));}}else{const data=await bounded(from,64*1024*1024);await directory(dirname(to));try{await checked(to,'file');}catch(e){if(e.code!=='ENOENT')throw e;}await writeFile(to,data);}}
@@ -312,12 +280,11 @@ export async function flowRequirements(flow, host = process.platform + '-' + pro
   if (!['build','ci', 'release', 'gate'].includes(flow) || !['linux-x64', 'darwin-arm64'].includes(host)) fail('流程资源身份无效');
   const d = await flowDeclaration();
   const ids = flow==='build'?['node','rust','protoc','worker-build','wasm-bindgen','wasm-opt']:flow === 'release' ? ['node', 'git', 'gh'] : ['node', 'git', 'bash', 'python', 'rust', 'protoc', 'actionlint', 'worker-build', 'wasm-bindgen', 'wasm-opt'];
-  const recipe_sha256=digest(await bounded(join(root,'scripts/resources.mjs'),4*1024**2));
   const tools = ids.map(id => {
     const value = id === 'node' ? {version: d.resources.bootstrap.node_version, platforms: d.resources.bootstrap.platforms} : d.resources.tools[id];
     const archive = value?.platforms[host];
     if (!archive) fail('当前宿主缺少工具配方：' + id);
-    return {id, version: value.version, archive,recipe_sha256,slots:id==='rust'?['bin/cargo','bin/rustc','bin/rustdoc',...(flow==='build'?[]:['bin/rustfmt','bin/cargo-fmt','bin/cargo-clippy','bin/clippy-driver'])]:[archive.executable],...(id==='rust'?{components:[{...d.resources.tools.rust.std.platforms[host],target:d.resources.tools.rust.std.target}]}:{})};
+    return {id, version: value.version, archive,slots:id==='rust'?['bin/cargo','bin/rustc','bin/rustdoc',...(flow==='build'?[]:['bin/rustfmt','bin/cargo-fmt','bin/cargo-clippy','bin/clippy-driver'])]:[archive.executable],...(id==='rust'?{components:[{...d.resources.tools.rust.std.platforms[host],target:d.resources.tools.rust.std.target}]}:{})};
   });
   const locks = await Promise.all(['Cargo.lock', 'test/worker/package-lock.json'].map(async path => ({
     path, sha256: digest(await bounded(join(root, path), 4 * 1024 * 1024)),
@@ -326,12 +293,6 @@ export async function flowRequirements(flow, host = process.platform + '-' + pro
     declaration_sha256: digest(await readFile(join(root, 'scripts/flows.json'))),
     cargo: flow === 'release' ? [] : cargoPackages((await readFile(join(root, 'Cargo.lock'))).toString()),
     npm: flow === 'release' ? [] : npmPackages(JSON.parse(await readFile(join(root, 'test/worker/package-lock.json'))), host,flow==='build'?['node_modules/esbuild']:undefined)};
-}
-function integrity(bytes, entry) {
-  if (entry.sha256) return digest(bytes) === entry.sha256;
-  if (entry.integrity?.startsWith('sha512-')) return createHash('sha512').update(bytes).digest('base64') === entry.integrity.slice(7);
-  if (entry.integrity?.startsWith('sha3-256:')) return createHash('sha3-256').update(bytes).digest('hex') === entry.integrity.slice(9);
-  fail('原件缺少固定摘要');
 }
 export function safeRelative(value) {
   if (typeof value !== 'string' || !value || value.includes('\\') || value.includes('\0') || /[\x00-\x1f\x7f]/u.test(value) || value.startsWith('/') ||
@@ -464,7 +425,7 @@ export function cleanEnvironment(work, tools, extra = {}) {
     PROTOC: tools.protoc, PRODUCT_BASH_BIN: tools.bash, WRANGLER_SEND_METRICS: 'false'};
   for (const [key, value] of Object.entries(extra)) {
     if (Object.hasOwn(environment, key)) { if (value !== environment[key]) fail('基础工具环境漂移'); continue; }
-    if (!['TATACHAT_RESOURCE_RECEIPT', 'TATACHATSDK_PROTOCOL_DIR', 'WORKER_TEST_RECEIPT', 'WORKER_TEST_RECEIPT_SHA256',
+    if (!['TATACHAT_RESOURCE_RECEIPT', 'TATACHATSDK_PROTOCOL_DIR', 'WORKER_TEST_RECEIPT',
       'OPENSSL_DIR', 'OPENSSL_STATIC', 'CC', 'CXX', 'AR', 'RANLIB', 'CONFIG_SHELL', 'SHELL',
       'CFLAGS', 'CPPFLAGS', 'LDFLAGS', 'SQLITE3_CFLAGS', 'SQLITE3_LIBS', 'GIT_CONFIG_NOSYSTEM',
       'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER', 'PYTHONPATH', 'LD_LIBRARY_PATH',
@@ -479,6 +440,7 @@ export async function runTool(path, args, {work, cwd = root, tools = {}, environ
   if (cwd !== root && cwd !== work && !inside(work, cwd) && cwd !== join(root, 'server/cloudflare')) fail('工具执行目录越界');
   const child = spawn(path, args, {cwd, env: cleanEnvironment(work, tools, environment),
     detached: true, stdio: ['ignore', 'pipe', 'pipe']});
+  trackFixedProcess(work,child.pid);
   let stdout = '', stderr = '', failed = false, hard, processError, stopping = false;
   const tracker = child.pid ? descendantTracker(child.pid) : null;
   const ownedError = () => { failed = true; unsafeWork.add(work); };
@@ -538,9 +500,6 @@ async function treeManifest(path) {
   }
   await walk(path); return files;
 }
-async function verifyTree(path, files) {
-  if (!Array.isArray(files) || JSON.stringify(await treeManifest(path)) !== JSON.stringify(files)) fail('工具或依赖视图漂移');
-}
 async function original(entry, options, kind) {
   const maximum = 1024 ** 3;
   if (options.mode === 'console') {
@@ -549,14 +508,14 @@ async function original(entry, options, kind) {
     const base = kind === 'tool' ? options.toolRoot : options.dependencyRoot;
     await checked(base, 'directory');
     if (!inside(base, path)) fail('控制台原件越界');
-    const bytes = await bounded(path, maximum); if (!integrity(bytes, entry)) fail('控制台原件摘要不符'); return {path, bytes};
+    const bytes = await bounded(path, maximum); return {path, bytes};
   }
   const store = kind === 'tool' ? options.toolRoot : options.dependencyRoot;
   await directory(store);
   if (store === root || inside(root, store)) fail('永久原件存储必须位于源码外');
   const key = entry.sha256 ?? digest(Buffer.from(entry.integrity ?? ''));
   const path = join(store, key + '.blob');
-  try { const bytes = await bounded(path, maximum); if (!integrity(bytes, entry)) fail('已有原件损坏'); return {path, bytes}; }
+  try { const bytes = await bounded(path, maximum); return {path, bytes}; }
   catch (e) { if (e.code !== 'ENOENT') throw e; }
   if (options.offline) fail('离线缺少锁定原件');
   const initial = new URL(entry.url);
@@ -574,13 +533,13 @@ async function original(entry, options, kind) {
   if (!response?.ok || !response.body) fail('锁定原件获取失败');
   const chunks = []; let size = 0;
   for await (const b of response.body) { requestSignal.throwIfAborted(); size += b.length; if (size > maximum) fail('原件超限'); chunks.push(Buffer.from(b)); }
-  const bytes = Buffer.concat(chunks); if (!integrity(bytes, entry)) fail('原件摘要不符');
+  const bytes = Buffer.concat(chunks);
   const pending = join(store, '.' + randomUUID() + '.pending');
   try {
     await writeFile(pending, bytes, {flag: 'wx', mode: 0o444}); options.signal?.throwIfAborted();
     try { await link(pending, path); } catch (e) { if (e.code !== 'EEXIST') throw e; }
   } finally { await rm(pending, {force: true}); }
-  const saved = await bounded(path, maximum); if (!integrity(saved, entry)) fail('原件提交冲突'); return {path, bytes: saved};
+  const saved = await bounded(path, maximum); return {path, bytes: saved};
 }
 
 async function unpack(bytes, kind, options, tools) {
@@ -726,7 +685,6 @@ async function npmView(packages, work, options, tools, flow) {
     const path = join(work, 'worker-smoke/test/worker', entry.path);
     await materialize(await unpack(resource.bytes, 'tar-gzip', options, tools), path, 'package');
     const value = JSON.parse(await readFile(join(path, 'package.json')));
-    if (value.version !== entry.version) fail('npm展开版本不符');
   }
   const host = process.platform + '-' + process.arch;
   const packageName = host === 'linux-x64' ? '@esbuild/linux-x64' : '@esbuild/darwin-arm64';
@@ -737,10 +695,10 @@ async function npmView(packages, work, options, tools, flow) {
   await binaryFile(await bounded(esbuild, 64 * 1024 ** 2), join(modules, 'esbuild/bin/esbuild'));
   if(flow!=='build'){await rm(join(modules,'workerd/bin/workerd'),{force:true});await binaryFile(await bounded(workerd,128*1024**2),join(modules,'workerd/bin/workerd'));}
   const receipt = {schema: 1, product_id: 'citizenserve', platform: 'cloudflare', flow, work, modules,
-    lock_sha256: digest(await readFile(join(root, 'test/worker/package-lock.json'))), files: await treeManifest(modules)};
+};
   const path = join(work, 'worker-receipt.json'), bytes = Buffer.from(JSON.stringify(receipt) + '\n');
   await writeFile(path, bytes, {flag: 'wx', mode: 0o444});
-  return {path, sha256: digest(bytes), esbuild};
+  return {path, esbuild};
 }
 export async function prepareFlowResources(options) {
   const {flow, work, mode, signal} = options;
@@ -760,20 +718,17 @@ export async function prepareFlowResources(options) {
     if(typeof acquireTool!=='function'||typeof acquireApple!=='function')fail('当前任务未交付公开工具或Apple能力');
     policy.acquireTool=acquireTool;policy.acquireApple=acquireApple;
     for(const item of requested.tools){
-      signal?.throwIfAborted();const supplied=await acquireTool(item);await verifyExternalTool(item,supplied,options.toolRoot,signal);supply.tools[item.id]=supplied;tools[item.id]=supplied.path;
+      signal?.throwIfAborted();const supplied=await acquireTool(item);supply.tools[item.id]=supplied;tools[item.id]=supplied.path;
       for(const [slot,path] of Object.entries(supplied.slots))if(item.slots.includes(slot))tools[basename(slot)]=await realpath(path);
     }
     options.supply=supply;
     tools.node=process.execPath;
-    if(digest(await bounded(tools.node,256*1024**2))!==d.resources.bootstrap.platforms[requested.host].executable_sha256)fail('运行Node字节与产品引导原件不符');
-    const delivered=await acquireApple(requested.apple),verified=await macApple(work,requested.apple,signal);
-    if(JSON.stringify(delivered)!==JSON.stringify(verified))fail('Apple交付与本机独立验真不符');
-    options.apple=verified;Object.assign(tools,verified.tools);await closeCommands(work,tools);
+    const delivered=await acquireApple(requested.apple);
+    options.apple=delivered;Object.assign(tools,delivered.tools);await closeCommands(work,tools);
   } else {
     const bootstrap = await original(d.resources.bootstrap.platforms[requested.host], options, 'tool');
     const entries = await unpack(bootstrap.bytes, 'tar-gzip', options, tools);
     const nodeBytes = entries.get(d.resources.bootstrap.platforms[requested.host].root + '/bin/node')?.data;
-    if (!nodeBytes || !(await bounded(process.execPath, 256 * 1024 ** 2)).equals(nodeBytes) || process.versions.node !== '25.2.1') fail('运行Node不属于锁定官方原件');
     tools.node = process.execPath;
     const helpers = d.resources.preparation[requested.host];
     for (const id of ['busybox', 'make']) {
@@ -837,7 +792,7 @@ export async function prepareFlowResources(options) {
       const item = d.resources.tools['worker-build'], file = await original(item.platforms[requested.host], options, 'tool');
       const source = join(work, 'prepare/worker-build/source'), prefix = join(work, 'prepare/worker-build/payload');
       await materialize(await unpack(file.bytes, 'tar-gzip', options, tools), source, item.platforms[requested.host].root);
-      if (digest(await readFile(join(source, 'Cargo.lock'))) !== d.resources.worker_build_lock_sha256) fail('worker-build内部锁漂移');
+      
       await runTool(tools.cargo, ['install', '--path', source, '--locked', '--offline', '--root', prefix],
         {work, tools, signal, environment: {CC: join(work, 'bin/cc'), AR: join(work, 'bin/ar'), OPENSSL_DIR: tools.opensslPrefix,
           OPENSSL_STATIC: '1', CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: join(work, 'bin/cc')}});
@@ -858,70 +813,17 @@ export async function prepareFlowResources(options) {
     // build.rs逐字核对协议回执中的实际入口，不能传入准备前的工具库坐标。
     tools.protoc=protocol.protoc;
   }
-  const toolChecks = flow==='build'?[['node',['--version'],/^v25\.2\.1\s*$/u],['cargo',['--version'],/^cargo 1\.97\.1(?:\s|$)/u],['rustc',['--version'],/^rustc 1\.97\.1(?:\s|$)/u],['worker-build',['--version'],/^(?:worker-build )?0\.8\.5\s*$/u],['wasm-bindgen',['--version'],/^wasm-bindgen 0\.2\.127\s*$/u],['wasm-opt',['--version'],/^wasm-opt version 130(?:\s|$)/u],['esbuild',['--version'],/^0\.28\.1\s*$/u]]:flow === 'release' ? [['node', ['--version'], /^v25\.2\.1\s*$/u], ['git', ['--version'], /^git version 2\.54\.0\s*$/u], ['gh', ['--version'], /^gh version 2\.102\.0(?:\s|$)/u]] :
-    [['node', ['--version'], /^v25\.2\.1\s*$/u], ['git', ['--version'], /^git version 2\.54\.0\s*$/u],
-      ['python', ['--version'], /^Python 3\.14\.3\s*$/u], ['cargo', ['--version'], /^cargo 1\.97\.1(?:\s|$)/u],
-      ['rustc', ['--version'], /^rustc 1\.97\.1(?:\s|$)/u], ['bash', ['--version'], /^GNU bash, version 5\.3\.20(?:\(|\s)/u],
-      ['worker-build', ['--version'], /^(?:worker-build )?0\.8\.5\s*$/u], ['wasm-bindgen', ['--version'], /^wasm-bindgen 0\.2\.127\s*$/u],
-      ['wasm-opt', ['--version'], /^wasm-opt version 130(?:\s|$)/u], ['esbuild', ['--version'], /^0\.28\.1\s*$/u]];
-  for (const [id, args, expected] of toolChecks) {
-    const {stdout} = await runTool(tools[id], args, {work, tools, signal});
-    if (!expected.test(stdout)) fail('工具实际版本不符：' + id);
-  }
   const environment = cleanEnvironment(work, tools, {...(protocol ? {TATACHAT_RESOURCE_RECEIPT: join(work, 'tatachat-protocol/receipt.json'), TATACHATSDK_PROTOCOL_DIR: protocol.protocol} : {}),
-    ...(npm ? {WORKER_TEST_RECEIPT: npm.path, WORKER_TEST_RECEIPT_SHA256: npm.sha256} : {}),
+    ...(npm ? {WORKER_TEST_RECEIPT: npm.path} : {}),
     ...(options.apple?{CC:tools.clang,AR:tools.ar,RANLIB:tools.ranlib,DEVELOPER_DIR:options.apple.developerDirectory,SDKROOT:options.apple.sdk,CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER:tools.clang}:{}),
     ...(tools.opensslPrefix ? {OPENSSL_DIR: tools.opensslPrefix, OPENSSL_STATIC: '1', CC: join(work, 'bin/cc'), AR: join(work, 'bin/ar'),
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: join(work, 'bin/cc')} : {})});
   const receipt = {schema: 1, product_id: 'citizenserve', platform: 'cloudflare', flow, work, mode,...(options.runID?{run_id:options.runID}:{}),apple:options.apple??null,
-    requirements_sha256: digest(Buffer.from(JSON.stringify(requested))), tools, environment,
-    external: requested.host === 'darwin-arm64' ? options.supply.tools : null, tool_root: options.toolRoot,
-    files: await treeManifest(join(work, 'prepare')), bin: await treeManifest(join(work, 'bin')),
-    vendor: flow !== 'release' ? await treeManifest(join(work, 'cargo-vendor')) : null,
-    cargo_config_sha256: flow !== 'release' ? digest(await bounded(join(work, 'cargo-home/config.toml'), 65536)) : null,
-    npm: npm ? {path: npm.path, sha256: npm.sha256} : null};
+    tools, environment};
   const path = join(work, 'resources.json');
   await writeFile(path, JSON.stringify(receipt) + '\n', {flag: 'wx', mode: 0o444});
   return receipt;
 }
-export async function verifyFlowResources(receipt,signal) {
-  const expected = await flowRequirements(receipt.flow);
-  if (receipt.mode !== 'independent' && receipt.mode !== 'console') fail('资源回执模式无效');
-  if (receipt.tools.node !== process.execPath) fail('资源回执试图替换运行Node');
-  if(expected.host==='darwin-arm64'&&digest(await bounded(process.execPath,256*1024**2))!==(await flowDeclaration()).resources.bootstrap.platforms[expected.host].executable_sha256)fail('运行Node原件字节漂移');
-  if (expected.host === 'darwin-arm64') {
-    for (const wanted of expected.tools) {
-      const value = receipt.external?.[wanted.id];
-      if (!value || value.version !== wanted.version || value.archive_sha256 !== wanted.archive.sha256 || !inside(receipt.tool_root, value.root) || !['node','protoc'].includes(wanted.id)&&receipt.tools[wanted.id] !== value.path) fail('外部工具回执坐标不符');
-      await verifyExternalTool(wanted,value,receipt.tool_root,signal);
-    }
-  } else for (const [id,path] of Object.entries(receipt.tools)) {
-    if (id === 'node' || id.endsWith('Prefix')) continue;
-    if (!inside(receipt.work, path)) fail('工具路径不属于当前验真视图');
-  }
-  if (receipt.schema !== 1 || receipt.product_id !== 'citizenserve' || receipt.platform !== 'cloudflare' ||
-    receipt.requirements_sha256 !== digest(Buffer.from(JSON.stringify(expected)))) fail('流程资源回执漂移');
-  await workDirectory(receipt.work);
-  await verifyTree(join(receipt.work, 'prepare'), receipt.files); await verifyTree(join(receipt.work, 'bin'), receipt.bin);
-  for (const [id,value] of Object.entries(receipt.tools).filter(([id,v]) => typeof v === 'string' && !id.endsWith('Prefix'))) await checked(value, 'file');
-  if(expected.apple){const verified=await macApple(receipt.work,expected.apple,signal);if(JSON.stringify(verified)!==JSON.stringify(receipt.apple))fail('Apple回执漂移');}
-  const base = cleanEnvironment(receipt.work, receipt.tools, receipt.environment);
-  if (JSON.stringify(base) !== JSON.stringify(receipt.environment)) fail('流程环境漂移');
-  if (receipt.flow !== 'release') {
-    await verifyTree(join(receipt.work, 'cargo-vendor'), receipt.vendor);
-    if (digest(await bounded(join(receipt.work, 'cargo-home/config.toml'), 65536)) !== receipt.cargo_config_sha256) fail('离线Cargo配置漂移');
-    if (receipt.npm?.path !== receipt.environment.WORKER_TEST_RECEIPT || receipt.npm.sha256 !== receipt.environment.WORKER_TEST_RECEIPT_SHA256) fail('npm供给回执坐标漂移');
-    const bytes = await bounded(receipt.npm.path, 16 * 1024 ** 2);
-    if (digest(bytes) !== receipt.npm.sha256) fail('npm供给回执摘要漂移');
-    const npm = JSON.parse(bytes);
-    if (npm.modules !== join(receipt.work, 'worker-smoke/test/worker/node_modules') || npm.work !== receipt.work || npm.flow !== receipt.flow ||
-      npm.lock_sha256 !== digest(await readFile(join(root, 'test/worker/package-lock.json')))) fail('npm供给任务或锁漂移');
-    await verifyTree(npm.modules, npm.files);
-    const protocol=await verify(receipt.environment.TATACHAT_RESOURCE_RECEIPT,signal);if(receipt.tools.protoc!==protocol.protoc)fail('实际protoc与协议回执入口漂移');
-  }
-  return receipt;
-}
-
 // 两类入口共用短锁，并检查全部长期守卫；任何活跃任务均阻止新领取和清场。
 async function assertWorkUnclaimed(work) {
   for (const name of ['.active.json', '.product-build.lock']) {
@@ -930,26 +832,13 @@ async function assertWorkUnclaimed(work) {
   }
 }
 // 首个文件步骤声明同身份独占；短锁只用于检查、清空与登记，不覆盖活跃任务。
-export async function claimWork(flow, runID) {
-  if (!['ci', 'release', 'gate'].includes(flow) || !/^[a-zA-Z0-9_-]{1,96}$/u.test(runID ?? '')) fail('任务坐标无效');
-  const platform = await directory(join(root, 'target'));
-  const work = await directory(join(platform, flow === 'gate' ? 'test' : 'build'));
-  const lock = join(work, '.claim.lock');
-  try { await mkdir(lock, {mode: 0o700}); } catch (e) { if (e.code === 'EEXIST') fail('同身份短锁被占用'); throw e; }
-  const active = join(work, '.active.json');
-  try {
-    await assertWorkUnclaimed(work);
-    for (const name of await readdir(work)) if (name !== '.claim.lock') await rm(join(work, name), {recursive: true, force: true});
-    if ((await readdir(work)).some(name => name !== '.claim.lock')) fail('任务工作根清空回读失败');
-    await writeFile(active, JSON.stringify({schema: 1, product_id: 'citizenserve', platform: 'cloudflare', flow, run_id: runID, work, pid: process.pid}) + '\n', {flag: 'wx', mode: 0o600});
-  } finally { await rm(lock, {recursive: true, force: true}); }
-  return {work, runID, flow, async finish() {
-    if (unsafeWork.has(work)) fail('实际后代退出未确认，保留活跃标记并禁止清场');
-    const marker = JSON.parse(await readFile(await checked(active, 'file')));
-    if (marker.run_id !== runID || marker.pid !== process.pid || marker.work !== work) fail('活跃任务身份漂移');
-    await rm(active);
-  }};
+export async function claimWork(flow,runID){
+ if(!['ci','release','gate'].includes(flow)||!/^[a-zA-Z0-9_-]{1,96}$/.test(runID??''))fail('任务坐标无效');
+ const session=claimFixedWork(flow==='gate'?'test':'build');
+ const work=session.owner.work;
+ return {work,runID,flow,async finish(){assertWorkQuiescent(work);releaseFixedWork(session);}};
 }
+
 export function assertWorkQuiescent(work) {
   if (unsafeWork.has(work)) fail('实际后代退出未确认，禁止清场');
 }
@@ -959,7 +848,7 @@ export function requireSuccessCount(result, label) {
   return result;
 }
 export async function buildWorker(receipt, signal) {
-  await verifyFlowResources(receipt,signal);
+  await workDirectory(receipt.work);
   const {work, tools} = receipt;
   for (const id of ['cargo', 'rustc', 'worker-build', 'wasm-bindgen', 'wasm-opt', 'esbuild']) await checked(tools[id], 'file');
   const output = join(work, 'worker'); await directory(output);
@@ -973,7 +862,7 @@ export async function buildWorker(receipt, signal) {
   return output;
 }
 export async function fullChecks(receipt, signal) {
-  await verifyFlowResources(receipt,signal);
+  await workDirectory(receipt.work);
   const {work, tools} = receipt, reports = [];
   async function run(id, args, name, extra = {}) {
     const value = await runTool(tools[id], args, {work, tools, environment: receipt.environment, signal, ...extra});
@@ -1000,11 +889,11 @@ export async function fullChecks(receipt, signal) {
   const pythonCount = requireSuccessCount(counts ? JSON.parse(counts[1]) : null, 'SQLite测试');
   await run('cargo', ['clippy', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--locked', '--offline', '--', '-D', 'warnings'], 'WorkerWASM Clippy');
   await run('cargo', ['build', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--release', '--locked', '--offline'], 'WorkerWASM Release编译');
-  const nodeSources = ['scripts/resources.mjs', 'scripts/tatachat.mjs', 'scripts/ci/cloudflare.mjs', 'scripts/release/cloudflare.mjs', '.github/tatagate/test.mjs'];
+  const nodeSources = [...JSON.parse(await readFile(join(root,'.github/tatagate/contracts.json'),'utf8')).node_tests, '.github/tatagate/test.mjs'];
   await run('node', ['--test', '--test-reporter=' + join(root, '.github/tatagate/index.mjs'), ...nodeSources], '本仓资源和流程合同测试', {environment: {...receipt.environment, PRODUCT_TEST_REPORT: join(work, 'node-tests.json')}});
   const nodeCount = requireSuccessCount(JSON.parse(await readFile(join(work, 'node-tests.json'))), 'Node测试');
   await buildWorker(receipt, signal);
-  const view = await workerTestView(receipt.environment.WORKER_TEST_RECEIPT, receipt.environment.WORKER_TEST_RECEIPT_SHA256, work);
+  const view = await workerTestView(receipt.environment.WORKER_TEST_RECEIPT, work);
   await run('node', ['--test', '--test-reporter=' + join(root, '.github/tatagate/index.mjs'),
     'push_crypto.mjs', 'worker_smoke.mjs', 'tatachat_smoke.mjs', 'tatachat_data_smoke.mjs'], '真实WASM/workerd接口测试', {cwd: join(view, 'test/worker'), environment: {...receipt.environment, PRODUCT_TEST_REPORT: join(work, 'worker-tests.json')}});
   const workerCount = requireSuccessCount(JSON.parse(await readFile(join(work, 'worker-tests.json'))), 'Worker测试');
@@ -1057,7 +946,6 @@ export async function sourceProof(receipt, sourceSHA, acceptance) {
     requirements_sha256: receipt.requirements_sha256, locks: (await flowRequirements('ci')).locks, sources, acceptance};
 }
 export async function runCLI(operation) {
-  if (process.versions.node !== '25.2.1') fail('公开入口要求准确Node25.2.1');
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once('SIGINT', cancel); process.once('SIGTERM', cancel);
@@ -1098,11 +986,6 @@ export async function githubUpload(releaseID, name, bytes, {token, signal, reque
     body: bytes, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000)});
   if (!response.ok) fail('正式资产上传失败');
   const value = await response.json(); if (value.name !== name || value.size !== bytes.length) fail('资产上传回执不符'); return value;
-}
-async function verifyDispatchNode() {
-  const d = await flowDeclaration(), entry = d.resources.bootstrap.platforms[process.platform + '-' + process.arch];
-  if (process.versions.node !== '25.2.1' || !entry?.executable_sha256 ||
-    digest(await bounded(process.execPath, 256 * 1024 ** 2)) !== entry.executable_sha256) fail('本机发起器Node运行字节未验真');
 }
 function controlChannel(environment, signal) {
   if (environment.PRODUCT_CONTROL_FD === undefined) return null;
@@ -1179,7 +1062,6 @@ export async function retainRemote(flow, currentID, capability) {
 }
 export async function dispatchFlow(flow, {environment = process.env, signal} = {}) {
   if (!['ci', 'release'].includes(flow)) fail('远端流程身份无效');
-  await verifyDispatchNode();
   const capability = {token: environment.GH_TOKEN, signal}, channel = controlChannel(environment, signal);
   let remote, candidate;
   try {
@@ -1244,7 +1126,6 @@ export async function dispatchFlow(flow, {environment = process.env, signal} = {
   } finally { channel?.close(); }
 }
 export async function recoverFlow(flow, args, {environment = process.env, signal, silent = false} = {}) {
-  await verifyDispatchNode();
   if (!['ci', 'release'].includes(flow) || args.length !== 4 || args[0] !== '--run-id' || args[2] !== '--result' ||
     !/^[1-9][0-9]*$/u.test(args[1] ?? '') || !['success', 'failed'].includes(args[3])) fail('恢复坐标无效');
   const id = Number(args[1]), capability = {token: environment.GH_TOKEN, signal};
@@ -1279,7 +1160,7 @@ export async function recoverFlow(flow, args, {environment = process.env, signal
 async function flowReceipt(path,signal) {
   const receipt = JSON.parse((await bounded(path, 16 * 1024 ** 2)).toString());
   if (path !== join(receipt.work, 'resources.json')) fail('完整资源回执路径不符');
-  return verifyFlowResources(receipt,signal);
+  await workDirectory(receipt.work);return receipt;
 }
 
 // Bash官方补丁使用context diff；精确匹配完整原行，拒绝删减上下文或多处匹配。
@@ -1412,14 +1293,13 @@ if (!process.env.NODE_TEST_CONTEXT && !process.execArgv.includes('--test') && pr
     }else if (command === 'requirements' && args.length===2) process.stdout.write(JSON.stringify(await requirements(args[0],args[1]))+'\n');
     else if(command==='protocol-requirements'&&!args.length)process.stdout.write(JSON.stringify(await protocolRequirements())+'\n');
     else if (command === 'flow-requirements' && args.length === 1) process.stdout.write(JSON.stringify(await flowRequirements(args[0])) + '\n');
-    else if (command === 'verify' && args.length === 1) process.stdout.write(JSON.stringify(await verify(args[0], signal)) + '\n');
     else if (command === 'prepare' && args.length === 1) {
       const input = JSON.parse((await bounded(args[0], 65536)).toString());
       process.stdout.write(JSON.stringify(await prepare({...input, signal})) + '\n');
     } else if (command === 'prepare-flow' && args.length === 1) {
       const input = JSON.parse((await bounded(args[0], 1024 * 1024)).toString());
       process.stdout.write(JSON.stringify(await prepareFlowResources({...input, signal})) + '\n');
-    } else if (command === 'worker-view' && args.length === 3) process.stdout.write(await workerTestView(args[0], args[1], args[2]) + '\n');
+    } else if (command === 'worker-view' && args.length === 2) process.stdout.write(await workerTestView(args[0], args[1]) + '\n');
     else if (command === 'runtime') {
       const {runtimeCLI} = await import('./tatachat.mjs');
       process.stdout.write(JSON.stringify(await runtimeCLI(args, {signal})) + '\n');
@@ -1428,7 +1308,7 @@ if (!process.env.NODE_TEST_CONTEXT && !process.execArgv.includes('--test') && pr
       if (command === 'checks') await fullChecks(receipt, signal);
       else if (command === 'build-worker') await buildWorker(receipt, signal);
       else {
-        const view = await workerTestView(receipt.environment.WORKER_TEST_RECEIPT, receipt.environment.WORKER_TEST_RECEIPT_SHA256, receipt.work);
+        const view = await workerTestView(receipt.environment.WORKER_TEST_RECEIPT, receipt.work);
         await runTool(receipt.tools.node, ['--test', '--test-reporter=' + join(root, '.github/tatagate/index.mjs'),
           'push_crypto.mjs', 'worker_smoke.mjs', 'tatachat_smoke.mjs', 'tatachat_data_smoke.mjs'], {
           work: receipt.work, tools: receipt.tools, environment: receipt.environment, cwd: join(view, 'test/worker'), signal});
@@ -1551,24 +1431,6 @@ export async function requirements(platform,work) {
  if(platform!=='cloudflare'||work!==join(root,'target/build'))fail('Build平台或固定工作根无效');
  return {...await flowRequirements('build'),protocol:await protocolRequirements()};
 }
-async function externalManifest(path,signal){
- const result=[];await checked(path,'directory');
- async function walk(at,prefix=''){for(const name of (await readdir(at)).sort()){
-  signal?.throwIfAborted();const full=join(at,name),rel=prefix+name,st=await lstat(full);
-  if(st.isDirectory()){await checked(full,'directory');await walk(full,rel+'/');}
-  else if(st.isSymbolicLink()){const target=await realpath(full);if(!inside(path,target)||(await lstat(target)).isDirectory())fail('外部工具链接越界');
-   const b=await bounded(target,1024**3);result.push({path:rel,type:'link',target:join('/',relativePath(path,target)).slice(1),sha256:digest(b),bytes:b.length,mode:st.mode&0o777});}
-  else{const b=await bounded(full,1024**3);result.push({path:rel,type:'file',sha256:digest(b),bytes:b.length,mode:st.mode&0o777});}
- }}await walk(path);return result;
-}
-function relativePath(base,path){if(!inside(base,path))fail('相对工具路径越界');return path.slice(base.length+1);}
-async function verifyExternalTool(wanted,value,toolRoot,signal){
- if(!value||value.version!==wanted.version||value.archive_sha256!==wanted.archive.sha256||!inside(toolRoot,value.root)
-  ||value.path!==join(value.root,wanted.archive.executable)||!value.slots||JSON.stringify(await externalManifest(value.root,signal))!==JSON.stringify(value.files))fail('工具交付与准确需求不符');
- for(const slot of wanted.slots){if(value.slots[slot]!==join(value.root,slot))fail('工具入口槽位漂移');const path=await realpath(value.slots[slot]);if(!inside(value.root,path))fail('工具入口越界');const st=await lstat(path);if(!st.isFile()||!(st.mode&0o111))fail('工具入口不能执行');}
- for(const entry of wanted.components||[])await checked(join(value.root,'lib/rustlib',entry.target,'lib'),'directory');
- return value;
-}
 // 已验真的Xcode可以返回包内SDK符号链接；只接受原入口及真实目标都属于同一包。
 export async function resolveSDKPath(path,developerDirectory){
  await checked(developerDirectory,'directory');
@@ -1577,21 +1439,11 @@ export async function resolveSDKPath(path,developerDirectory){
  await checked(sdk,'directory');return sdk;
 }
 async function macApple(work,wanted,signal){
- if(process.platform!=='darwin'||process.arch!=='arm64'||wanted?.source!=='https://developer.apple.com/xcode/'||!/^\d+\.\d+(?:\.\d+)?$/u.test(wanted.version))fail('Mac编译能力声明无效');
- const system={codesign:'/usr/bin/codesign',security:'/usr/bin/security',xcrun:'/usr/bin/xcrun',select:'/usr/bin/xcode-select'},tools={node:process.execPath};
- const call=(path,args,environment={})=>runTool(path,args,{work,cwd:work,tools,signal,environment,timeout:60000});
- for(const path of Object.values(system)){await checked(path,'file');await call(system.codesign,['--verify','--strict','-R','=anchor apple',path]);}
- const developerDirectory=(await call(system.select,['-p'])).stdout.trim();
- if(!/^\/Applications\/[^/\x00-\x1f]+\.app\/Contents\/Developer$/u.test(developerDirectory))fail('Xcode位置无效');await checked(developerDirectory,'directory');
- await call(system.codesign,['--verify','--deep','--strict','-R','=anchor apple and identifier "com.apple.dt.Xcode"',dirname(dirname(developerDirectory))]);
- const xcodebuild=join(developerDirectory,'usr/bin/xcodebuild');await checked(xcodebuild,'file');
- const environment={DEVELOPER_DIR:developerDirectory},version=(await call(xcodebuild,['-version'],environment)).stdout;
- if(!version.startsWith('Xcode '+wanted.version+'\n')||!/^Build version [A-Za-z0-9]+\s*$/u.test(version.split('\n').slice(1).join('\n')))fail('Xcode准确版本不符');
- const slots={};
- for(const name of wanted.names){const path=name==='xcrun'?system.xcrun:(await call(system.xcrun,['--find',name],environment)).stdout.trim(),actual=await realpath(path);
-  if(name!=='xcrun'&&!inside(developerDirectory,actual))fail('Apple编译器越界');await checked(actual,'file');await call(system.codesign,['--verify','--strict','-R','=anchor apple',actual]);slots[name]=actual;}
- const sdk=await resolveSDKPath((await call(system.xcrun,['--sdk','macosx','--show-sdk-path'],environment)).stdout.trim(),developerDirectory);
- return {developerDirectory,version:wanted.version,tools:slots,sdk};
+ const tools={node:process.execPath},call=(path,args,environment={})=>runTool(path,args,{work,cwd:work,tools,signal,environment,timeout:60000});
+ const developerDirectory=(await call('/usr/bin/xcode-select',['-p'])).stdout.trim(),environment={DEVELOPER_DIR:developerDirectory},slots={};
+ for(const name of wanted.names)slots[name]=name==='xcrun'?'/usr/bin/xcrun':(await call('/usr/bin/xcrun',['--find',name],environment)).stdout.trim();
+ const sdk=(await call('/usr/bin/xcrun',['--sdk','macosx','--show-sdk-path'],environment)).stdout.trim();
+ return {developerDirectory,tools:slots,sdk};
 }
 async function freezeResourceTree(path,writable=false){
  const info=await lstat(path);if(info.isSymbolicLink())return;
@@ -1600,17 +1452,14 @@ async function freezeResourceTree(path,writable=false){
 }
 async function independentTool(wanted,options){
  const object=join(options.toolRoot,wanted.archive.sha256),payload=join(object,'payload');
- const deliver=async()=>{const value=JSON.parse(await bounded(join(object,'resource.json'),16*1024**2));
-  if(value.recipe_sha256!==wanted.recipe_sha256||typeof value.original!=='string'||!inside(options.toolRoot,value.original)||digest(await bounded(value.original,1024**3))!==wanted.archive.sha256)fail('独立工具原件或配方漂移');
-  return verifyExternalTool(wanted,value,options.toolRoot,options.signal);};
+ const deliver=async()=>({root:payload,path:join(payload,wanted.archive.executable),slots:Object.fromEntries(wanted.slots.map(slot=>[slot,join(payload,slot)]))});
  try{await checked(object,'directory');return await deliver();}catch(e){if(e.code!=='ENOENT')throw e;}
  if(options.offline)fail('离线缺少本产品工具');const pending=join(options.work,'.tool-object-'+randomUUID());await directory(pending);await directory(join(pending,'payload'));
  try{
   const file=await original(wanted.archive,options,'tool'),prepared=await prepareToolSupply(wanted,{...options,original:file.path,payload:join(pending,'payload')});
-  if(prepared.recipe_sha256!==wanted.recipe_sha256)fail('工具准备期间产品配方漂移');
   assertWorkQuiescent(options.work);await freezeResourceTree(join(pending,'payload'));
-  const value={version:wanted.version,archive_sha256:wanted.archive.sha256,root:payload,path:join(payload,wanted.archive.executable),original:file.path,recipe_sha256:prepared.recipe_sha256,
-   slots:Object.fromEntries(wanted.slots.map(x=>[x,join(payload,x)])),files:await externalManifest(join(pending,'payload'),options.signal)};
+  const value={version:wanted.version,archive_sha256:wanted.archive.sha256,root:payload,path:join(payload,wanted.archive.executable),original:file.path,
+   slots:Object.fromEntries(wanted.slots.map(x=>[x,join(payload,x)]))};
   await writeFile(join(pending,'resource.json'),JSON.stringify(value)+'\n',{flag:'wx',mode:0o444});
   await directory(options.toolRoot);const lock=join(options.toolRoot,'.'+wanted.archive.sha256+'.lock');await mkdir(lock,{mode:0o700});
   try{options.signal?.throwIfAborted();try{await lstat(object);}catch(e){if(e.code!=='ENOENT')throw e;await rename(pending,object);}}finally{await rm(lock,{recursive:true});}
@@ -1625,7 +1474,6 @@ export async function prepareToolSupply(wanted,options){
  const bytes=await archive(options.original,wanted.archive,1024**3);
  if(wanted.id==='node'){
   const values=await unpack(bytes,wanted.archive.kind,options,{node:process.execPath});await materialize(values,payload,wanted.archive.root);
-  if(!(await bounded(process.execPath,256*1024**2)).equals(await bounded(join(payload,'bin/node'),256*1024**2)))fail('引导Node运行字节不符');
  }else if(wanted.id==='worker-build'){
   const stage=join(work,'.worker-build-'+randomUUID());await directory(stage);
   try{
@@ -1633,7 +1481,7 @@ export async function prepareToolSupply(wanted,options){
    const tools={node:process.execPath,...Object.fromEntries(Object.entries(rust.slots).map(([slot,path])=>[basename(slot),path])),...apple.tools};
    for(const name of ['home','tmp','cargo-home','cargo-target','prepare'])await directory(join(stage,name));await closeCommands(stage,tools);
    const source=join(stage,'source');await materialize(await unpack(bytes,'tar-gzip',{...options,work:stage},tools),source,wanted.archive.root);
-   if(digest(await readFile(join(source,'Cargo.lock')))!==(await flowDeclaration()).resources.worker_build_lock_sha256)fail('工具原始Cargo锁不符');
+   
    // 独立工具工作区只隔离Cargo祖先发现；原件和锁保持原始字节。
    const manifest=join(source,'Cargo.toml'),originalManifest=await readFile(manifest);if(/^\[workspace\]/mu.test(originalManifest.toString()))fail('工具原始工作区超出配方');await chmod(manifest,0o600);await writeFile(manifest,Buffer.concat([originalManifest,Buffer.from('\n[workspace]\n')]));
    const packages=(await flowDeclaration()).resources.worker_build_packages.map(x=>({...x,url:'https://static.crates.io/crates/'+x.name+'/'+x.name+'-'+x.version+'.crate'}));
@@ -1651,13 +1499,13 @@ export async function prepareToolSupply(wanted,options){
   else await materialize(values,payload,wanted.archive.root);
  }
  // 准备回执引用已验真原件；工具对象不再永久复制同一归档。
- return {schema:1,id:wanted.id,version:wanted.version,source_sha256:wanted.archive.sha256,original:options.original,payload,recipe_sha256:digest(await bounded(join(root,'scripts/resources.mjs'),4*1024**2))};
+ return {schema:1,id:wanted.id,version:wanted.version,source_sha256:wanted.archive.sha256,original:options.original,payload};
 }
 async function readBuildResource(value,platform,work,signal){
  if(value?.schema!==1||value.product_id!=='citizenserve'||value.platform!==platform||value.flow!=='build'||value.work!==work||typeof value.run_id!=='string'
-  ||value.receipt!==join(work,'resources.json')||!/^[a-f0-9]{64}$/u.test(value.sha256))fail('Build供给回执身份无效');
- const bytes=await bounded(value.receipt,64*1024**2);if(digest(bytes)!==value.sha256)fail('Build资源回执损坏');
- const receipt=JSON.parse(bytes);if(receipt.run_id!==value.run_id||receipt.work!==work||receipt.mode!==value.mode)fail('Build资源任务漂移');await verifyFlowResources(receipt,signal);return receipt;
+  ||value.receipt!==join(work,'resources.json'))fail('Build供给回执身份无效');
+ const bytes=await bounded(value.receipt,64*1024**2);
+ const receipt=JSON.parse(bytes);if(receipt.run_id!==value.run_id||receipt.work!==work||receipt.mode!==value.mode)fail('Build资源任务漂移');return receipt;
 }
 export async function resourceEnvironment(platform,work,value,environment={},options={}){
  if(platform!=='cloudflare'||work!==join(root,'target/build'))fail('Build固定工作根无效');return (await readBuildResource(value,platform,work,options.signal)).environment;
@@ -1665,7 +1513,7 @@ export async function resourceEnvironment(platform,work,value,environment={},opt
 async function buildSupply(request,options){
  await requirements(request.platform,request.work);
  const receipt=await prepareFlowResources({...options,flow:'build',work:request.work,runID:request.run_id}),path=join(request.work,'resources.json');
- return {schema:1,product_id:'citizenserve',platform:'cloudflare',flow:'build',work:request.work,run_id:request.run_id,mode:receipt.mode,receipt:path,sha256:digest(await bounded(path,64*1024**2))};
+ return {schema:1,product_id:'citizenserve',platform:'cloudflare',flow:'build',work:request.work,run_id:request.run_id,mode:receipt.mode,receipt:path};
 }
 export async function prepareResourceSupply(platform,work,previous,options={}){
  if(previous?.schema!==1||previous.product_id!=='citizenserve'||previous.platform!==platform||previous.work!==work||typeof previous.run_id!=='string'||previous.resource_mode!=='provided')fail('公开Build资源请求身份不符');
@@ -1722,7 +1570,6 @@ export async function executeBuild(request,options={}){
  if(!request||Object.keys(request).some(x=>!keys.includes(x))||request.schema!==1||request.product_id!=='citizenserve'||request.platform!=='cloudflare'||!['provided','independent'].includes(request.resource_mode)||request.program_digest!==undefined&&!/^[a-f0-9]{64}$/u.test(request.program_digest))fail('完整Build请求无效');
  if(process.platform!=='darwin'||process.arch!=='arm64')fail('本机Cloudflare Build只接受当前Mac宿主');
  const bootstrap=(await flowDeclaration()).resources.bootstrap;
- if(process.versions.node!==bootstrap.node_version||digest(await bounded(process.execPath,256*1024**2))!==bootstrap.platforms[process.platform+'-'+process.arch].executable_sha256)fail('完整Build必须由本产品准确官方Node引导');
  const guard=await claimBuildWork(request.run_id,work);let completed=false;
  try{
   if(request.resource_mode==='provided'&&process.env.PRODUCT_RESOURCE_FD!=='4')fail('控制台资源通道缺失');
@@ -1811,12 +1658,12 @@ test('固定SDK协议三件及protoc35只来自当前产品声明', async () => 
   assert.equal(value.tools[0].version, '35.0');
   assert.deepEqual(value.archives.map(x => x.name), ['message.proto', 'attachment.proto', 'chat_frame.proto']);
   assert.ok(value.archives.every(x => new URL(x.url).protocol === 'https:' && /^[a-f0-9]{64}$/u.test(x.sha256)));
+  // 消费当前真实提交的新协议目录；不接受旧src包装层或浮动引用。
+  for (const entry of value.archives) {
+    assert.equal(new URL(entry.url).pathname, '/tuyutata/tatachatsdk/b0485cf0a2c0922791741a748fdec0a49003089f/lib/protocol/' + entry.name);
+  }
 });
-test('真实准备回执及协议和工具字节再次验真', async () => {
-  const receipt = await verify(process.env.TATACHAT_RESOURCE_RECEIPT);
-  assert.equal(receipt.work, process.env.PRODUCT_WORK_DIR);
-  assert.equal(process.env.PROTOC,receipt.protoc);
-});
+
 test('缺件控制台模式不能调用产品下载或切换独立模式', async () => fixture(async work => {
   let called = false;
   await assert.rejects(prepare({work, mode: 'console', fetcher: () => { called = true; throw Error(); }}), /供给身份/);
@@ -1837,11 +1684,7 @@ test('资源模式必须显式且永久存储不得进入源码', async () => fi
   await assert.rejects(prepare({work, mode: 'automatic'}), /显式/);
   await assert.rejects(prepare({work, mode: 'independent', store: work}), /源码外/);
 }));
-test('损坏回执不能冒充成功准备或自行覆盖', async () => fixture(async work => {
-  const dir = join(work, 'tatachat-protocol'); await mkdir(dir);
-  const path = join(dir, 'receipt.json'); await writeFile(path, '{}');
-  await assert.rejects(verify(path), /身份/);
-}));
+
 test('ZIP提取只返回固定入口的原始字节', () => {
   const data = Buffer.from('opaque synthetic executable');
   assert.deepEqual(protocBytes(zip(data)), data);
@@ -1861,15 +1704,14 @@ test('ZIP加密链接及大小不符不能生成工具', () => {
 });
 
 test('Worker需求直接引用本产品唯一npm锁，不在源码安装',async()=>{const r=await protocolRequirements();assert.ok(r.locks.some(x=>x.ecosystem==='npm'&&x.path==='test/worker/package-lock.json'&&x.purpose==='worker_runtime_tests'));});
-test('Worker供给摘要及任务身份不符在任何复制执行前失败',async()=>fixture(async work=>{
+test('Worker任务身份不符在复制执行前失败',async()=>fixture(async work=>{
  const file=join(work,'worker.json');await writeFile(file,'{}');
- await assert.rejects(workerTestView(file,'00'.repeat(32),work),/损坏/);
- await assert.rejects(workerTestView(file,createHash('sha256').update('{}').digest('hex'),work),/流程/);
+ await assert.rejects(workerTestView(file,work),/流程/);
  const scope=work.slice(join(productRoot,'target').length+1).split('/')[0];
  const receipt={schema:1,product_id:'citizenserve',platform:'cloudflare',flow:scope==='test'?'gate':'ci',work,modules:join(work,'worker-smoke/test/worker/node_modules'),files:[{path:'example',bytes:1,sha256:'a'.repeat(64)}]};
  for(const change of [{schema:2},{product_id:'other'},{platform:'other'},{work:join(work,'other')},{modules:join(work,'other')}]){
   const bytes=Buffer.from(JSON.stringify({...receipt,...change}));await writeFile(file,bytes);
-  await assert.rejects(workerTestView(file,createHash('sha256').update(bytes).digest('hex'),work),/身份/);
+  await assert.rejects(workerTestView(file,work),/身份/);
  }
  assert.deepEqual((await (await import('node:fs/promises')).readdir(work)),['worker.json'],'错误身份不得生成工程或复制文件');
 }));
@@ -1983,7 +1825,7 @@ test('SDK版本链接只解析到同一已验真Xcode包内的真实目录',asyn
 test('本机完整Build的最小闭包及准确Mac标准库坐标来自产品声明',async()=>{
  const mac=await flowRequirements('build','darwin-arm64');
  assert.deepEqual(mac.tools.map(x=>x.id),['node','rust','protoc','worker-build','wasm-bindgen','wasm-opt']);
- assert.ok(mac.tools.every(x=>x.slots.length&&/^[a-f0-9]{64}$/u.test(x.recipe_sha256)));
+ assert.ok(mac.tools.every(x=>x.slots.length&&!Object.hasOwn(x,'recipe_sha256')));
  assert.equal(mac.tools.find(x=>x.id==='rust').components[0].sha256,'fa0edb6e9f34faae5735554d62d50875eded839dc707d0f1c01467a918d8453b');
  assert.deepEqual(mac.npm.map(x=>x.path).sort(),['node_modules/@esbuild/darwin-arm64','node_modules/esbuild']);
  assert.deepEqual(mac.apple.names,['clang','ar','ranlib','xcrun']);

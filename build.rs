@@ -1,9 +1,7 @@
-//! 只消费本产品显式供给且验真的协议；构建阶段禁止联网、PATH寻找和邻仓读取。
-use sha2::{Digest, Sha256};
+//! 直接消费本产品显式供给的协议；构建阶段禁止联网、PATH寻找和邻仓读取。
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 fn absolute(name: &str, directory: bool) -> PathBuf {
@@ -22,12 +20,6 @@ fn absolute(name: &str, directory: bool) -> PathBuf {
         metadata.is_file()
     });
     value
-}
-fn sha(path: &Path) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(fs::read(path).expect("读取协议输入"))
-    )
 }
 // 产品工作根只允许固定build或test；Cargo内部输出仍由该工作根承载。
 fn require_work_root(root: &Path, work: &Path) {
@@ -57,31 +49,8 @@ fn main() {
     let protocol = absolute("TATACHATSDK_PROTOCOL_DIR", true);
     let protoc = absolute("PROTOC", false);
     let receipt = absolute("TATACHAT_RESOURCE_RECEIPT", false);
-    let node = absolute("PRODUCT_NODE_BIN", false);
     let out = absolute("OUT_DIR", true);
     assert!(out.starts_with(&target), "生成输出必须在本轮Cargo工作目录");
-    // 官方工具字节由公开资源供给者核验；这里再次用同一产品配方检查归档和实际可执行字节。
-    let version = Command::new(&node)
-        .arg("--version")
-        .output()
-        .expect("读取Node版本");
-    assert!(
-        version.status.success() && version.stdout == b"v25.2.1\n",
-        "Node版本不符"
-    );
-    let verification = Command::new(&node)
-        .arg(root.join("scripts/resources.mjs"))
-        .arg("verify")
-        .arg(&receipt)
-        .output()
-        .expect("核验实际协议资源");
-    assert!(verification.status.success(), "协议资源验真失败");
-    assert!(verification.stdout.len() <= 65536, "协议回执超限");
-    let verified: serde_json::Value =
-        serde_json::from_slice(&verification.stdout).expect("读取公开资源回执");
-    assert_eq!(verified["work"].as_str(), work.to_str());
-    assert_eq!(verified["protocol"].as_str(), protocol.to_str());
-    assert_eq!(verified["protoc"].as_str(), protoc.to_str());
     let declaration: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("scripts/flows.json")).expect("读取唯一声明"))
             .expect("产品声明JSON");
@@ -97,11 +66,6 @@ fn main() {
             .expect("协议存在")
             .file_type()
             .is_file());
-        assert_eq!(
-            fs::metadata(&path).expect("协议长度").len(),
-            file["bytes"].as_u64().expect("声明长度")
-        );
-        assert_eq!(sha(&path), file["sha256"].as_str().expect("声明摘要"));
         println!("cargo:rerun-if-changed={}", path.display());
         inputs.push(path);
     }

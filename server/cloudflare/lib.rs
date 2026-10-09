@@ -517,24 +517,77 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                 serde_json::to_value(c).map_err(|_| unavailable())?
             }
             UserRoute::DeletionStatusChallenge => {
-                use citizenserve::user::deletion::{self,Subject,Purpose};
-                let input:Subject=routes::parse_json(&bytes,route.body_limit())?;
+                use citizenserve::user::deletion::{self, Purpose, Subject};
+                let input: Subject = routes::parse_json(&bytes, route.body_limit())?;
                 citizenserve::shared::ids::cid(&input.cid_number)?;
-                let i=projection::current(&rpc,&identities,&input.account_id,&config.chain_scope,checked,true).await?;
-                if i.cid_number!=input.cid_number{return Err(BusinessError::new(401,"cid_binding_changed"));}
-                let repo=repositories::deletion::D1Deletion{db:env.d1("DB").map_err(|_|unavailable())?};
-                serde_json::to_value(deletion::issue(&repo,&config,&i,Purpose::Status,runtime::random()?,js_sys::Date::now() as u64).await?).map_err(|_|unavailable())?
+                let i = projection::current(
+                    &rpc,
+                    &identities,
+                    &input.account_id,
+                    &config.chain_scope,
+                    checked,
+                    true,
+                )
+                .await?;
+                if i.cid_number != input.cid_number {
+                    return Err(BusinessError::new(401, "cid_binding_changed"));
+                }
+                let repo = repositories::deletion::D1Deletion {
+                    db: env.d1("DB").map_err(|_| unavailable())?,
+                };
+                serde_json::to_value(
+                    deletion::issue(
+                        &repo,
+                        &config,
+                        &i,
+                        Purpose::Status,
+                        runtime::random()?,
+                        js_sys::Date::now() as u64,
+                    )
+                    .await?,
+                )
+                .map_err(|_| unavailable())?
             }
             UserRoute::DeletionStatus => {
-                use citizenserve::user::deletion::{self,Signed,Purpose,Repository};
-                let input:Signed=routes::parse_json(&bytes,route.body_limit())?;
-                if !citizenserve::shared::ids::hex(&input.challenge_id,32,false){return Err(BusinessError::new(401,"account_deletion_challenge_invalid"));}
-                let repo=repositories::deletion::D1Deletion{db:env.d1("DB").map_err(|_|unavailable())?};
-                let challenge=repo.challenge(&input.challenge_id).await?.ok_or(BusinessError::new(401,"account_deletion_challenge_invalid"))?;
-                let i=projection::current(&rpc,&identities,&challenge.account_id,&config.chain_scope,checked,true).await?;
-                let c=deletion::verify(&repo,&config,&i,&input,Purpose::Status,js_sys::Date::now() as u64).await?;
-                let receipt=repo.status(&c,js_sys::Date::now() as u64).await?;receipt.validate(&i)?;
-                serde_json::to_value(receipt).map_err(|_|unavailable())?
+                use citizenserve::user::deletion::{self, Purpose, Repository, Signed};
+                let input: Signed = routes::parse_json(&bytes, route.body_limit())?;
+                if !citizenserve::shared::ids::hex(&input.challenge_id, 32, false) {
+                    return Err(BusinessError::new(
+                        401,
+                        "account_deletion_challenge_invalid",
+                    ));
+                }
+                let repo = repositories::deletion::D1Deletion {
+                    db: env.d1("DB").map_err(|_| unavailable())?,
+                };
+                let challenge =
+                    repo.challenge(&input.challenge_id)
+                        .await?
+                        .ok_or(BusinessError::new(
+                            401,
+                            "account_deletion_challenge_invalid",
+                        ))?;
+                let i = projection::current(
+                    &rpc,
+                    &identities,
+                    &challenge.account_id,
+                    &config.chain_scope,
+                    checked,
+                    true,
+                )
+                .await?;
+                let c = deletion::verify(
+                    &repo,
+                    &config,
+                    &i,
+                    &input,
+                    Purpose::Status,
+                    js_sys::Date::now() as u64,
+                )
+                .await?;
+                let receipt = repo.status(&c, js_sys::Date::now() as u64).await?;
+                receipt.validate(&i)?;
+                serde_json::to_value(receipt).map_err(|_| unavailable())?
             }
             UserRoute::Devices => {
                 let input: device::Register = routes::parse_json(&bytes, route.body_limit())?;
@@ -994,19 +1047,43 @@ async fn protected(
                     .await?
                 }
                 ProtectedUserRoute::DeletionChallenge => {
-                    use citizenserve::user::deletion::{self,Purpose};
-                    #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)] struct Empty {}
-                    let _:Empty=routes::parse_json(&bytes,route.body_limit())?;
-                    let repo=repositories::deletion::D1Deletion{db:db()?};
-                    serde_json::to_value(deletion::issue(&repo,config,authority.identity(),Purpose::Delete,runtime::random()?,js_sys::Date::now() as u64).await?).map_err(|_|unavailable())?
+                    use citizenserve::user::deletion::{self, Purpose};
+                    #[derive(serde::Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Empty {}
+                    let _: Empty = routes::parse_json(&bytes, route.body_limit())?;
+                    let repo = repositories::deletion::D1Deletion { db: db()? };
+                    serde_json::to_value(
+                        deletion::issue(
+                            &repo,
+                            config,
+                            authority.identity(),
+                            Purpose::Delete,
+                            runtime::random()?,
+                            js_sys::Date::now() as u64,
+                        )
+                        .await?,
+                    )
+                    .map_err(|_| unavailable())?
                 }
                 ProtectedUserRoute::Delete => {
-                    use citizenserve::user::deletion::{self,Purpose,Repository};
-                    let repo=repositories::deletion::D1Deletion{db:db()?};
-                    let input=routes::parse_json(&bytes,route.body_limit())?;
-                    let c=deletion::verify(&repo,config,authority.identity(),&input,Purpose::Delete,js_sys::Date::now() as u64).await?;
-                    let receipt=repo.begin(&authorization,&c).await?;receipt.validate(authority.identity())?;
-                    return Response::from_json(&receipt).map(|r|r.with_status(202)).map_err(|_|unavailable());
+                    use citizenserve::user::deletion::{self, Purpose, Repository};
+                    let repo = repositories::deletion::D1Deletion { db: db()? };
+                    let input = routes::parse_json(&bytes, route.body_limit())?;
+                    let c = deletion::verify(
+                        &repo,
+                        config,
+                        authority.identity(),
+                        &input,
+                        Purpose::Delete,
+                        js_sys::Date::now() as u64,
+                    )
+                    .await?;
+                    let receipt = repo.begin(&authorization, &c).await?;
+                    receipt.validate(authority.identity())?;
+                    return Response::from_json(&receipt)
+                        .map(|r| r.with_status(202))
+                        .map_err(|_| unavailable());
                 }
                 ProtectedUserRoute::Contacts => {
                     contacts::handle(

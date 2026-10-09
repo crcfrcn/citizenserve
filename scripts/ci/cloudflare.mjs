@@ -48,8 +48,8 @@ export async function executeCI({environment = process.env, input, signal}) {
   const task = await claimWork('ci', String(context.runID) + '-' + context.attempt);
   try {
     const receipt = await prepareFlowResources({flow: 'ci', work: task.work, mode: 'independent', signal,
-      toolRoot: join(environment.RUNNER_TEMP, 'citizenserve-resources/tools'),
-      dependencyRoot: join(environment.RUNNER_TEMP, 'citizenserve-resources/dependencies')});
+      toolRoot: join(task.work,'tools'),
+      dependencyRoot: join(task.work,'dependencies')});
     if (await checkoutSHA(receipt) !== context.sourceSHA) fail('检出源码与CI事件不符');
     const capability = {token: environment.GH_TOKEN, signal};
     await successfulGate(context.sourceSHA, capability);

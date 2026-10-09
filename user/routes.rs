@@ -144,7 +144,9 @@ impl ProtectedUserRoute {
     pub const fn body_limit(self) -> usize {
         match self {
             Self::Profile | Self::Asset => 0,
-            Self::UpdateProfile | Self::PrepareAsset | Self::DeletionChallenge | Self::Delete => 16384,
+            Self::UpdateProfile | Self::PrepareAsset | Self::DeletionChallenge | Self::Delete => {
+                16384
+            }
             Self::UploadAsset => 1536 * 1024,
             Self::Contacts => 262144,
         }

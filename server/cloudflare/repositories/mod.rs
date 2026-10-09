@@ -1,7 +1,7 @@
 pub mod auth;
-pub mod deletion;
 pub mod chat_access;
 pub mod contacts;
+pub mod deletion;
 pub mod downloads;
 pub mod identity;
 pub mod media;

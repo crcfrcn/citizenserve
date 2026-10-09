@@ -414,7 +414,6 @@ async fn uploads(env: &Env, repo: &D1Maintenance, l: &Lease, p: &mut Progress) -
         generation: u64,
         state: String,
         object_etag: Option<String>,
-        prior_etag: Option<String>,
     }
     let rows:Vec<Profile>=repo.all("SELECT p.* FROM profile_asset_uploads p WHERE expires_at+120000<=?1 AND state IN ('prepared','writing','completed') AND NOT EXISTS(SELECT 1 FROM profile_asset_uploads n WHERE n.cid_number=p.cid_number AND n.kind=p.kind AND n.generation>p.generation) ORDER BY created_at,upload_id LIMIT 4",&[JsValue::from_f64(now() as f64)]).await?;
     for row in rows {
@@ -655,11 +654,16 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
             }
             Work::Uploads => uploads(env, &repo, &lease, &mut p).await,
             Work::Storage => {
-                if crate::repositories::deletion::advance(env,&budget).await?.is_some() {
+                if crate::repositories::deletion::advance(env, &budget)
+                    .await?
+                    .is_some()
+                {
                     // 当前slot只执行一个有界注销批次；下一slot从独立持久任务继续。
                     Ok(true)
-                }else{storage(env,&repo,&lease,&mut p).await}
-            },
+                } else {
+                    storage(env, &repo, &lease, &mut p).await
+                }
+            }
             Work::Audit => audit(env, &repo, &mut p).await,
             Work::Identity | Work::Membership => {
                 let genesis = env

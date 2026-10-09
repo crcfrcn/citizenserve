@@ -9,7 +9,8 @@
     "scripts/resources.mjs",
     "scripts/tatachat.mjs",
     "scripts/ci/cloudflare.mjs",
-    "scripts/release/cloudflare.mjs"
+    "scripts/release/cloudflare.mjs",
+    "scripts/target.test.mjs"
   ],
   "checks": [
     "repository-contracts",
