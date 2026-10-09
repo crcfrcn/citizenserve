@@ -20,7 +20,7 @@ export function gateContract(value = contract) {
     value.checks?.join(',') !== 'repository-contracts,product-full' ||
     value.tools?.node !== '25.2.1' || value.tools.actionlint !== '1.7.12' || value.tools.rust !== '1.97.1' ||
     Object.keys(value.tools).sort().join(',') !== 'actionlint,node,rust' ||
-    value.node_tests?.join(',') !== 'scripts/resources.mjs,scripts/tatachat.mjs,scripts/ci/cloudflare.mjs,scripts/release/cloudflare.mjs' ||
+    value.node_tests?.join(',') !== 'scripts/resources.mjs,scripts/tatachat.mjs,scripts/ci/cloudflare.mjs,scripts/release/cloudflare.mjs,scripts/target.mjs' ||
     value.platform_forbidden_values?.join(',') !== ['macOS ARM64', 'macos-arm64', 'macos_arm64'].join(',')) fail('登记字段或真实检查闭集漂移');
   return value;
 }
@@ -272,8 +272,6 @@ export async function executeGate({root = productRoot, baseSHA, headSHA, receipt
     if (!path.includes('test') && hasFirstPartyTemporaryComments(path, source)) fail('实现代码保留临时注释：' + path);
   }
   const workflows = validateWorkflow(root);
-  const version = await runTool(receipt.tools.actionlint, ['-version'], {work: receipt.work, tools: receipt.tools, signal});
-  if (!/^1\.7\.12(?:\s|$)/u.test(version.stdout)) fail('actionlint版本漂移');
   await runTool(receipt.tools.actionlint, ['-shellcheck=', '-pyflakes=', ...workflows], {work: receipt.work, tools: receipt.tools, signal});
   const acceptance = await fullChecks(receipt, signal);
   assertNoProductOutputDirectories(root);

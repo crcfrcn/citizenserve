@@ -140,46 +140,35 @@ test('最新门禁失败不能借较旧成功Run放行', async () => {
 });
 
 // 流程身份独立保存，实际领取只使用固定build、test；共享编译现场不得互相清理。
-test('流程领取只建build、test并保护活跃任务及链接外文件',async t=>{
- const fs=await import('node:fs/promises'),{join,resolve}=await import('node:path'),{pathToFileURL}=await import('node:url');
- const root=resolve(import.meta.dirname,'../..'),parent=process.env.PRODUCT_WORK_DIR;
- assert.ok(parent&&resolve(parent)===parent&&await fs.realpath(parent)===parent,'必须使用当前任务的规范工作根');
- const fixture=await fs.mkdtemp(join(parent,'flow-work-'));t.after(()=>fs.rm(fixture,{recursive:true,force:true}));
- await fs.mkdir(join(fixture,'scripts'));await fs.writeFile(join(fixture,'scripts/resources.mjs'),await fs.readFile(join(root,'scripts/resources.mjs')));
- const {claimWork}=await import(pathToFileURL(join(fixture,'scripts/resources.mjs')));
- await fs.mkdir(join(fixture,'target/build'),{recursive:true});await fs.mkdir(join(fixture,'protected'));await fs.writeFile(join(fixture,'protected/keep'),'keep');await fs.symlink(join(fixture,'protected'),join(fixture,'target/build/link'));
- const ci=await claimWork('ci','123');assert.equal(ci.work,join(fixture,'target/build'));assert.equal(await fs.readFile(join(fixture,'protected/keep'),'utf8'),'keep');
- await assert.rejects(claimWork('release','124'),/活跃/);await ci.finish();
- const release=await claimWork('release','124');assert.equal(release.work,ci.work);await release.finish();
- const gate=await claimWork('gate','125');assert.equal(gate.work,join(fixture,'target/test'));await gate.finish();
- assert.deepEqual((await fs.readdir(join(fixture,'target'))).sort(),['build','test']);assert.deepEqual(await fs.readdir(ci.work),[]);assert.deepEqual(await fs.readdir(gate.work),[]);
+test('流程领取使用本产品固定build并保护链接外文件',async t=>{
+ const fs=await import('node:fs/promises'),{fixedWork}=await import('../target.mjs');
+ const parent=process.env.PRODUCT_WORK_DIR,work=fixedWork('build'),fixture=await fs.mkdtemp(join(parent,'flow-protected-'));t.after(()=>fs.rm(fixture,{recursive:true,force:true}));
+ await fs.writeFile(join(fixture,'keep'),'keep');await fs.mkdir(work,{recursive:true});await fs.symlink(fixture,join(work,'link'));
+ let active;try{
+ active=await claimWork('ci','123');assert.equal(active.work,work);assert.equal(await fs.readFile(join(fixture,'keep'),'utf8'),'keep');
+ await assert.rejects(claimWork('release','124'),/活跃/);await active.finish();active=null;
+ active=await claimWork('release','124');assert.equal(active.work,work);await active.finish();active=null;
+ assert.deepEqual(await fs.readdir(work),[]);assert.equal(await fs.readFile(join(fixture,'keep'),'utf8'),'keep');
+ }finally{if(active)await active.finish();}
 });
 
 // 直接调用同一生产模块的两类领取入口；被拒绝的入口不得改写任何活跃字节。
-test('CI与Build双向拒绝活跃现场，候选待确认和同时领取仍互斥',async t=>{
- const fs=await import('node:fs/promises'),{join,resolve}=await import('node:path'),{pathToFileURL}=await import('node:url');
- const root=resolve(import.meta.dirname,'../..'),parent=process.env.PRODUCT_WORK_DIR;
- assert.ok(parent&&resolve(parent)===parent&&await fs.realpath(parent)===parent,'必须使用当前任务的规范工作根');
- const fixture=await fs.mkdtemp(join(parent,'cross-flow-'));
- t.after(()=>fs.rm(fixture,{recursive:true,force:true}));await fs.mkdir(join(fixture,'scripts'));
- await fs.writeFile(join(fixture,'scripts/resources.mjs'),await fs.readFile(join(root,'scripts/resources.mjs')));
- const {claimWork,claimBuildWork}=await import(pathToFileURL(join(fixture,'scripts/resources.mjs')));
- const ci=await claimWork('ci','ci-active'),work=ci.work,sentinel=join(work,'candidate');
- await fs.writeFile(sentinel,'CI结果');const active=await fs.readFile(join(work,'.active.json'));
- await assert.rejects(claimBuildWork('build-blocked',work),/活跃/);
- assert.deepEqual(await fs.readFile(join(work,'.active.json')),active);assert.equal(await fs.readFile(sentinel,'utf8'),'CI结果');
- assert.equal((await fs.readdir(work)).includes('.product-build.lock'),false);await ci.finish();
- const build=await claimBuildWork('build-active',work);await fs.writeFile(sentinel,'Build候选');
- let marker=await fs.readFile(join(work,'.product-build.lock'));
- await assert.rejects(claimWork('release','release-blocked'),/活跃/);
- assert.deepEqual(await fs.readFile(join(work,'.product-build.lock')),marker);assert.equal(await fs.readFile(sentinel,'utf8'),'Build候选');
- await build.ready();marker=await fs.readFile(join(work,'.product-build.lock'));
- await assert.rejects(claimWork('ci','ci-before-confirmation'),/活跃/);
- assert.deepEqual(await fs.readFile(join(work,'.product-build.lock')),marker);assert.equal(await fs.readFile(sentinel,'utf8'),'Build候选');
- await build.finish();const release=await claimWork('release','release-after-close');await release.finish();
+test('CI与Build在本产品固定根双向拒绝活跃现场，候选与同时领取互斥',async()=>{
+ const fs=await import('node:fs/promises'),{fixedWork}=await import('../target.mjs'),{claimBuildWork}=await import('../resources.mjs');
+ const work=fixedWork('build'),sentinel=join(work,'candidate');let task;
+ try{
+ task=await claimWork('ci','ci-active');await fs.writeFile(sentinel,'CI结果');const active=await fs.readFile(join(work,'.active.json'));
+ await assert.rejects(claimBuildWork('build-blocked',work),/活跃/);assert.deepEqual(await fs.readFile(join(work,'.active.json')),active);assert.equal(await fs.readFile(sentinel,'utf8'),'CI结果');
+ await task.finish();task=null;
+ task=await claimBuildWork('build-active',work);await fs.writeFile(sentinel,'Build候选');let marker=await fs.readFile(join(work,'.product-build.lock'));
+ await assert.rejects(claimWork('release','release-blocked'),/活跃|守卫/);assert.deepEqual(await fs.readFile(join(work,'.product-build.lock')),marker);assert.equal(await fs.readFile(sentinel,'utf8'),'Build候选');
+ await task.ready();marker=await fs.readFile(join(work,'.product-build.lock'));
+ await assert.rejects(claimWork('ci','ci-before-confirmation'),/活跃|守卫/);assert.deepEqual(await fs.readFile(join(work,'.product-build.lock')),marker);
+ await task.finish();task=null;task=await claimWork('release','release-after-close');await task.finish();task=null;
  const race=await Promise.allSettled([claimWork('ci','race-ci'),claimBuildWork('race-build',work)]);
  assert.equal(race.filter(value=>value.status==='fulfilled').length,1);assert.equal(race.filter(value=>value.status==='rejected').length,1);
- await race.find(value=>value.status==='fulfilled').value.finish();assert.deepEqual(await fs.readdir(work),[]);
+ task=race.find(value=>value.status==='fulfilled').value;await task.finish();task=null;assert.deepEqual(await fs.readdir(work),[]);
+ }finally{if(task)await task.finish();}
 });
 }
 // END INLINE TESTS

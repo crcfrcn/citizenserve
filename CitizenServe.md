@@ -561,3 +561,11 @@ CI/Release的.active.json与Build的.product-build.lock由同一个.claim.lock�
 scripts/resources.mjs 按本仓声明准备协议、工具、Cargo vendor和npm目录，直接消费供给路径。协议和资源回执只承载产品、平台、模式、工作目录及任务身份；build.rs 直接调用交付的protoc，不执行Node/协议摘要/工具版本复验。workerTestView以回执路径与工作目录生成真实Worker测试视图，资源回执不再要求SHA256或完整文件树。
 
 供给缺件、离线缺件、工具非零退出、取消或后代未退出按实际结果失败。固定工作根、任务身份、隔离、互斥与清场合同继续适用。业务授权、钱包及链签名、TLS和正式应用产物的签名安装合同保持各自职责。
+
+固定根中的工程视图按产品根的直接子项复制，排除target与既有生成目录，避免Node把整个源码根复制进自身子目录时拒绝操作。视图根仍为当前已领取工作根中的source，不成为另一个任务工作根；成功、失败和中断恢复均由本仓target入口完成清场。
+
+### scripts 同文件回归
+
+正式脚本与对应测试维护在同一文件，测试位于实现末尾；普通导入不注册测试。Node 回归直接使用 `node --test` 执行实现文件，本仓门禁清单按合并后的入口登记。测试工作现场仍由本产品 `scripts/target.mjs` 管理，结束后清空固定目录。
+
+本仓门禁直接执行交付的actionlint，不重复探测和比较工具版本。Node合同登记包含同文件固定根回归scripts/target.mjs；CI/Build互斥回归使用本产品真实target/build及公开claimWork/claimBuildWork，实际入口完成收尾后回读为空，不再创建模拟产品工作根。分项回归不代表fullChecks整体通过：完整流程仍需在资源占用前运行固定根生命周期回归，避免测试尝试领取正在占用的同一固定根。

@@ -10,7 +10,7 @@
     "scripts/tatachat.mjs",
     "scripts/ci/cloudflare.mjs",
     "scripts/release/cloudflare.mjs",
-    "scripts/target.test.mjs"
+    "scripts/target.mjs"
   ],
   "checks": [
     "repository-contracts",
