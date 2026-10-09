@@ -20,7 +20,7 @@ export function gateContract(value = contract) {
     value.checks?.join(',') !== 'repository-contracts,product-full' ||
     value.tools?.node !== '25.2.1' || value.tools.actionlint !== '1.7.12' || value.tools.rust !== '1.97.1' ||
     Object.keys(value.tools).sort().join(',') !== 'actionlint,node,rust' ||
-    value.node_tests?.join(',') !== 'scripts/resources.test.mjs,scripts/tatachat/resources.test.mjs,scripts/ci/cloudflare.test.mjs,scripts/release/cloudflare.test.mjs' ||
+    value.node_tests?.join(',') !== 'scripts/resources.mjs,scripts/tatachat.mjs,scripts/ci/cloudflare.mjs,scripts/release/cloudflare.mjs' ||
     value.platform_forbidden_values?.join(',') !== ['macOS ARM64', 'macos-arm64', 'macos_arm64'].join(',')) fail('登记字段或真实检查闭集漂移');
   return value;
 }
@@ -47,7 +47,7 @@ export function assertNoProductOutputDirectories(root) {
         if (!entry.isDirectory() || entry.isSymbolicLink() || realpathSync(path) !== path) fail('产品生成状态目录类型无效');
         continue;
       }
-      if (['target', 'build', 'node_modules', '.dart_tool', '__pycache__', '.gradle'].includes(entry.name)) fail('源码存在生成状态目录');
+      if (['target', 'build', 'node_modules', '.dart_tool', '__pycache__', '.gradle'].includes(entry.name)) fail('临时生成目录必须归产品根target：' + path);
       if (entry.isSymbolicLink()) fail('源码含链接旁路');
       if (entry.isDirectory()) visit(path);
     }
@@ -57,7 +57,7 @@ export function assertNoProductOutputDirectories(root) {
   for (const first of readdirSync(scripts, {withFileTypes: true})) {
     if (!first.isDirectory()) continue;
     const children = readdirSync(join(scripts, first.name), {withFileTypes: true});
-    if (children.length < 2 || children.some(e => e.isDirectory() || e.isSymbolicLink())) fail('scripts必须只有一层且每目录直接承载实现及测试');
+    if (children.length < 2 || children.some(e => e.isDirectory() || e.isSymbolicLink())) fail('scripts必须只有一层且每目录至少两个真实直接文件');
   }
 }
 export function hasFirstPartyTemporaryComments(path, source) {

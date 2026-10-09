@@ -7,5 +7,4 @@
 __pycache__/
 
 # 仅本地workerd工具与隔离测试数据
-/test/worker/node_modules/
 /test/worker/.wrangler/

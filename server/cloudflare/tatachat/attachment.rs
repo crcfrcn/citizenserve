@@ -1,5 +1,7 @@
 //! 分块只通过Worker授权入口；持久定位与通用附件端口之间显式转换。
+#[path = "attachment_objects.rs"]
 mod objects;
+#[path = "attachment_store.rs"]
 mod store;
 use citizenserve::tatachat::{
     attachment::ports::{Upload, Written},

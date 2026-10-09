@@ -29,6 +29,13 @@ fn sha(path: &Path) -> String {
         Sha256::digest(fs::read(path).expect("读取协议输入"))
     )
 }
+// 产品工作根只允许固定build或test；Cargo内部输出仍由该工作根承载。
+fn require_work_root(root: &Path, work: &Path) {
+    assert!(
+        work == root.join("target/build") || work == root.join("target/test"),
+        "工作根必须为本产品target/build或target/test"
+    );
+}
 fn main() {
     for name in [
         "PRODUCT_NODE_BIN",
@@ -45,13 +52,7 @@ fn main() {
     let root = absolute("CARGO_MANIFEST_DIR", true);
     let work = absolute("PRODUCT_WORK_DIR", true);
     let target = absolute("CARGO_TARGET_DIR", true);
-    assert!(
-        work.starts_with(root.join("target/cloudflare")) && work != root.join("target/cloudflare")
-    );
-    assert!(
-        matches!(work.strip_prefix(root.join("target/cloudflare")).expect("所属平台工作目录").components().next(),
-        Some(std::path::Component::Normal(value)) if ["test", "build", "ci", "release"].iter().any(|expected| value == std::ffi::OsStr::new(expected)))
-    );
+    require_work_root(&root, &work);
     assert_eq!(target, work.join("cargo-target"));
     let protocol = absolute("TATACHATSDK_PROTOCOL_DIR", true);
     let protoc = absolute("PROTOC", false);

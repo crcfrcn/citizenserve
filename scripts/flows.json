@@ -84,7 +84,7 @@
       "schema": {
         "version": 1,
         "path": "server/cloudflare/tatachat/schema.sql",
-        "sha256": "3914dd6f4465915a946df0035fe696a19cd98e16c13df5dcf7fbeea1e6a36ee2"
+        "sha256": "4463a61a07ffde9b304432b5e2ad32acde1f32a77538de6a271b8c87a8454193"
       },
       "workers": {
         "production": "citizenserve",

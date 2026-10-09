@@ -1,5 +1,7 @@
 //! 平台执行唯一核心的唤醒服务，普通通知协议和端点表保持独立。
+#[path = "push_provider.rs"]
 mod provider;
+#[path = "push_store.rs"]
 mod store;
 use citizenserve::tatachat::Result;
 use worker::Env;

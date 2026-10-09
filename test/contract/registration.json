@@ -1,5 +1,5 @@
 {
-  "source": "已确认第1步七字段合同；只包含公开测试账户。",
+  "source": "注册签名七字段公开测试上下文向量；不含真实账户机密。",
   "context": [
     1,
     "CitizenCidRegistration",

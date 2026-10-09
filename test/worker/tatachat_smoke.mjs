@@ -1,4 +1,4 @@
-// 真实Rust ESM/WASM的宿主许可接口；本文件不替代B的WSS/DO/附件数据面验收。
+// 真实Rust ESM/WASM的宿主许可接口；WSS、DO和附件数据面由对应Worker回归覆盖。
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,verify} from 'node:crypto';

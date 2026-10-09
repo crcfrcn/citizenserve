@@ -48,8 +48,14 @@ test('所属唯一根文档拒绝空文件、链接和第二技术文档', () =>
 }));
 test('scripts一层目录和根target边界会检查实际物理路径', () => fixture(root => {
   mkdirSync(join(root, 'scripts/ci'), {recursive: true});
-  writeFileSync(join(root, 'scripts/ci/cloudflare.mjs'), '实现'); writeFileSync(join(root, 'scripts/ci/cloudflare.test.mjs'), '测试');
+  writeFileSync(join(root, 'scripts/ci/cloudflare.mjs'), '实现'); writeFileSync(join(root, 'scripts/ci/linux.mjs'), 'Linux预留');
   mkdirSync(join(root, 'target/nested/build'), {recursive: true}); assert.doesNotThrow(() => assertNoProductOutputDirectories(root));
+  // test承载测试源码，target承载依赖展开现场；target内部不按源码结构检查。
+  mkdirSync(join(root, 'test/worker'), {recursive: true});writeFileSync(join(root, 'test/worker/sample.mjs'), '测试源码');
+  mkdirSync(join(root, 'target/test/worker-smoke/test/worker/node_modules'), {recursive: true});
+  assert.doesNotThrow(() => assertNoProductOutputDirectories(root));
+  mkdirSync(join(root, 'test/worker/node_modules'));assert.throws(() => assertNoProductOutputDirectories(root), /临时生成目录必须归产品根target/u);
+  rmSync(join(root, 'test/worker/node_modules'), {recursive: true});
   mkdirSync(join(root, 'scripts/ci/cloudflare')); assert.throws(() => assertNoProductOutputDirectories(root));
   rmSync(join(root, 'scripts/ci/cloudflare'), {recursive: true}); mkdirSync(join(root, 'source/target'), {recursive: true});
   assert.throws(() => assertNoProductOutputDirectories(root));

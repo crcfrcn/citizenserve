@@ -1,4 +1,4 @@
-"""真实SQLite执行正式聊天SQL；用例在第5步统一运行，不代替Cloudflare实测。"""
+"""真实SQLite执行正式聊天SQL，覆盖事务、幂等、代际与注销围栏；不代替Cloudflare实测。"""
 import json
 import sqlite3
 import time
@@ -7,8 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = (ROOT / 'server/cloudflare/tatachat/schema.sql').read_text()
-COMMIT = (ROOT / 'server/cloudflare/tatachat/mailbox/commit.sql').read_text().split('\n-- next\n')
-ACK = (ROOT / 'server/cloudflare/tatachat/mailbox/acknowledge.sql').read_text()
+COMMIT = (ROOT / 'server/cloudflare/tatachat/mailbox_commit.sql').read_text().split('\n-- next\n')
+ACK = (ROOT / 'server/cloudflare/tatachat/mailbox_acknowledge.sql').read_text()
 CLOCK = "(CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER))"
 
 

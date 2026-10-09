@@ -304,7 +304,7 @@ pub async fn confirm<R: Rpc>(
     batch.evidence = Some(verified.evidence);
     Ok(batch)
 }
-/// 这里只恢复有界 catch-up 核心；调度器在第6步装配。一次最多十个完整区块。
+/// 有界catch-up由现有调度器调用，一次最多处理十个完整区块。
 pub async fn catch_up<R: Rpc, S: super::ports::Repository>(
     rpc: &R,
     repo: &S,

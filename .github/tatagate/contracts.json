@@ -6,10 +6,10 @@
     "citizenserve.cloudflare.release"
   ],
   "node_tests": [
-    "scripts/resources.test.mjs",
-    "scripts/tatachat/resources.test.mjs",
-    "scripts/ci/cloudflare.test.mjs",
-    "scripts/release/cloudflare.test.mjs"
+    "scripts/resources.mjs",
+    "scripts/tatachat.mjs",
+    "scripts/ci/cloudflare.mjs",
+    "scripts/release/cloudflare.mjs"
   ],
   "checks": [
     "repository-contracts",

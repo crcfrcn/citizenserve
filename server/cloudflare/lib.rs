@@ -1,4 +1,4 @@
-//! Cloudflare唯一入口。授权、账户业务与第6步Queue/Cron已装配；聊天和App接线待后续验收。
+//! Cloudflare唯一入口，装配授权、账户业务、Queue/Cron与聊天平台适配。
 mod cache;
 mod chain;
 mod downloads;

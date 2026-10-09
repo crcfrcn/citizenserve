@@ -1,4 +1,5 @@
 //! 密钥包Cloudflare适配；校验和协议预算使用唯一通用核心。
+#[path = "key_store.rs"]
 mod store;
 pub(crate) fn bytes(
     package: &citizenserve::tatachat::key::Package,

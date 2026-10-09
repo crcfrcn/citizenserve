@@ -1,4 +1,4 @@
-//! 公民宿主许可HTTP与中性再核验装配；通用聊天的CF数据面由B所属模块交付。
+//! 公民宿主许可HTTP与中性再核验装配；Cloudflare聊天数据面归所属tatachat适配模块。
 use citizenserve::{
     chain::subscription::Current,
     membership::chat::Permissions,
@@ -255,7 +255,7 @@ impl Host {
         repo.require(&self.config, subject, authorization, issued_at)
             .await
     }
-    /// 当前事实生成新的目标许可，供B的authorize_wake使用；不是延长旧WSS凭证。
+    /// 当前事实生成目标唤醒许可，供通用聊天Host端口使用；不延长原WSS凭证。
     pub async fn current_session(&self, session_hash: &str) -> Result<tatachat::Authorization> {
         let (subject, permissions, issued_at) = self.facts(session_hash).await?;
         let permission = tatachat::authorize(&subject, &permissions, js_sys::Date::now() as u64)?;

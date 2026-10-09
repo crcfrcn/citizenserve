@@ -25,7 +25,7 @@ impl Store for D1Store {
         }
         let operation = config::random_id()?;
         let context = json!({"message_id":receipt.message_id,"fingerprint":receipt.fingerprint,"operation":operation,"expires_at":receipt.expires_at_millis});
-        let sql: Vec<_> = include_str!("commit.sql").split("\n-- next\n").collect();
+        let sql: Vec<_> = include_str!("mailbox_commit.sql").split("\n-- next\n").collect();
         let mut commands = vec![(sql[0], vec![json!(context.to_string())])];
         let mut group = Vec::<Value>::new();
         let mut size = 0usize;
@@ -115,7 +115,7 @@ impl Store for D1Store {
         let c = json!({"user_id":access.actor().user_id,"device_id":access.actor().device_id,"ids":ids});
         self.write(
             access,
-            vec![(include_str!("acknowledge.sql"), vec![json!(c.to_string())])],
+            vec![(include_str!("mailbox_acknowledge.sql"), vec![json!(c.to_string())])],
         )
         .await?;
         Ok(())

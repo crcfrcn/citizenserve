@@ -1,4 +1,4 @@
-// 第5步装载真实Rust ESM/WASM、D1、R2和SQLite DO；不把本地夹具称作云端休眠验收。
+// 装载真实Rust ESM/WASM、D1、R2和SQLite DO；本地夹具不代表云端休眠验收。
 import test,{beforeEach,afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,generateKeyPairSync} from 'node:crypto';

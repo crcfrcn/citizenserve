@@ -1,4 +1,5 @@
 //! DO定位只由已验证actor生成；客户端没有内部通知入口。
+#[path = "realtime_device.rs"]
 pub mod device;
 use citizenserve::tatachat::{auth::Device, realtime::Event, Error, Result};
 use worker::{Env, Headers, Method, Request, RequestInit, Response};
