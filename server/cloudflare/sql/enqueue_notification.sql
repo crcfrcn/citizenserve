@@ -1,0 +1,7 @@
+-- 后台新鲜资格证明和同周期持久提醒/outbox原子提交，不能先推送后记提醒。
+-- statement
+INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) SELECT NULL,'storage',0,json_extract(?1,'$.now') WHERE NOT COALESCE((json_extract(?1,'$.proof.checked_at')<=json_extract(?1,'$.now') AND json_extract(?1,'$.now')<json_extract(?1,'$.proof.deadline') AND json_extract(?1,'$.proof.lapse_at')+2592000000<=json_extract(?1,'$.now')),0);
+-- statement
+UPDATE square_memberships SET storage_cleanup_notified_at=json_extract(?1,'$.now'),storage_cleanup_lapse_at=json_extract(?1,'$.proof.lapse_at') WHERE cid_number=json_extract(?1,'$.proof.cid_number') AND account_id=json_extract(?1,'$.proof.account_id') AND paid_until=json_extract(?1,'$.proof.lapse_at') AND (storage_cleanup_notified_at IS NULL OR storage_cleanup_lapse_at IS NOT json_extract(?1,'$.proof.lapse_at')) AND EXISTS(SELECT 1 FROM resource_totals WHERE cid_number=json_extract(?1,'$.proof.cid_number') AND resource_key='square_storage' AND byte_size>json_extract(?1,'$.proof.limit'));
+-- statement
+INSERT OR IGNORE INTO notification_jobs(job_id,source_kind,source_key,cid_number,lapse_at,created_at,expires_at,updated_at) SELECT json_extract(?1,'$.job_id'),'storage_cleanup','storage:'||cid_number||':'||storage_cleanup_lapse_at,cid_number,storage_cleanup_lapse_at,storage_cleanup_notified_at,storage_cleanup_notified_at+86400000,json_extract(?1,'$.now') FROM square_memberships WHERE cid_number=json_extract(?1,'$.proof.cid_number') AND storage_cleanup_lapse_at=json_extract(?1,'$.proof.lapse_at') AND storage_cleanup_notified_at IS NOT NULL;

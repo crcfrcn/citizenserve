@@ -1,0 +1,12 @@
+{
+  "cid_number":"CN220-CTZN2-198805201-2026",
+  "account_id":"0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "binding_revision":1,"identity_level":"visitor","finalized_block_number":9,
+  "finalized_block_hash":"0x0909090909090909090909090909090909090909090909090909090909090909",
+  "status":"active","institution":"CTZN",
+  "chain_scope":"0x0000000000000000000000000000000000000000000000000000000000000000",
+  "registered_block_number":3,
+  "registered_block_hash":"0x0303030303030303030303030303030303030303030303030303030303030303",
+  "registered_at_millis":900000,"finalized_timestamp_millis":1000000,
+  "authoritative_current":true,"checked_at_millis":1000000,"verification_deadline_millis":1060000
+}

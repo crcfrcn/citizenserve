@@ -1,0 +1,6 @@
+-- statement
+INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT (NOT EXISTS(SELECT 1 FROM profile_asset_uploads WHERE cid_number=json_extract(?1,'$.auth.cid_number') AND kind=json_extract(?1,'$.credential.kind') AND state='writing'));
+-- statement
+UPDATE profile_asset_uploads SET state='superseded' WHERE cid_number=json_extract(?1,'$.auth.cid_number') AND kind=json_extract(?1,'$.credential.kind') AND state='prepared';
+-- statement
+INSERT INTO profile_asset_uploads(upload_id,cid_number,kind,object_key,content_type,byte_size,sha256,generation,prior_etag,state,created_at,expires_at) SELECT json_extract(?1,'$.credential.upload_id'),json_extract(?1,'$.credential.cid_number'),json_extract(?1,'$.credential.kind'),json_extract(?1,'$.credential.object_key'),json_extract(?1,'$.credential.content_type'),json_extract(?1,'$.credential.byte_size'),json_extract(?1,'$.credential.sha256'),1+COALESCE((SELECT MAX(generation) FROM profile_asset_uploads WHERE cid_number=json_extract(?1,'$.auth.cid_number') AND kind=json_extract(?1,'$.credential.kind')),0),json_extract(?1,'$.credential.prior_etag'),'prepared',json_extract(?1,'$.credential.created_at'),json_extract(?1,'$.credential.expires_at') WHERE json_extract(?1,'$.credential.cid_number')=json_extract(?1,'$.auth.cid_number');

@@ -1,6 +1,5 @@
-# citizenserve.cloudflare.ci 的独立 GitHub 工作流。
+# CitizenServe Cloudflare ci；Workflow只交付Runner和受控能力，实际步骤归产品入口。
 name: citizenserve.cloudflare.ci
-# 远端标题只展示产品、平台、流程；内部 pipeline 仍承担唯一机器身份。
 run-name: "${{ inputs.run_title }}"
 'on':
   workflow_dispatch:
@@ -40,41 +39,15 @@ concurrency:
   cancel-in-progress: false
 jobs:
   flow:
-    name: 后端代码、D1 与 Cloudflare 资源检查
+    name: 公民服务端 · Cloudflare · CI
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
-      actions: write
       contents: read
+      actions: write
     env:
-      CI: true
-      WRANGLER_SEND_METRICS: false
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: '1'
-      CARGO_INCREMENTAL: '0'
       GH_TOKEN: "${{ github.token }}"
-      GMB_SOURCE_SHA: "${{ github.sha }}"
-      SOURCE_SHA: "${{ github.sha }}"
     steps:
-    - shell: bash
-      env:
-        PIPELINE: "${{ inputs.pipeline }}"
-        RUN_TITLE: "${{ inputs.run_title }}"
-        SOURCE_SHA: "${{ inputs.source_sha }}"
-        CI_RUN_ID: "${{ inputs.ci_run_id }}"
-        VERSION_TAG: "${{ inputs.version_tag }}"
-        SOFTWARE_VERSION: "${{ inputs.software_version }}"
-        SPEC_VERSION: "${{ inputs.spec_version }}"
-        CHAIN_SPEC_VERSION: "${{ inputs.chain_spec_version }}"
-        GENESIS_HASH: "${{ inputs.genesis_hash }}"
-        FINALIZED_HEAD: "${{ inputs.finalized_head }}"
-      run: |-
-        node --input-type=module <<'NODE'
-        const e=process.env,allowed=new Set(["citizenserve.cloudflare.ci"]);
-        if(!allowed.has(e.PIPELINE||''))throw Error('产品流程身份无效');
-        if(e.RUN_TITLE!=="公民服务端 · Cloudflare · CI")throw Error('产品平台流程展示标题无效');
-        if([e.CI_RUN_ID,e.VERSION_TAG,e.SOFTWARE_VERSION,e.SPEC_VERSION,e.CHAIN_SPEC_VERSION,e.GENESIS_HASH,e.FINALIZED_HEAD].some(Boolean))throw Error('CI输入包含Release字段');
-        NODE
     - name: 检出准确产品源码
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       with:
@@ -85,97 +58,26 @@ jobs:
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
       with:
         node-version: 25.2.1
-    - name: 准备并验真本流程正式测试Shell
+    - name: 执行产品完整CI
       shell: node {0}
       run: |
-        const child = require("node:child_process");
-        child.execFileSync(process.execPath, ["scripts/ci/cloudflare/check/execute.mjs", "prepare-test-shell"], {stdio:"inherit"});
-    - id: citizenserve_ci_cloudflare__check__ci_cache
-      env:
-        GH_TOKEN: "${{ github.token }}"
-        CI_CACHE_PRODUCT: citizenserve
-        CI_CACHE_PLATFORM: cloudflare
-        CI_CACHE_ARCHITECTURE: worker
-        CI_CACHE_COMPONENT: citizenserve-ci-cloudflare--check
-        CI_CACHE_WORKFLOW: citizenserve-cloudflare
-        CI_CACHE_JOB: citizenserve-ci-cloudflare--check
-        CI_CACHE_TOOLCHAIN_FINGERPRINT: "${{ hashFiles('**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json', '**/dependencies.lock.json', '**/runtime.lock.json') }}"
-        CI_CACHE_PATHS: |
-          npm
-          xdg
-        CI_CACHE_LINKS: ''
-        CI_CACHE_FINALS: ''
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 0
-    - name: 恢复上一次成功的CI增量缓存
-      continue-on-error: true
-      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        require('node:child_process').execFileSync(process.execPath,
+          ['scripts/ci/cloudflare.mjs', 'execute'], {stdio: 'inherit'});
+    - name: 上传本次成功Attempt的完整CI资产
+      id: artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        path: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.success_paths }}"
-        key: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.restore_key }}"
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 1
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 2
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 3
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 4
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 5
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 6
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 7
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 8
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 9
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 10
-    - if: "${{ failure() && !cancelled() }}"
+        name: citizenserve-cloudflare-ci-${{ github.run_id }}-${{ github.run_attempt }}
+        path: target/build/ci.tgz
+        if-no-files-found: error
+        overwrite: false
+        compression-level: 0
+        retention-days: 90
+    - name: 回读实际Artifact身份及摘要
+      shell: node {0}
       env:
-        CI_CACHE_TERMINAL_STATE: failure
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 11
-    - if: "${{ failure() && !cancelled() }}"
-      name: 保存本次失败的CI增量缓存
-      id: citizenserve_ci_cloudflare__check__ci_cache_save_failure
-      continue-on-error: true
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-      with:
-        path: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.failure_paths }}"
-        key: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.failure_key }}"
-    - if: "${{ failure() && !cancelled() && steps.citizenserve_ci_cloudflare__check__ci_cache_save_failure.outcome == 'success' }}"
-      continue-on-error: true
-      env:
-        GH_TOKEN: "${{ github.token }}"
-        CI_CACHE_TERMINAL_STATE: failure
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 12
-    - if: "${{ success() }}"
-      env:
-        CI_CACHE_TERMINAL_STATE: success
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 13
-    - if: "${{ success() }}"
-      name: 保存本次成功的CI增量缓存
-      id: citizenserve_ci_cloudflare__check__ci_cache_save_success
-      continue-on-error: true
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-      with:
-        path: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.success_paths }}"
-        key: "${{ steps.citizenserve_ci_cloudflare__check__ci_cache.outputs.success_key }}"
-    - if: "${{ success() && steps.citizenserve_ci_cloudflare__check__ci_cache_save_success.outcome == 'success' }}"
-      continue-on-error: true
-      env:
-        GH_TOKEN: "${{ github.token }}"
-        CI_CACHE_TERMINAL_STATE: success
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/ci/cloudflare/check/execute.mjs" workflow-step 14
+        PRODUCT_ARTIFACT_ID: "${{ steps.artifact.outputs.artifact-id }}"
+        PRODUCT_ARTIFACT_DIGEST: "${{ steps.artifact.outputs.artifact-digest }}"
+      run: |
+        require('node:child_process').execFileSync(process.execPath,
+          ['scripts/ci/cloudflare.mjs', 'verify-upload'], {stdio: 'inherit'});

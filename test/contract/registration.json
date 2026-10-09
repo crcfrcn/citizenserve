@@ -1,0 +1,14 @@
+{
+  "source": "已确认第1步七字段合同；只包含公开测试账户。",
+  "context": [
+    1,
+    "CitizenCidRegistration",
+    "citizenserve:fixture",
+    "https://registration.example.test",
+    "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "0x2afba9278e30ccf6a6ceb3a8b6e336b70068f045c666f2e7f4f9cc5f47db8972",
+    "CTZN"
+  ],
+  "utf8_bytes": 232,
+  "sha256": "0x3f41f857b7cdc569ac12579659aab7a5f319b716624bc9a4fcdbb33cfacf7d2b"
+}

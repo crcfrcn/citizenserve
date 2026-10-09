@@ -1,0 +1,12 @@
+{
+  "source": "公开合成供应商响应；不代表实际送达",
+  "responses": [
+    {"provider":"apns","status":200,"body":{},"expected":"accepted"},
+    {"provider":"apns","status":410,"body":{"reason":"Unregistered"},"expected":"invalid_endpoint"},
+    {"provider":"apns","status":400,"body":{"reason":"BadDeviceToken"},"expected":"invalid_endpoint"},
+    {"provider":"apns","status":400,"body":{"reason":"DeviceTokenNotForTopic"},"expected":"blocked"},
+    {"provider":"apns","status":429,"body":{},"expected":"retry"},
+    {"provider":"fcm","status":200,"body":{"name":"projects/test/messages/one"},"expected":"accepted"},
+    {"provider":"fcm","status":404,"body":{"error":{"details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}},"expected":"invalid_endpoint"}
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schema": "citizenserve.downloads.test.v1",
+  "key": "public-test-publish-secret-32-bytes!!",
+  "method": "PUT",
+  "path": "/api/downloads/citizenchain/macos/publication",
+  "time": "1000000",
+  "nonce": "abababababababababababababababab",
+  "body": "{\"expected_revision\":4,\"publication\":{\"version_tag\":\"citizenchain-macos-v1.2.3\",\"source_sha\":\"abababababababababababababababababababab\",\"asset_name\":\"citizenchain-node-macOS-v1.2.3.dmg\",\"asset_sha256\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\"}}",
+  "canonical": "PUT\n/api/downloads/citizenchain/macos/publication\n1000000\nabababababababababababababababab\ne3ae968ff5204c5c03a8d9a000b1a905f05faf4b04e3a6adc72b0683f7dee77f",
+  "signature": "9f00a05fad1cbf2b58d22aa62fe0acea5c984a08fdb15302c5c6d872d3f7bc4b",
+  "publication": {
+    "version_tag": "citizenchain-macos-v1.2.3",
+    "source_sha": "abababababababababababababababababababab",
+    "asset_name": "citizenchain-node-macOS-v1.2.3.dmg",
+    "asset_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  },
+  "release": {
+    "tag_name": "citizenchain-macos-v1.2.3",
+    "draft": false,
+    "prerelease": false,
+    "assets": [
+      {
+        "name": "citizenchain-node-macOS-v1.2.3.dmg",
+        "size": 100000,
+        "state": "uploaded",
+        "digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "browser_download_url": "https://github.com/crcfrcn/citizenchain/releases/download/citizenchain-macos-v1.2.3/citizenchain-node-macOS-v1.2.3.dmg"
+      }
+    ]
+  }
+}

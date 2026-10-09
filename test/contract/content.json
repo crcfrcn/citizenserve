@@ -1,0 +1,15 @@
+{
+  "source": "公开合成测试向量；SigV4由独立Python hashlib/hmac按规范产生，不含真实凭据",
+  "sigv4": {
+    "account": "f088b553d27d9c26b81f48f1924c3bbd",
+    "access": "TESTACCESS",
+    "secret": "TESTSECRET",
+    "stamp": "20261007T120000Z",
+    "now": 1791374400000,
+    "key": "square/CID1/posts/sqp_1/media/0/source.webp",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "byte_size": 34,
+    "signature": "a50f437814f3a37cd148d16cebe98c561ac55accccf6502f71f5866b13e10cc7",
+    "url": "https://f088b553d27d9c26b81f48f1924c3bbd.r2.cloudflarestorage.com/citizenserve-media/square/CID1/posts/sqp_1/media/0/source.webp?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=TESTACCESS%2F20261007%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261007T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=cache-control%3Bcontent-length%3Bcontent-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256%3Bx-amz-meta-media-index%3Bx-amz-meta-object-role%3Bx-amz-meta-sha256%3Bx-amz-meta-upload-id&X-Amz-Signature=a50f437814f3a37cd148d16cebe98c561ac55accccf6502f71f5866b13e10cc7"
+  }
+}

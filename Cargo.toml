@@ -1,0 +1,109 @@
+[workspace]
+members = [".", "server/cloudflare"]
+default-members = ["."]
+resolver = "2"
+
+[package]
+name = "citizenserve"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+prost = "=0.14.4"
+blake2 = "=0.10.6"
+ed25519-dalek = "=2.2.0"
+hmac = "=0.12.1"
+schnorrkel = "=0.11.5"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "raw_value"] }
+## 与现有digest/sha2栈兼容，只启用付款意图需要的ECDSA/Keccak。
+k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
+sha3 = "=0.10.9"
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
+url = "=2.5.8"
+parity-scale-codec = { version = "=3.7.5", features = ["derive"] }
+frame-metadata = { version = "=23.0.1", features = ["current", "decode"] }
+scale-info = "=2.11.6"
+scale-value = "=0.18.1"
+twox-hash = "=1.6.3"
+
+[[test]]
+name = "contracts"
+path = "test/contracts.rs"
+[[test]]
+name = "identity_contract"
+path = "test/identity_contract.rs"
+[[test]]
+name = "activation_contract"
+path = "test/activation_contract.rs"
+[[test]]
+name = "route_contract"
+path = "test/route_contract.rs"
+
+[[test]]
+name = "profiles_contract"
+path = "test/profiles_contract.rs"
+[[test]]
+name = "contacts_contract"
+path = "test/contacts_contract.rs"
+[[test]]
+name = "square_contract"
+path = "test/square_contract.rs"
+
+[[test]]
+name = "membership_contract"
+path = "test/membership_contract.rs"
+[[test]]
+name = "uploads_contract"
+path = "test/uploads_contract.rs"
+[[test]]
+name = "posts_contract"
+path = "test/posts_contract.rs"
+[[test]]
+name = "media_contract"
+path = "test/media_contract.rs"
+
+[[test]]
+name = "topup_contract"
+path = "test/topup_contract.rs"
+[[test]]
+name = "settlement_contract"
+path = "test/settlement_contract.rs"
+[[test]]
+name = "chain_services_contract"
+path = "test/chain_services_contract.rs"
+[[test]]
+name = "ethereum_rpc_contract"
+path = "test/ethereum_rpc_contract.rs"
+[[test]]
+name = "downloads_contract"
+path = "test/downloads_contract.rs"
+
+[[test]]
+name = "notifications_contract"
+path = "test/notifications_contract.rs"
+[[test]]
+name = "maintenance_contract"
+path = "test/maintenance_contract.rs"
+[[test]]
+name = "tatachat_contract"
+path = "test/tatachat_contract.rs"
+
+[build-dependencies]
+# 仅使用已锁定的SDK协议及显式供给的protoc，不查PATH或下载。
+prost-build = "=0.14.4"
+sha2 = "=0.10.9"
+serde_json = "=1.0.151"
+
+[profile.release]
+lto = true
+codegen-units = 1
+# wasm-bindgen catch包装器依赖externref表，不能对WASM执行strip。
+strip = false

@@ -1,0 +1,12 @@
+{
+  "description": "公民宿主公开授权合同；无签发私钥、MLS私钥或可用于生产的凭证",
+  "audience": "citizenserve.tatachat",
+  "purpose": "tatachat_access",
+  "header": {"alg": "EdDSA", "typ": "JWT", "kid": "local-test-1"},
+  "maximum_permission_millis": 900000,
+  "maximum_recheck_millis": 60000,
+  "attachment_limits": [10485760, 104857600, 5368709120],
+  "access_path": "/api/tatachat/access",
+  "realtime_path": "/api/tatachat/realtime",
+  "body": {}
+}

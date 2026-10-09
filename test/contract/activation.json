@@ -1,0 +1,10 @@
+{
+  "source":"仅用于合成协议/SQL测试；不表示真实链、Cloudflare结果或有效生产设备",
+  "registration_scope":"citizenserve:fixture",
+  "service_origin":"https://registration.example.test",
+  "chain_scope":"0x0000000000000000000000000000000000000000000000000000000000000000",
+  "enrollment_id":"00000000-0000-4000-8000-000000000001",
+  "public_key":"0xabababababababababababababababababababababababababababababababab",
+  "issued_at":900000,"human_verified_at_millis":999999,
+  "device_target":"/api/user/devices","session_target":"/api/user/sessions"
+}

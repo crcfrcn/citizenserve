@@ -1,0 +1,29 @@
+{
+  "source": "公开合成浏览合同",
+  "default_limit": 20,
+  "max_limit": 50,
+  "daily_limit": 100,
+  "days": [
+    [
+      0,
+      "1970-01-01"
+    ],
+    [
+      1709164800000,
+      "2024-02-29"
+    ],
+    [
+      1791331200000,
+      "2026-10-07"
+    ]
+  ],
+  "query_invalid": [
+    "limit=0",
+    "limit=51",
+    "limit=01",
+    "limit=20&limit=21",
+    "limit=2&unused=1",
+    "%6cimit=2",
+    "cursor=-1"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "source": "按已核实TataChatSDK native/src/mls.rs authentication_content及RFC9420 SignContent，用独立Python编码器产生的公开协议字节；不表示有效签名或设备授权。",
+  "proof": {
+    "user_id": "CN220-CTZN2-198805201-2026",
+    "device_id": "abababababababababababababababababababababababababababababababab",
+    "public_key": "0xabababababababababababababababababababababababababababababababab",
+    "account_id": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "binding_revision": 3,
+    "service_origin": "https://registration.example.test",
+    "challenge": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "expires_at_millis": 1200000,
+    "method": "POST",
+    "request_target": "/api/user/devices",
+    "body_sha256": "0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "signature": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "message_hex": "1e4d4c5320312e3020546174614368617441757468656e7469636174696f6e40e41a434e3232302d43545a4e322d3139383830353230312d32303236ababababababababababababababababababababababababababababababababcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd00000000000000032168747470733a2f2f726567697374726174696f6e2e6578616d706c652e7465737477777777777777777777777777777777777777777777777777777777777777770000000000124f8004504f5354112f6170692f757365722f6465766963657344136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "message_sha256": "37e866433f5d4ae68c8a8002dd4d266f0f7a34a0649cfc1f4117e261bafffcf5"
+}

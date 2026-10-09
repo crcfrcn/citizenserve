@@ -1,0 +1,93 @@
+# 当前重建基线配置，不代表整个CitizenServe已经恢复或可上线替换。
+name = "citizenserve"
+main = "../../target/cloudflare/worker/index.js"
+compatibility_date = "2026-10-07"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }, { pattern = "nrcrpc.crcfrcn.com/*", zone_name = "crcfrcn.com" }]
+
+[secrets]
+required = ["HASH_KEY", "TURNSTILE_SECRET", "CHAIN_ID", "CHAIN_SECRET", "R2_KEY", "R2_SECRET", "PURGE", "TOPUP_INTENT_SECRET", "SETTLE_TOKEN", "CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET", "APNS_KEY", "FCM_KEY", "TATACHAT_AUTH_KEY"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "citizenserve"
+database_id = "e7e7a15f-fd28-4553-9723-30ced7199b8e"
+
+[[ratelimits]]
+name = "RATE_AUTH"
+namespace_id = "896401"
+[ratelimits.simple]
+limit = 10
+period = 60
+
+[triggers]
+crons = ["*/5 * * * *", "4 3 * * *"]
+
+[vars]
+WEB_ORIGIN = "https://www.crcfrcn.com"
+REGISTRATION_SCOPE = "citizenserve:production"
+# 真实签发key_id由环境提供，不猜填；缺配置令许可接口明确失败。
+TATACHAT_AUTH_KID = ""
+TATACHAT_QUEUE_NAME = "citizenserve-tatachat"
+TURNSTILE_SITEKEY = "0x4AAAAAAD0GQRiB2O3a0DYJ"
+CHAIN_GENESIS_HASH = "0x18847a5dfd263272f2e7727836fe6582f8c4463ff48609df7b96d5e4d9dd24dd"
+
+CHAIN_STATE_ROOT = "0x1f74a2ca094fc3ebb2143f504d807a6b4f4f9b0a3d13ac808ae84efc7cb12111"
+# 未核实当前线上节点/bootnodes，不猜填；RELAY_ENABLED显式关闭。
+RELAY_ENABLED = "0"
+CHAIN_BOOTNODES = ""
+TOPUP_BASE_RPC_URL = "https://mainnet.base.org"
+TOPUP_MIN_CONFIRMATIONS = "0"
+TOPUP_BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+TOPUP_BASE_USDT = "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"
+TOPUP_RECV_ADDRESS = "0x5ce9b56b9d1812a7cf29841e21756f09ca7d223b"
+TOPUP_DISBURSE_ACCOUNT_ID = "0x36d00d0a9701b6e860c51476ce2d7ac5f3b35b6ff067b81d958afa1b0551c303"
+
+CF_ACCOUNT_ID = "f088b553d27d9c26b81f48f1924c3bbd"
+SQUARE_PUBLIC_MEDIA_BASE_URL = "https://media.crcfrcn.com"
+# ZONE_ID由正式装配提供crcfrcn.com真实zone标识；未核实前不填写猜测值。
+
+[[r2_buckets]]
+binding = "SQUARE_PRIVATE"
+bucket_name = "citizenserve-private"
+
+[[r2_buckets]]
+binding = "SQUARE_PUBLIC_MEDIA"
+bucket_name = "citizenserve-media"
+
+[[ratelimits]]
+name = "RATE_READ"
+namespace_id = "896403"
+[ratelimits.simple]
+limit = 120
+period = 60
+
+[[ratelimits]]
+name = "RATE_WRITE"
+namespace_id = "896402"
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[d1_databases]]
+binding = "CITIZENCHAIN_DOWNLOAD_DB"
+database_name = "citizenweb-download"
+database_id = "fa70d613-ff33-43d3-aecd-84f1baef3918"
+
+[[kv_namespaces]]
+binding = "SQUARE_CACHE"
+id = "d632942d82c94e45ab4058fa69268ce1"
+
+# 推送公开标识由实际产品配置提供，不猜填；缺配置阻塞对应任务而不删端点。
+[[queues.producers]]
+binding = "NOTIFY"
+queue = "citizenserve"
+
+[[queues.consumers]]
+queue = "citizenserve"
+max_batch_size = 1
+max_retries = 3
+
+# 聊天四绑定由模块资源入口取得真实D1 ID后输出到任务工作根；最终装配另审完整差异。
+# 不填虚构D1 ID；四绑定缺失时聊天数据入口明确返回503。

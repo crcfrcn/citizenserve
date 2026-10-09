@@ -1,0 +1,22 @@
+{
+  "source": "与当前CitizenChain SquarePost的语义合同一致，metadata索引在测试中故意重排",
+  "cid": "CN220-CTZN2-198805201-2026",
+  "started_at": 900000,
+  "last_charged_at": 1000000,
+  "paid_until": 2000000,
+  "prices": [
+    199900,
+    599900,
+    5999900
+  ],
+  "safe_integer_max": 9007199254740991,
+  "active_statuses": [
+    "active",
+    "cancelled"
+  ],
+  "inactive_statuses": [
+    "terminated",
+    "suspended",
+    "issuerPaused"
+  ]
+}

@@ -1,6 +1,5 @@
-# citizenserve.cloudflare.release 的独立 GitHub 工作流。
+# CitizenServe Cloudflare release；Workflow只交付Runner和受控能力，实际步骤归产品入口。
 name: citizenserve.cloudflare.release
-# 远端标题只展示产品、平台、流程；内部 pipeline 仍承担唯一机器身份。
 run-name: "${{ inputs.run_title }}"
 'on':
   workflow_dispatch:
@@ -40,126 +39,41 @@ concurrency:
   cancel-in-progress: false
 jobs:
   flow:
-    name: 后端代码、D1 与 Cloudflare 资源检查
+    name: 公民服务端 · Cloudflare · Release
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
+      contents: write
       actions: write
       attestations: write
-      contents: write
       id-token: write
     env:
-      CI: true
-      WRANGLER_SEND_METRICS: false
-      CARGO_TERM_COLOR: always
-      RUST_BACKTRACE: '1'
-      CARGO_INCREMENTAL: '0'
       GH_TOKEN: "${{ github.token }}"
-      GMB_SOURCE_SHA: "${{ inputs.source_sha }}"
-      GMB_CI_RUN_ID: "${{ inputs.ci_run_id }}"
-      GMB_VERSION_TAG: "${{ inputs.version_tag }}"
-      GMB_SOFTWARE_VERSION: "${{ inputs.software_version }}"
-      GMB_SPEC_VERSION: "${{ inputs.spec_version }}"
-      GMB_CHAIN_SPEC_VERSION: "${{ inputs.chain_spec_version }}"
-      GMB_CHAIN_GENESIS_HASH: "${{ inputs.genesis_hash }}"
-      GMB_CHAIN_FINALIZED_HEAD: "${{ inputs.finalized_head }}"
-      SOURCE_SHA: "${{ inputs.source_sha }}"
-      CI_RUN_ID: "${{ inputs.ci_run_id }}"
-      VERSION_TAG: "${{ inputs.version_tag }}"
-      SOFTWARE_VERSION: "${{ inputs.software_version }}"
-      SPEC_VERSION: "${{ inputs.spec_version }}"
-      CHAIN_SPEC_VERSION: "${{ inputs.chain_spec_version }}"
-      GENESIS_HASH: "${{ inputs.genesis_hash }}"
-      FINALIZED_HEAD: "${{ inputs.finalized_head }}"
     steps:
-    - shell: bash
-      env:
-        PIPELINE: "${{ inputs.pipeline }}"
-        RUN_TITLE: "${{ inputs.run_title }}"
-        SOURCE_SHA: "${{ inputs.source_sha }}"
-        CI_RUN_ID: "${{ inputs.ci_run_id }}"
-        VERSION_TAG: "${{ inputs.version_tag }}"
-        SOFTWARE_VERSION: "${{ inputs.software_version }}"
-        SPEC_VERSION: "${{ inputs.spec_version }}"
-        CHAIN_SPEC_VERSION: "${{ inputs.chain_spec_version }}"
-        GENESIS_HASH: "${{ inputs.genesis_hash }}"
-        FINALIZED_HEAD: "${{ inputs.finalized_head }}"
-      run: |-
-        node --input-type=module <<'NODE'
-        const e=process.env,allowed=new Set(["citizenserve.cloudflare.release"]);
-        if(!allowed.has(e.PIPELINE||''))throw Error('产品流程身份无效');
-        if(e.RUN_TITLE!=="公民服务端 · Cloudflare · Release")throw Error('产品平台流程展示标题无效');
-        if(!/^[0-9a-f]{40}$/.test(e.SOURCE_SHA||'')||!/^[1-9][0-9]*$/.test(e.CI_RUN_ID||'')||!e.VERSION_TAG)throw Error('Release来源输入无效');
-        if(!e.SOFTWARE_VERSION||[e.SPEC_VERSION,e.CHAIN_SPEC_VERSION,e.GENESIS_HASH,e.FINALIZED_HEAD].some(Boolean))throw Error('软件Release输入无效');
-        NODE
     - name: 检出准确产品源码
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       with:
-        ref: "${{ inputs.source_sha }}"
+        ref: "${{ github.sha }}"
         fetch-depth: 0
         persist-credentials: false
     - name: 装载准确Node.js
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
       with:
         node-version: 25.2.1
-    - name: 准备并验真本流程正式测试Shell
+    - name: 执行产品正式候选准备
       shell: node {0}
       run: |
-        const child = require("node:child_process");
-        child.execFileSync(process.execPath, ["scripts/release/cloudflare/check/execute.mjs", "prepare-test-shell"], {stdio:"inherit"});
-    - env:
-        GH_TOKEN: "${{ github.token }}"
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 0
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 1
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 2
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 3
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 4
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 5
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 6
-    - working-directory: .
-      shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 7
-    - shell: bash
-      run: node "$GITHUB_WORKSPACE/scripts/release/cloudflare/check/execute.mjs" workflow-step 8
-    - name: 签署公民服务端正式归档来源
+        require('node:child_process').execFileSync(process.execPath,
+          ['scripts/release/cloudflare.mjs', 'prepare'], {stdio: 'inherit'});
+    - name: 签署三个正式资产的来源证明
       uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
       with:
-        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-release.tgz"
-    - name: 签署公民服务端正式清单来源
-      uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
-      with:
-        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json"
-    - name: 签署公民服务端校验清单来源
-      uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
-      with:
-        subject-path: "${{ github.workspace }}/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS"
-    - name: 验真三个正式资产的构建证明
-      shell: bash
-      run: |-
-        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-release.tgz" --repo "$GITHUB_REPOSITORY"
-        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json" --repo "$GITHUB_REPOSITORY"
-        gh attestation verify "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS" --repo "$GITHUB_REPOSITORY"
-    - name: 固化正式 Release
-      shell: bash
-      run: |-
-        node "$GITHUB_WORKSPACE/scripts/release/cloudflare/index.mjs" github-release \
-          --tag "$GMB_VERSION_TAG" \
-          --source-sha "$GMB_SOURCE_SHA" \
-          --title "公民服务端 · Cloudflare · Release" \
-          --notes "公民服务端 Cloudflare 版本 $GMB_SOFTWARE_VERSION。" \
-          --latest false \
-          --assets "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-release.tgz" \
-            "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/release-manifest.json" \
-            "$GITHUB_WORKSPACE/target/cloudflare/release/citizenserve-cloudflare-candidate/SHA256SUMS"
+        subject-path: |
+          ${{ github.workspace }}/target/build/citizenserve-cloudflare-release.tgz
+          ${{ github.workspace }}/target/build/release-manifest.json
+          ${{ github.workspace }}/target/build/SHA256SUMS
+    - name: 密码学验真、正式发布与逐资产回读
+      shell: node {0}
+      run: |
+        require('node:child_process').execFileSync(process.execPath,
+          ['scripts/release/cloudflare.mjs', 'publish'], {stdio: 'inherit'});

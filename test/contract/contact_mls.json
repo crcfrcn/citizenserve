@@ -1,0 +1,16 @@
+{
+  "source": "公开合成向量；wire不是生产MLS密文，不含真实秘密",
+  "caller": "abababababababababababababababababababababababababababababababab",
+  "other": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "inactive": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "group_id": "12121212121212121212121212121212",
+  "operation_id": "34343434343434343434343434343434",
+  "wire": "01020304",
+  "create_members": [
+    "abababababababababababababababababababababababababababababababab"
+  ],
+  "add_members": [
+    "abababababababababababababababababababababababababababababababab",
+    "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+  ]
+}

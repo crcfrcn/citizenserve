@@ -6,17 +6,19 @@
     "citizenserve.cloudflare.release"
   ],
   "node_tests": [
-    "scripts/ci/cloudflare/check/test.mjs",
-    "scripts/release/cloudflare/check/test.mjs",
-    "test/chain_source.test.mjs"
+    "scripts/resources.test.mjs",
+    "scripts/tatachat/resources.test.mjs",
+    "scripts/ci/cloudflare.test.mjs",
+    "scripts/release/cloudflare.test.mjs"
   ],
   "checks": [
-    "repository-contracts"
+    "repository-contracts",
+    "product-full"
   ],
   "tools": {
     "node": "25.2.1",
     "actionlint": "1.7.12",
-    "rust": null
+    "rust": "1.97.1"
   },
   "platform_forbidden_values": [
     "macOS ARM64",
