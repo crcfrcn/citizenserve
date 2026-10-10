@@ -10,6 +10,13 @@ import {testKeys,verifyJwt} from './push_crypto.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=JSON.parse(await readFile(new URL('../contract/maintenance.json',import.meta.url)));
 const registration=JSON.parse(await readFile(new URL('../contract/activation.json',import.meta.url)));
+const networkRequests=JSON.parse(await readFile(new URL('../contract/ethereum_rpc.json',import.meta.url))).requests;
+const networkMethods=new Set(networkRequests.map(request=>request.method));
+const receivedRpc=[];
+// 静态上游为闭合合成夹具，只证明Rust Worker传输合同，不冒充正式安装页或TLS验收。
+const networkHTML='<html><body>MetaMask 静态交付夹具</body></html>';
+const networkPNG=Buffer.from('89504e470d0a1a0a0000000049454e44ae426082','hex');
+let networkAssetMode='normal';
 const keys=testKeys();const mls=generateKeyPairSync('ed25519');const publicKey='0x'+mls.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('hex');const device=publicKey.slice(2);
 const token='sqs_'+'12'.repeat(16);const digest=b=>createHash('sha256').update(b).digest('hex');const tokenHash=digest(token);
 let mf,db,worker,privateBucket,publicBucket,chatDB,chatBucket;
@@ -40,9 +47,34 @@ async function first(query,...params){return db.prepare(query).bind(...params).f
 async function outbound(req){
  const url=new URL(req.url);seen.push({url:req.url,method:req.method});
  if(url.origin==='https://chain.example.test'){
+  if(req.method==='GET'){
+   const mode=networkAssetMode;
+   assert.ok(url.pathname==='/'||url.pathname==='/icons/gmb.png');
+   assert.equal(url.search,'');
+   assert.equal(req.headers.get('CF-Access-Client-Id'),'offline-test');
+   assert.equal(req.headers.get('CF-Access-Client-Secret'),'offline-test');
+   assert.equal(req.headers.get('authorization'),null);assert.equal(req.headers.get('cookie'),null);
+   const type=url.pathname==='/'?'text/html; charset=utf-8':'image/png';
+   const headers={'content-type':type,'set-cookie':'synthetic-upstream-cookie','x-upstream-only':'synthetic',
+    'CF-Access-Client-Id':'synthetic-upstream-id','CF-Access-Client-Secret':'synthetic-upstream-secret'};
+   if(mode==='redirect')return new Response(null,{status:302,headers:{...headers,location:'https://forbidden.example/resource'}});
+   if(mode==='missing')return new Response('synthetic-upstream-error',{status:404,headers});
+   if(mode==='type')headers['content-type']='application/json';
+   if(mode==='no-type'){delete headers['content-type'];return new Response(Uint8Array.of(60,62),{headers});}
+   if(mode==='utf8')return new Response(Uint8Array.of(255),{headers});
+   if(mode==='headers-timeout')await new Promise(resolve=>setTimeout(resolve,5000));
+   if(mode==='body-timeout'){
+    let timer;return new Response(new ReadableStream({start(controller){controller.enqueue(Uint8Array.of(60));timer=setTimeout(()=>controller.close(),5000);},cancel(){clearTimeout(timer);}}),{headers});
+   }
+   if(mode==='oversize'){
+    return new Response(new ReadableStream({start(controller){controller.enqueue(new Uint8Array(65536).fill(32));controller.enqueue(new Uint8Array(65536).fill(32));controller.enqueue(Uint8Array.of(32));controller.close();}}),{headers});
+   }
+   if(mode==='limit')return new Response(new Uint8Array(128*1024).fill(32),{headers});
+   return new Response(url.pathname==='/'?networkHTML:networkPNG,{headers});
+  }
   if(unknownChain)return new Response('{}',{status:503});
   if(slowChain>0){const round=slowChain--;if(round===4)firstLeaseExpiry=(await first("SELECT lease_expires_at FROM notification_deliveries WHERE state='leased' ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;await new Promise(resolve=>setTimeout(resolve,8000));if(round===1)renewedLeaseExpiry=(await first("SELECT lease_expires_at FROM notification_deliveries WHERE state='leased' ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;}
-  const {method,params,id:rid}=await req.json();let result;
+  const {method,params,id:rid}=await req.json();receivedRpc.push(method);let result;
   if(method==='chain_getFinalizedHead')result=fixture.head;
   else if(method==='chain_getBlockHash')result=params[0]===0?fixture.genesis:h(Number(params[0]));
   else if(method==='chain_getHeader'){const n=parseInt(params[0]?.slice(2,4)||'09',16);result={number:'0x'+n.toString(16),parentHash:h(Math.max(0,n-1)),stateRoot:h(1),extrinsicsRoot:h(2),digest:{logs:[]}};}
@@ -51,7 +83,8 @@ async function outbound(req){
    result=fixture.storage[params[0]]??null;
    if(params[0]===fixture.timestamp_key){const b=Buffer.alloc(8);b.writeBigUInt64LE(BigInt(anchorTime));result='0x'+b.toString('hex');}
 
-  }else throw new Error('unexpected RPC '+method);
+  }else if(networkMethods.has(method))result=method==='eth_chainId'?'0x7eb':method==='net_version'?'2027':null;
+  else throw new Error('unexpected RPC '+method);
   return Response.json({jsonrpc:'2.0',id:rid,result});
  }
  if(url.hostname==='api.sandbox.push.apple.com'||url.hostname==='api.push.apple.com'){
@@ -70,11 +103,11 @@ async function outbound(req){
  }
  throw new Error('Forbidden external request '+req.url);
 }
-export async function startWorker(extraBindings={}){
+export async function startWorker(extraBindings={},readLimit=1000){
  anchorTime=Date.now();
- mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:root+'/target/build/worker/index.js'},{type:'CompiledWasm',path:root+'/target/build/worker/index_bg.wasm'}],modulesRoot:root+'/target/build/worker',compatibilityDate:'2026-10-07',
- bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CHAIN_ID:'offline-test',CHAIN_SECRET:'offline-test',HASH_KEY:'offline-test',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
- d1Databases:['DB','CITIZENCHAIN_DOWNLOAD_DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:1000,period:60}}])),outboundService:outbound}]}));
+ mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:root+'/target/build/cloudflare/worker/index.js'},{type:'CompiledWasm',path:root+'/target/build/cloudflare/worker/index_bg.wasm'}],modulesRoot:root+'/target/build/worker',compatibilityDate:'2026-10-07',
+ bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CHAIN_ID:'offline-test',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
+ d1Databases:['DB','CITIZENCHAIN_DOWNLOAD_DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:n==='RATE_READ'?readLimit:1000,period:60}}])),outboundService:outbound}]}));
  db=await mf.getD1Database('DB');worker=await mf.getWorker();privateBucket=await mf.getR2Bucket('SQUARE_PRIVATE');publicBucket=await mf.getR2Bucket('SQUARE_PUBLIC_MEDIA');
  chatBucket=await mf.getR2Bucket('TATACHAT_ATTACHMENTS');chatDB=await mf.getD1Database('TATACHAT_DB');const chatSchema=JSON.parse(execFileSync(process.env.PYTHON,['-c',String.raw`
 import sys,sqlite3,json
@@ -122,9 +155,86 @@ async function notification(n=1){
  await sql("INSERT INTO notification_jobs(job_id,source_kind,source_key,cid_number,post_id,tx_hash,created_at,expires_at,updated_at) VALUES(?,'post',?,?,?,?,?,?,?)",j,'worker-post:'+n,fixture.cid,'sqp_'+n,tx,now,now+86400000,now);
  const result=await enqueue('fanout',j);assert.equal((await first('SELECT state FROM notification_jobs WHERE job_id=?',j)).state,'done',JSON.stringify(result));const d=await first('SELECT delivery_id FROM notification_deliveries WHERE job_id=?',j);assert.ok(d);return d.delivery_id;
 }
-// 被其他功能smoke导入时只复用夹具，不再次登记本文件的11项测试。
+// 被其他功能smoke导入时只复用夹具，不再次登记本文件的测试。
 if(import.meta.url===pathToFileURL(process.argv[1]).href){
 before(()=>startWorker());after(()=>stopWorker());
+// 直接调用真实ESM/WASM入口；上游只允许受保护的两个固定资源及现有RPC。
+const networkFetch=(path='/',method='GET',body,headers={})=>mf.dispatchFetch('https://nrcrpc.crcfrcn.com'+path,
+ {method,headers:{'cf-connecting-ip':'192.0.2.123',...(body===undefined?{}:{'content-type':'application/json','content-length':String(Buffer.byteLength(body))}),...headers},...(body===undefined?{}:{body})});
+test('公共网络交付HTML和PNG字节，HEAD核验相同资源且不透传上游头',async()=>{
+ for(const [path,expected,type] of [['/',Buffer.from(networkHTML),'text/html; charset=utf-8'],['/icons/gmb.png',networkPNG,'image/png']]){
+  for(const method of ['GET','HEAD']){
+   const before=seen.length,r=await networkFetch(path,method,undefined,{authorization:'synthetic-client-auth',cookie:'synthetic-client-cookie'});
+   assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),type);assert.equal(r.headers.get('cache-control'),'no-store');
+   assert.equal(r.headers.get('access-control-allow-origin'),'*');assert.equal(r.headers.get('x-content-type-options'),'nosniff');
+   for(const name of ['set-cookie','x-upstream-only','CF-Access-Client-Id','CF-Access-Client-Secret'])assert.equal(r.headers.get(name),null);
+   assert.deepEqual(Buffer.from(await r.arrayBuffer()),method==='HEAD'?Buffer.alloc(0):expected);
+   assert.deepEqual(seen.slice(before),[{url:'https://chain.example.test'+path,method:'GET'}]);
+  }
+ }
+});
+test('静态源取CHAIN_URL的origin，不继承RPC路径或查询',async()=>{
+ await stopWorker();try{await startWorker({CHAIN_URL:'https://chain.example.test/protected/rpc?scope=fixture'});
+  const before=seen.length,r=await networkFetch('/icons/gmb.png');assert.equal(r.status,200);await r.arrayBuffer();
+  assert.deepEqual(seen.slice(before),[{url:'https://chain.example.test/icons/gmb.png',method:'GET'}]);
+ }finally{await stopWorker();await startWorker();}
+});
+test('公共网络拒绝旧图标路径、未知路径、查询和错误方法且不访问上游',async()=>{
+ for(const [path,method,status] of [['/crates/icons/gmb.png','GET',404],['/install.html','GET',404],['/icons/other.png','GET',404],
+  ['/?url=https://forbidden.example/','GET',404],['/icons/gmb.png?v=1','GET',404],['/icons/gmb.png','POST',405],['/icons/gmb.png','OPTIONS',405],['/','PUT',405]]){
+  const before=seen.length,r=await networkFetch(path,method);assert.equal(r.status,status);await r.arrayBuffer();assert.equal(seen.length,before);
+ }
+ const before=seen.length,r=await mf.dispatchFetch('http://nrcrpc.crcfrcn.com/');assert.equal(r.status,404);await r.arrayBuffer();assert.equal(seen.length,before);
+});
+test('静态错误媒体类型、缺媒体类型、非法UTF8、缺资源和重定向均封闭拒绝，HEAD失败无正文',async t=>{
+ t.after(()=>{networkAssetMode='normal';});
+ for(const mode of ['type','no-type','utf8','missing','redirect'])for(const method of ['GET','HEAD']){
+  networkAssetMode=mode;const r=await networkFetch('/',method);assert.equal(r.status,503);
+  const body=await r.text();if(method==='HEAD')assert.equal(body,'');else assert.doesNotMatch(body,/synthetic-upstream|forbidden\.example/);
+  for(const name of ['set-cookie','location','CF-Access-Client-Secret'])assert.equal(r.headers.get(name),null);
+ }
+});
+test('静态正文128KiB边界按真实流字节核验，超限的GET和HEAD均拒绝',async t=>{
+ t.after(()=>{networkAssetMode='normal';});networkAssetMode='limit';
+ const accepted=await networkFetch('/');assert.equal(accepted.status,200);assert.equal((await accepted.arrayBuffer()).byteLength,128*1024);
+ networkAssetMode='oversize';for(const method of ['GET','HEAD']){const r=await networkFetch('/',method);assert.equal(r.status,503);if(method==='HEAD')assert.equal(await r.text(),'');else await r.text();}
+});
+test('静态3秒总超时覆盖响应头和正文读取', {timeout:20000},async t=>{
+ t.after(()=>{networkAssetMode='normal';});
+ for(const mode of ['headers-timeout','body-timeout']){
+  networkAssetMode=mode;const start=performance.now(),r=await networkFetch('/');assert.equal(r.status,503);await r.text();
+  const elapsed=performance.now()-start;assert.ok(elapsed>=2500&&elapsed<4500,'静态读取必须受同一3秒总截止时间限制');
+ }
+});
+test('静态缺少Access配置失败，不向上游发请求',async()=>{
+ for(const bindings of [{CHAIN_URL:''},{CHAIN_ID:''},{CHAIN_SECRET:''}]){
+  await stopWorker();try{await startWorker(bindings);const before=seen.length,r=await networkFetch('/');assert.equal(r.status,503);await r.text();assert.equal(seen.length,before);
+  }finally{await stopWorker();await startWorker();}
+ }
+});
+test('静态GET和HEAD共用现有RATE_READ，拒绝后不访问上游',async()=>{
+ await stopWorker();try{await startWorker({},1);const first=await networkFetch('/');assert.equal(first.status,200);await first.text();
+  const before=seen.length,r=await networkFetch('/icons/gmb.png','HEAD');assert.equal(r.status,429);assert.equal(r.headers.get('retry-after'),'60');assert.equal(await r.text(),'');assert.equal(seen.length,before);
+ }finally{await stopWorker();await startWorker();}
+});
+test('新增静态分流保留公共26方法RPC、批量拒绝和原App独立CORS',async()=>{
+ assert.equal(networkRequests.length,26);
+ for(const request of networkRequests){const r=await networkFetch('/','POST',JSON.stringify(request),{origin:registration.service_origin});
+  assert.equal(r.status,200);assert.equal(r.headers.get('access-control-allow-origin'),'*');const v=await r.json();assert.equal(v.id,request.id);assert.ok(Object.hasOwn(v,'result'));
+ }
+ const callsBefore=receivedRpc.length;
+ const denied=await networkFetch('/','POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'author_submitExtrinsic',params:['0x00']}));
+ assert.equal(denied.status,200);assert.equal((await denied.json()).error.code,-32601);
+ assert.ok(!receivedRpc.slice(callsBefore).includes('author_submitExtrinsic'));
+ for(const value of [
+  [{jsonrpc:'2.0',id:1,method:'eth_chainId',params:[]},{jsonrpc:'2.0',id:1,method:'eth_chainId',params:[]}],
+  {jsonrpc:'2.0',method:'eth_chainId',params:[]}]){
+  const before=seen.length,r=await networkFetch('/','POST',JSON.stringify(value));assert.equal(r.status,200);const reply=await r.json();assert.ok(reply.error||reply[0]?.error);assert.equal(seen.length,before);
+ }
+ const options=await networkFetch('/','OPTIONS');assert.equal(options.status,204);assert.equal(options.headers.get('access-control-allow-methods'),'POST,OPTIONS');assert.equal(await options.text(),'');
+ const app=await fetch('/api/health','GET','',{origin:registration.service_origin});assert.equal(app.headers.get('access-control-allow-origin'),registration.service_origin);await app.text();
+ const other=await fetch('/api/health','GET','',{origin:'https://other.example'});assert.equal(other.headers.get('access-control-allow-origin'),null);await other.text();
+});
 test('actual Worker fetch and exact endpoint MLS guard',async()=>{
  const r=await fetch('/api/health');assert.equal(r.status,200);assert.equal((await r.json()).account_services_ready,false);
  const input=JSON.stringify({push_provider:'apns',push_token:'ab'.repeat(32),apns_environment:'sandbox',expires_at:Date.now()+86400000});const noSession=await fetch('/api/notifications/endpoint','PUT',input);assert.equal(noSession.status,401,await noSession.text());const noProof=await fetch('/api/notifications/endpoint','PUT',input,{authorization:'Bearer '+token});assert.equal(noProof.status,401);
@@ -218,8 +328,11 @@ test('durable deletion removes cloud content in bounded batches, holds unknown c
  async function advance(){
   // 合成时钟推进通过已知未开始对象IO的租约到期，不解除未知IO屏障。
   await sql("UPDATE account_deletions SET lease_until=0 WHERE state='pending' AND io_started=0");
-  const task=id('maintenance',['deletion',String(sequence++)]);
-  await sql("INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) VALUES(?,'storage',?,?)",task,Date.now(),Date.now());
+  // 同类维护只允许一个活动任务；续用已提交的进度，只推进pending任务的重试时钟。
+  const pending=await first("SELECT job_id,state FROM maintenance_jobs WHERE work_kind='storage' AND artifact_owner IS NULL AND state IN ('pending','leased')");
+  let task;
+  if(pending){assert.equal(pending.state,'pending');task=pending.job_id;await sql("UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=? AND state='pending'",task);}
+  else{task=id('maintenance',['deletion',String(sequence++)]);await sql("INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) VALUES(?,'storage',?,?)",task,Date.now(),Date.now());}
   await enqueue('maintenance',task);
  }
  for(let n=0;n<10;n++){await advance();if((await first('SELECT phase FROM account_deletions')).phase===2)break;}

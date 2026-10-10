@@ -1,6 +1,6 @@
 # 当前重建基线配置，不代表整个CitizenServe已经恢复或可上线替换。
 name = "citizenserve"
-main = "../../target/build/worker/index.js"
+main = "../../target/build/cloudflare/worker/index.js"
 compatibility_date = "2026-10-07"
 workers_dev = false
 preview_urls = false

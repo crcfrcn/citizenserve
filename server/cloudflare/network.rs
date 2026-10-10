@@ -106,7 +106,59 @@ impl PaymentRpc for Base {
         })
     }
 }
-pub async fn rpc(request: &mut worker::Request, env: &Env) -> Result<worker::Response> {
+/// 同一公共域分流页面、指定图标和RPC；静态路径不放宽原RPC根路径合同。
+pub async fn handle(request: &mut worker::Request, env: &Env) -> Result<worker::Response> {
+    let u = request
+        .url()
+        .map_err(|_| Error::new(400, "rpc_host_invalid"))?;
+    if u.scheme() != "https"
+        || u.origin().ascii_serialization() != "https://nrcrpc.crcfrcn.com"
+        || u.query().is_some()
+        || u.fragment().is_some()
+        || !u.username().is_empty()
+        || u.password().is_some()
+    {
+        return Err(Error::new(404, "rpc_route_not_found"));
+    }
+    use super::chain::NetworkAsset;
+    let asset = match u.path() {
+        "/" => NetworkAsset::Install,
+        "/icons/gmb.png" => NetworkAsset::Icon,
+        _ => return Err(Error::new(404, "rpc_route_not_found")),
+    };
+    if matches!(request.method(), Method::Get | Method::Head) {
+        super::external_rate(request, env, "RATE_READ").await?;
+        // HEAD同样读取并核验完整资源，随后丢弃正文，避免漏验大小或媒体类型。
+        let bytes = super::chain::Chain::configured(env)?
+            .network_asset(asset)
+            .await?;
+        let mut response = if request.method() == Method::Head {
+            worker::Response::empty()
+        } else {
+            worker::Response::from_bytes(bytes)
+        }
+        .map_err(|_| Error::new(503, "chain_resource_unavailable"))?;
+        let content_type = match asset {
+            NetworkAsset::Install => "text/html; charset=utf-8",
+            NetworkAsset::Icon => "image/png",
+        };
+        for (name, value) in [
+            ("content-type", content_type),
+            ("cache-control", "no-store"),
+        ] {
+            response
+                .headers_mut()
+                .set(name, value)
+                .map_err(|_| Error::new(503, "chain_resource_unavailable"))?;
+        }
+        return Ok(response);
+    }
+    if matches!(asset, NetworkAsset::Install) {
+        return rpc(request, env).await;
+    }
+    Err(Error::new(405, "rpc_method_not_allowed"))
+}
+async fn rpc(request: &mut worker::Request, env: &Env) -> Result<worker::Response> {
     let u = request
         .url()
         .map_err(|_| Error::new(400, "rpc_host_invalid"))?;

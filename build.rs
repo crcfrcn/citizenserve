@@ -21,16 +21,15 @@ fn absolute(name: &str, directory: bool) -> PathBuf {
     });
     value
 }
-// 产品工作根只允许固定build或test；Cargo内部输出仍由该工作根承载。
+// 产品工作根只允许平台编译现场或测试现场；Cargo内部输出仍由该工作根承载。
 fn require_work_root(root: &Path, work: &Path) {
     assert!(
-        work == root.join("target/build") || work == root.join("target/test"),
-        "工作根必须为本产品target/build或target/test"
+        work == root.join("target/build/cloudflare") || work == root.join("target/test"),
+        "工作根必须为本产品target/build/cloudflare或target/test"
     );
 }
 fn main() {
     for name in [
-        "PRODUCT_NODE_BIN",
         "PRODUCT_WORK_DIR",
         "CARGO_TARGET_DIR",
         "TATACHAT_RESOURCE_RECEIPT",
@@ -39,8 +38,6 @@ fn main() {
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
-    println!("cargo:rerun-if-changed=scripts/flows.json");
-    println!("cargo:rerun-if-changed=scripts/resources.mjs");
     let root = absolute("CARGO_MANIFEST_DIR", true);
     let work = absolute("PRODUCT_WORK_DIR", true);
     let target = absolute("CARGO_TARGET_DIR", true);
@@ -51,16 +48,26 @@ fn main() {
     let receipt = absolute("TATACHAT_RESOURCE_RECEIPT", false);
     let out = absolute("OUT_DIR", true);
     assert!(out.starts_with(&target), "生成输出必须在本轮Cargo工作目录");
-    let declaration: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join("scripts/flows.json")).expect("读取唯一声明"))
-            .expect("产品声明JSON");
-    let files = declaration["tatachat"]["protocol"]["files"]
+    // 协议需求由本产品Build准备器交付；Rust只消费当前任务的公开文件列表和工具路径。
+    assert!(receipt.starts_with(&work), "协议回执必须归当前任务");
+    let delivery: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt).expect("读取协议回执"))
+            .expect("协议回执JSON");
+    assert_eq!(delivery["schema"], 1);
+    assert_eq!(delivery["product_id"], "citizenserve");
+    assert_eq!(delivery["work"].as_str(), work.to_str());
+    assert_eq!(delivery["protocol"].as_str(), protocol.to_str());
+    assert_eq!(delivery["protoc"].as_str(), protoc.to_str());
+    let files = delivery["files"]
         .as_array()
-        .expect("固定协议文件清单");
+        .expect("本轮协议文件清单");
+    assert!(!files.is_empty(), "协议文件清单为空");
+    let mut names = std::collections::BTreeSet::new();
     let mut inputs = Vec::new();
     for file in files {
-        let name = file["name"].as_str().expect("协议名称");
+        let name = file.as_str().expect("协议名称");
         assert!(!name.contains('/') && !name.contains('\\') && name.ends_with(".proto"));
+        assert!(names.insert(name.to_owned()), "协议名称重复");
         let path = protocol.join(name);
         assert!(fs::symlink_metadata(&path)
             .expect("协议存在")
@@ -69,6 +76,11 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         inputs.push(path);
     }
+    let actual: std::collections::BTreeSet<_> = fs::read_dir(&protocol)
+        .expect("读取本轮协议目录")
+        .map(|item| item.expect("协议目录条目").file_name().into_string().expect("协议名称UTF-8"))
+        .collect();
+    assert_eq!(actual, names, "协议目录与本轮交付不符");
     println!("cargo:rerun-if-changed={}", protoc.display());
     println!("cargo:rerun-if-changed={}", receipt.display());
     let mut config = prost_build::Config::new();

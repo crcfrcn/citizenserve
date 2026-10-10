@@ -59,16 +59,29 @@ test('接收设备ACK只作用本设备；过期数据不返回，ACK后的回�
  await peer.command(23,bytes(1,'device-only'),3);await c.command(20,bytes(1,body),3);assert.equal((await chatFirst("SELECT expires_at FROM message_receipts WHERE message_id='device-only'")).expires_at,expiry);
  await chatSQL('UPDATE messages SET expires_at=?',Date.now()-1);assert.equal(fields(await c.command(21,uint(1,100),22)).get(1),undefined);
 });
+// 非创建设备按既有合同隐藏附件存在性；拒绝时核对整件元数据与全部上传记录无变化。
+async function attachmentSnapshot(id){
+ const attachment=await chatFirst('SELECT * FROM attachments WHERE attachment_id=?',id);
+ const uploads=await chatFirst("SELECT json_group_array(json_object('attempt_id',attempt_id,'attachment_id',attachment_id,'generation',generation,'object_key',object_key,'upload',upload,'state',state,'object_version',object_version,'cleanup_after',cleanup_after)) AS records FROM (SELECT * FROM attachment_uploads WHERE attachment_id=? ORDER BY attempt_id)",id);
+ return {attachment,uploads:JSON.parse(uploads.records)};
+}
 test('密文分块摘要、创建设备、完成下载及ACK补偿真实执行',async()=>{
  const c=await connect(),peer=await connect(b),body=Buffer.from('encrypted attachment fixture');await c.command(30,bytes(1,attachment('attachment-1',body)),3);
- assert.equal((await chunk(b,'attachment-1','PUT',body)).status,403);assert.equal((await chunk(a,'attachment-1','PUT',Buffer.from('bad'))).status,400);
+ const pending=await attachmentSnapshot('attachment-1');
+ assert.equal((await chunk(b,'attachment-1','PUT',body)).status,404);assert.deepEqual(await attachmentSnapshot('attachment-1'),pending);
+ assert.equal((await chunk(a,'attachment-1','PUT',Buffer.from('bad'))).status,400);
  assert.equal((await chunk(a,'attachment-1','PUT',body)).status,204);
- await peer.failure(31,bytes(1,'attachment-1'),'forbidden');await c.command(31,bytes(1,'attachment-1'),32);
+ const uploaded=await attachmentSnapshot('attachment-1');
+ await peer.failure(31,bytes(1,'attachment-1'),'not_found');assert.deepEqual(await attachmentSnapshot('attachment-1'),uploaded);
+ await c.command(31,bytes(1,'attachment-1'),32);
  const downloaded=await chunk(b,'attachment-1');assert.equal(downloaded.status,200);assert.equal(downloaded.headers.get('cache-control'),'no-store');assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),body);
  await peer.command(33,bytes(1,'attachment-1'),3);await peer.command(33,bytes(1,'attachment-1'),3);assert.equal((await chatFirst('SELECT count(*) AS n FROM attachments')).n,0);assert.equal((await chunk(a,'attachment-1')).status,404);
 });
 test('附件中止只允许创建设备，清理后保留幂等回执和原属主',async()=>{
- const c=await connect(),peer=await connect(b),body=Buffer.from('encrypted abort fixture');await c.command(30,bytes(1,attachment('attachment-abort',body)),3);await peer.failure(34,bytes(1,'attachment-abort'),'forbidden');await c.command(34,bytes(1,'attachment-abort'),3);await c.command(34,bytes(1,'attachment-abort'),3);assert.equal((await chatFirst("SELECT aborted FROM attachment_receipts WHERE attachment_id='attachment-abort'")).aborted,1);assert.equal((await chatFirst('SELECT count(*) AS n FROM attachment_uploads')).n,0);
+ const c=await connect(),peer=await connect(b),body=Buffer.from('encrypted abort fixture');await c.command(30,bytes(1,attachment('attachment-abort',body)),3);
+ const pending=await attachmentSnapshot('attachment-abort');
+ await peer.failure(34,bytes(1,'attachment-abort'),'not_found');assert.deepEqual(await attachmentSnapshot('attachment-abort'),pending);
+ await c.command(34,bytes(1,'attachment-abort'),3);await c.command(34,bytes(1,'attachment-abort'),3);assert.equal((await chatFirst("SELECT aborted FROM attachment_receipts WHERE attachment_id='attachment-abort'")).aborted,1);assert.equal((await chatFirst('SELECT count(*) AS n FROM attachment_uploads')).n,0);
 });
 test('未知R2写入保留定位；观测到实际对象后清理，不能按超时假定已删除',async()=>{
  const c=await connect(),body=Buffer.from('unknown encrypted attempt');await c.command(30,bytes(1,attachment('attachment-unknown',body)),3);

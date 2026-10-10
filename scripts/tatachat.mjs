@@ -9,9 +9,55 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const id=value=>typeof value==='string'&&/^[a-f0-9]{32}$/u.test(value);
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(value);
 async function regular(path){for(let p=path;;p=dirname(p)){const value=await lstat(p);if(value.isSymbolicLink()||await realpath(p)!==p||p===path&&(!value.isFile()||value.nlink!==1||value.size>2*1024*1024)||p!==path&&!value.isDirectory())fail('来源路径不规范');if(dirname(p)===p)break;}return readFile(path);}
+const cloudResources=Object.freeze({
+  "schema": {
+    "version": 1,
+    "path": "server/cloudflare/tatachat/schema.sql",
+    "sha256": "4463a61a07ffde9b304432b5e2ad32acde1f32a77538de6a271b8c87a8454193"
+  },
+  "workers": {
+    "production": "citizenserve",
+    "test": "citizenserve-tatachat-test"
+  },
+  "migration_tag": "tatachat-1",
+  "resources": [
+    {
+      "kind": "d1",
+      "binding": "TATACHAT_DB",
+      "production": "citizenserve-tatachat",
+      "test": "citizenserve-tatachat-test"
+    },
+    {
+      "kind": "r2",
+      "binding": "TATACHAT_ATTACHMENTS",
+      "production": "citizenserve-tatachat",
+      "test": "citizenserve-tatachat-test"
+    },
+    {
+      "kind": "durable_object",
+      "binding": "TATACHAT_DEVICES",
+      "class_name": "TataChatDevice",
+      "production": "citizenserve-tatachat",
+      "test": "citizenserve-tatachat-test"
+    },
+    {
+      "kind": "queue",
+      "binding": "TATACHAT_PUSH",
+      "production": "citizenserve-tatachat",
+      "test": "citizenserve-tatachat-test"
+    }
+  ],
+  "capability": {
+    "schema": 1,
+    "credential_owner": "authorized_security_executor",
+    "worker_settings": "read_only",
+    "console": "unavailable",
+    "resource_deletion": "forbidden"
+  }
+});
 export async function declaration(){
-  const flows=JSON.parse(await regular(join(root,'scripts/flows.json'))),value=flows.tatachat?.cloudflare;
-  if(flows.schema!==1||flows.product_id!=='citizenserve'||value?.schema?.version!==1||value.schema.path!=='server/cloudflare/tatachat/schema.sql'||!Array.isArray(value.resources)||value.resources.length!==4)fail('模块声明缺失');
+  const value=structuredClone(cloudResources);
+  if(value?.schema?.version!==1||value.schema.path!=='server/cloudflare/tatachat/schema.sql'||!Array.isArray(value.resources)||value.resources.length!==4)fail('模块声明缺失');
   const source=(await regular(join(root,value.schema.path))).toString('utf8');if(sha(source)!==value.schema.sha256)fail('schema来源漂移');
   const types=['d1','r2','durable_object','queue'];
   for(const kind of types){const matches=value.resources.filter(x=>x.kind===kind);if(matches.length!==1)fail('资源类型重复或缺失');const item=matches[0];if(!/^TATACHAT_[A-Z_]+$/u.test(item.binding)||!['production','test'].every(env=>/^[a-z][a-z0-9-]{2,62}$/u.test(item[env])))fail('资源命名无效');}
@@ -193,9 +239,12 @@ export async function runtimeCLI(args,{signal}={}){
   finally{lines.close();stream.destroy();}
 }
 
+const direct=process.argv[1]===fileURLToPath(import.meta.url)&&!process.env.NODE_TEST_CONTEXT;
+if(direct){const controller=new AbortController();for(const name of ['SIGINT','SIGTERM'])process.once(name,()=>controller.abort());void runtimeCLI(process.argv.slice(2),{signal:controller.signal}).then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});}
+
 // 所属测试与生产实现同文件；普通导入和正式执行不注册测试。
 // BEGIN INLINE TESTS
-if (process.env.NODE_TEST_CONTEXT && process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.env.NODE_TEST_CONTEXT && process.argv.length===2 && process.argv[1] === fileURLToPath(import.meta.url)) {
 const {default: test} = await import('node:test');
 const {default: assert} = await import('node:assert/strict');
 const {DatabaseSync} = await import('node:sqlite');

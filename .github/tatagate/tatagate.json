@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "repository": "citizenserve",
+  "workflows": [
+    "release-cloudflare.yml"
+  ],
+  "node_tests": [
+    "scripts/build.mjs",
+    "scripts/publish.mjs",
+    "scripts/tatachat.mjs",
+    ".github/workflows/release-cloudflare.mjs"
+  ],
+  "checks": [
+    "repository-contracts",
+    "flow-isolation",
+    "syntax"
+  ],
+  "platform_forbidden_values": [
+    "macOS ARM64",
+    "macos-arm64",
+    "macos_arm64"
+  ],
+  "lifecycle_tests": [
+    "scripts/build.mjs"
+  ],
+  "functions": []
+}

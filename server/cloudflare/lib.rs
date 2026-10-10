@@ -108,18 +108,22 @@ pub async fn main(mut request: Request, env: Env, _ctx: Context) -> Result<Respo
             registration,
         )?,
     };
+    // 上游及WebSocket升级响应的头可能不可修改；只复制头，保留正文流和升级连接。
+    let headers = response.headers().clone();
+    response = response.with_headers(headers);
     response
         .headers_mut()
         .set("x-content-type-options", "nosniff")?;
     response
         .headers_mut()
         .set("referrer-policy", "no-referrer")?;
-    if request.url()?.host_str() == Some("nrcrpc.crcfrcn.com") {
+    let public_network = request.url()?.host_str() == Some("nrcrpc.crcfrcn.com");
+    if public_network {
+        // 公共网络独立采用通配CORS；不再由App的WEB_ORIGIN覆盖同一响应头。
         response
             .headers_mut()
             .set("access-control-allow-origin", "*")?;
-    }
-    if let (Ok(Some(origin)), Ok(allowed)) =
+    } else if let (Ok(Some(origin)), Ok(allowed)) =
         (request.headers().get("origin"), env.var("WEB_ORIGIN"))
     {
         if origin == allowed.to_string() {
@@ -128,6 +132,12 @@ pub async fn main(mut request: Request, env: Env, _ctx: Context) -> Result<Respo
                 .set("access-control-allow-origin", &origin)?;
             response.headers_mut().set("vary", "origin")?;
         }
+    }
+    if public_network && request.method() == Method::Head {
+        // HEAD失败也必须为空正文，保留原状态和本地响应头，不公开上游错误。
+        response = Response::empty()?
+            .with_status(response.status_code())
+            .with_headers(response.headers().clone());
     }
     Ok(response)
 }
@@ -168,7 +178,7 @@ pub(crate) async fn body(
 }
 async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Result<Response> {
     if request.url().map_err(|_| unavailable())?.host_str() == Some("nrcrpc.crcfrcn.com") {
-        return network::rpc(request, env).await;
+        return network::handle(request, env).await;
     }
     let method = request.method().to_string();
     let path = request.path();

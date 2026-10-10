@@ -14,7 +14,83 @@ pub struct Chain {
     client_id: String,
     client_secret: String,
 }
+/// 公共网络仅交付这两项资源；调用方不能提供任意上游路径或地址。
+#[derive(Clone, Copy)]
+pub(crate) enum NetworkAsset {
+    Install,
+    Icon,
+}
+impl NetworkAsset {
+    pub(crate) fn path(self) -> &'static str {
+        match self {
+            Self::Install => "/",
+            Self::Icon => "/icons/gmb.png",
+        }
+    }
+    pub(crate) fn media_type(self) -> &'static str {
+        match self {
+            Self::Install => "text/html",
+            Self::Icon => "image/png",
+        }
+    }
+}
 impl Chain {
+    /// 从已有受保护源读取资源；总超时覆盖响应头和正文，凭据不进入公开响应。
+    pub(crate) async fn network_asset(&self, asset: NetworkAsset) -> Result<Vec<u8>> {
+        let fail = || Error::new(503, "chain_resource_unavailable");
+        let source = trusted_rpc_url(&self.url)?;
+        let url = format!("{}{}", source.origin().ascii_serialization(), asset.path());
+        let headers = Headers::new();
+        for (name, value) in [
+            ("CF-Access-Client-Id", self.client_id.as_str()),
+            ("CF-Access-Client-Secret", self.client_secret.as_str()),
+        ] {
+            headers.set(name, value).map_err(|_| fail())?;
+        }
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get)
+            .with_headers(headers)
+            .with_redirect(RequestRedirect::Manual);
+        let request = Request::new_with_init(&url, &init).map_err(|_| fail())?;
+        let signal: AbortSignal = web_sys::AbortSignal::timeout_with_u32(3_000).into();
+        let mut response = Fetch::Request(request)
+            .send_with_signal(&signal)
+            .await
+            .map_err(|_| fail())?;
+        if response.status_code() != 200 {
+            return Err(fail());
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .map_err(|_| fail())?
+            .ok_or_else(fail)?;
+        if !content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case(asset.media_type()))
+        {
+            return Err(fail());
+        }
+        use futures_util::StreamExt;
+        let mut stream = response.stream().map_err(|_| fail())?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| fail())?;
+            // 不信任上游Content-Length；按实际收到的分块执行128KiB硬上限。
+            if bytes.len().saturating_add(chunk.len()) > 128 * 1024 {
+                return Err(fail());
+            }
+            bytes.extend(chunk);
+        }
+        if signal.aborted() {
+            return Err(fail());
+        }
+        if matches!(asset, NetworkAsset::Install) {
+            std::str::from_utf8(&bytes).map_err(|_| fail())?;
+        }
+        Ok(bytes)
+    }
     pub(crate) async fn external_call(
         &self,
         method: &str,
