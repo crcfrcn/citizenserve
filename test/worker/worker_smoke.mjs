@@ -110,7 +110,7 @@ async function outbound(req){
 export async function startWorker(extraBindings={},readLimit=1000){
  anchorTime=Date.now();
  mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:root+'/target/build/cloudflare/worker/index.js'},{type:'CompiledWasm',path:root+'/target/build/cloudflare/worker/index_bg.wasm'}],modulesRoot:root+'/target/build/cloudflare/worker',compatibilityDate:'2026-10-07',
- bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CHAIN_ID:'offline-test',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
+ bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CF_ACCESS_CLIENT_ID:'offline-test.access',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
  d1Databases:['DB','CITIZENCHAIN_DOWNLOAD_DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:n==='RATE_READ'?readLimit:1000,period:60}}])),outboundService:outbound}]}));
  db=await mf.getD1Database('DB');worker=await mf.getWorker();privateBucket=await mf.getR2Bucket('SQUARE_PRIVATE');publicBucket=await mf.getR2Bucket('SQUARE_PUBLIC_MEDIA');
  chatBucket=await mf.getR2Bucket('TATACHAT_ATTACHMENTS');chatDB=await mf.getD1Database('TATACHAT_DB');const chatSchema=JSON.parse(execFileSync(process.env.PYTHON,['-c',String.raw`
@@ -241,7 +241,7 @@ test('静态3秒总超时覆盖响应头和正文读取', {timeout:20000},async 
  }
 });
 test('静态缺少Access配置失败，不向上游发请求',async()=>{
- for(const bindings of [{CHAIN_URL:''},{CHAIN_ID:''},{CHAIN_SECRET:''}]){
+ for(const bindings of [{CHAIN_URL:''},{CF_ACCESS_CLIENT_ID:''},{CHAIN_SECRET:''}]){
   await stopWorker();try{await startWorker(bindings);const before=seen.length,r=await networkFetch('/');assert.equal(r.status,503);await r.text();assert.equal(seen.length,before);
   }finally{await stopWorker();await startWorker();}
  }

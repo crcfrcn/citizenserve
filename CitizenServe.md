@@ -21,9 +21,9 @@
 
 ### 编译、自动化、发布与门禁边界
 
-`scripts/`现有三个所属入口：`build.mjs`持有本机Cloudflare Worker编译、资源、固定现场与所属回归；正式测试及组包归同名Workflow；`publish.mjs`只读核验已完成成功自动化的正式Run、Tag、Release、资产及归档成员；`tatachat.mjs`在原位置独立管理聊天云资源声明与受控维护能力。没有旧脚本转发入口。
+`scripts/`现有三个所属入口：`build.mjs`持有本机Cloudflare Worker编译、资源、固定现场与所属回归；正式测试及组包归同名Workflow；`publish.mjs`只读核验已完成成功自动化的正式Run、Tag、Release、资产及归档成员，并从已验真归档生成不含公开变量值的部署候选；`tatachat.mjs`在原位置独立管理聊天云资源声明与受控维护能力。没有旧脚本转发入口。
 
-`.github/workflows/release-cloudflare.yml` 与同名 MJS 独立负责 GitHub 身份、版本、固定工具准备、Cargo/Node/Python/Worker 真实测试、Worker 编译、十件成员组包、Run、Tag/Release 与三件资产上传回读；不调用本仓 Build。Linux 工具官方来源与包成员在现有 `Cargo.toml` 元数据中唯一声明，Build、Workflow、Publish 分别读取所需字段。`publish.mjs` 继续只读验真正式资产。`.github/tatagate/tatagate.mjs` 只读核对主检出、目录闭集、流程方向、登记文件、自动化声明和语法；原产品专属安全检查仍需逐项复核。用户明确保留聊天云资源独立脚本 `scripts/tatachat.mjs`。代码尚未执行正式 Runner 流程。
+`.github/workflows/release-cloudflare.yml` 与同名 MJS 独立负责 GitHub 身份、版本、固定工具准备、Cargo/Node/Python/Worker 真实测试、Worker 编译、十件成员组包、Run、Tag/Release 与三件资产上传回读；不调用本仓 Build。Linux 工具官方来源与包成员在现有 `Cargo.toml` 元数据中唯一声明，Build、Workflow、Publish 分别读取所需字段。`publish.mjs` 继续只读验真正式资产和候选，不上传或部署。`.github/tatagate/tatagate.mjs` 只读核对主检出、目录闭集、流程方向、登记文件、自动化声明和语法；原产品专属安全检查仍需逐项复核。用户明确保留聊天云资源独立脚本 `scripts/tatachat.mjs`。代码尚未执行正式 Runner 流程。
 
 根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
 
@@ -87,7 +87,7 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 普通会话sqs_加16字节随机数的32位小写hex，只持久化SHA-256；created_at/expires_at统一Unix毫秒，24小时、每CID最多8条且保留本次新令牌。会话、准入、设备与当前绑定均由D1权威核对。换绑/吊销与投影同事务撤销旧设备、会话、挑战及推送端点；CID资料和真人依据保留。通用聊天只收到私有字段Authority经核验后构造的许可，15分钟上限之外另带最长60秒再核验期限。
 
-配置须提供变量WEB_ORIGIN、REGISTRATION_SCOPE、TURNSTILE_SITEKEY、CHAIN_GENESIS_HASH、CHAIN_URL，秘密HASH_KEY、TURNSTILE_SECRET、CHAIN_ID、CHAIN_SECRET及DB/RATE_AUTH绑定。仓库未保存或猜测CHAIN_URL部署值，也未读取秘密或操作线上绑定；缺配置固定失败。注册族错误保留retryable/next_action，底层D1/RPC异常不公开。
+配置须提供变量WEB_ORIGIN、REGISTRATION_SCOPE、TURNSTILE_SITEKEY、CHAIN_GENESIS_HASH、CHAIN_URL、CF_ACCESS_CLIENT_ID，秘密HASH_KEY、TURNSTILE_SECRET、CHAIN_SECRET及DB/RATE_AUTH绑定。仓库未保存或猜测CHAIN_URL部署值，也未读取秘密或操作线上绑定；缺配置固定失败。注册族错误保留retryable/next_action，底层D1/RPC异常不公开。
 
 ## 运行边界与未来自建兼容
 
@@ -332,7 +332,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 4. **排他claim与双链结算。** 仅常量时间匹配SETTLE_TOKEN的结算客户端可操作。pending≤50，history≤100并用(confirmed_at,order_id)稳定游标合并三态。claim同ID幂等、不同ID排斥，永不自动过期释放；服务端不持发币私钥，不自动签发/广播公民币。settled在当前claim下复核Base付款，并用目标块metadata完整解析OnchainTransaction::transfer_with_remark、整交易哈希、canonical finalized块/准确index/整签名字节、配置发币账户、准确受益AccountId/金额、topup:<order_id>备注、同phase的唯一System.ExtrinsicSuccess且无失败、准确TransferWithRemark事件；不靠硬编码pallet/call index或“交易包含在块中”宣称转账成功。抽取现有通用signed/finalized核心时保留会员/帖子专用CID及SquarePost核验。最后一次D1事务比较claim、订单与全部证据，重复paid须完整证据一致；同GMB交易不能付给两笔订单。exception须匹配claim及准确理由，不从异常自动恢复或重新发币。
 5. **正式下载和发布指针。** App/Wallet Android从各自固定crcfrcn产品仓读取正式非draft/非prerelease Release；公民链四平台继续使用独立CITIZENCHAIN_DOWNLOAD_DB的准确显式发布指针，保留平台对应Tag/源码SHA/资产名/资产SHA/revision。只恢复实际存在的macOS updater，不能凭空增加另外三平台updater。GET/PUT publication使用CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET及准确x-citizenserve-request-time、nonce、signature三头，HMAC规范为method、**实际/api完整路径**、时间、nonce、原始body SHA-256五行，时钟±5分钟；拒绝查询、错平台/域、坏摘要与额外字段。PUT expected_revision原子CAS，publication=null明确撤回；同规范结果幂等、旧revision不能覆盖新发布。普通会话及结算令牌没有发布权。固定GitHub官方源、仓/Release Tag/资产/HTTPS路径，有界响应和精确302目标，展示缓存≤300秒；无指针或缺实际资产不能造下载结果。本产品不写线上指针、不创建Release。
 6. **链引导、宪法及受控广播。** App与CitizenSDK两个bootstrap保留各自exact schema、SS58=2027/GMB两位小数、已登记创世hash/state_root/bootnodes、签名安装包bundled chainspec/light_sync_state及P2P finalized信任合同，不下发可替换checkpoint或服务端节点/Access秘密。返回当前/api实际服务路径；广播显式关闭时返回不可用。宪法从同一canonical finalized块的LegislationYuan Laws(0)已生效版本、LawVersions、LawVersionLabels与ConstitutionImmutableManifest完整解码，拒绝尾字节/非法层级/超大内容，保留中英标签与准确更新时间；展示缓存≤300秒不能用于授权。POST extrinsics只收signed_extrinsic_hex，不收私钥/助记词、账户申报或任意RPC方法；原始extrinsic≤65536B、JSON≤131584B。显式RELAY_ENABLED=1及实际固定节点配置后才调用author_submitExtrinsic；IP每分钟20次跨PoP硬顶、SHA-256十分钟去重与排他占用，验证节点tx_hash与完整extrinsic BLAKE2-256一致。广播超时保留不确定结果/定位，不假报失败后自动重发；广播成功只表示broadcast，不签发CID/准入/会话或宣称finalized。
-7. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面与PNG由CitizenChain节点自身的同一HTTPS RPC端点交付，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有下载D1/CACHE和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
+7. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面与PNG由CitizenChain节点自身的同一HTTPS RPC端点交付，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有下载D1/CACHE和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
 8. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播/发布CAS、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、正式Release与实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行全量fmt/测试/Clippy/WASM Release/WebAssembly.compile，回归现有授权/社区/内容合同，health继续account_services_ready:false。
 
 ### 付款钱包签名合同
@@ -385,7 +385,7 @@ public是保留的链网络/安装包/报价能力，不代表未通过验证者
 - 正式App/Wallet Release源：https://api.github.com/repos/crcfrcn/citizenapp/releases?per_page=100、https://api.github.com/repos/crcfrcn/citizenwallet/releases?per_page=100；链固定Tag读取：https://api.github.com/repos/crcfrcn/citizenchain/releases/tags/{version_tag}。下载只返回对应https://github.com/crcfrcn/{product}/releases/download/{version_tag}/{asset_name}，禁止任意仓/外部URL。
 - 平台Tag：citizenchain-macos-v<版本>、citizenchain-windows-v<版本>、citizenchain-linux-arm-v<版本>、citizenchain-linux-amd-v<版本>；对应citizenchain-node-macOS-v<版本>.dmg、citizenchain-node-Windows-v<版本>.exe、citizenchain-node-LinuxARM-v<版本>.deb、citizenchain-node-LinuxAMD-v<版本>.deb。保持真实发布身份，路径改小写不改资产大小写。
 - 旧正式配置登记的Base源是https://mainnet.base.org；实施时仅从TOPUP_BASE_RPC_URL加载固定HTTPS源，核实准确币轨合约/decimals/实际资产种类，以合约白名单为准，不凭symbol识别或把桥接资产说成原生资产。TOPUP_RECV_ADDRESS、TOPUP_DISBURSE_ACCOUNT_ID和两币合约对照历史公开配置，未核实不猜填、不增加新网络/供应商。
-- CitizenChain只从既有CHAIN_URL/CHAIN_ID/CHAIN_SECRET固定Access源读取或受控广播；实际CHAIN_URL部署值目前未核实，不凭空写域名。公共EVM源属于该CitizenChain节点，不转给Base源。
+- CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。实际CHAIN_URL部署值目前未核实，不凭空写域名。公共EVM源属于该CitizenChain节点，不转给Base源。
 - 本地声明下载D1：CITIZENCHAIN_DOWNLOAD_DB，citizenweb-download，fa70d613-ff33-43d3-aecd-84f1baef3918；展示KV沿用SQUARE_CACHE，d632942d82c94e45ab4058fa69268ce1。专用秘密为TOPUP_INTENT_SECRET、SETTLE_TOKEN、CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET，仅声明，不读值、不线上写。
 - 当前/api归一化与付款签名/HMAC变更先实现服务端合同；App及产品发布器必须在各自后续接线验收新实际路径，未验收前不能替换生产。
 
@@ -459,13 +459,16 @@ TataChatDevice使用SQLite DO休眠WebSocket API，连接attachment仅保存随�
 
 TATACHAT_PUSH为独立Queue。消息持久outbox与首次密文同事务；每wake领取一件有界租约，逐端点核验当前Host许可并续租，旧lease_id不能完成新租约。补派为每任务发送对应延迟hint，成功后仅更新原快照；Queue重放由D1租约吸收，Cron五分钟槽补派及有界维护。端点移除不重置代际；明确无效端点只删除原代际，认证或配置失败不会误删token。APNS/FCM仅使用通用chat_wake负载，APNS使用固定生产地址，FCM只使用官方OAuth/发送URL；复用宿主WebCrypto签名，发送阶段10秒取消、回执最多16KiB，重定向不接受。普通NOTIFY队列保持原业务分支。
 
-聊天云资源声明由scripts/tatachat.mjs自身唯一持有，schema版本1及当前文件SHA冻结。生产D1/R2/Queue同名citizenserve-tatachat，Worker为citizenserve；测试资源同名citizenserve-tatachat-test，Worker同名；绑定分别TATACHAT_DB/TATACHAT_ATTACHMENTS/TATACHAT_DEVICES/TATACHAT_PUSH，DO类TataChatDevice，SQLite migration tag tatachat-1。公开账户范围以正式CF_ACCOUNT_ID为准；没有进行云清点、创建、部署或填写猜测D1 ID。wrangler候选仅增加实际Queue分流公开变量及待绑定说明，四绑定须由真实资源回执产生的tatachat-wrangler-bindings.toml另审后装配，不能把现状称作数据面已启用。
+聊天云资源声明由scripts/tatachat.mjs自身唯一持有，schema版本1及当前文件SHA冻结。生产D1/R2/Queue同名citizenserve-tatachat，Worker为citizenserve；测试资源同名citizenserve-tatachat-test，Worker同名；绑定分别TATACHAT_DB/TATACHAT_ATTACHMENTS/TATACHAT_DEVICES/TATACHAT_PUSH，DO类TataChatDevice，SQLite migration tag tatachat-1。公开账户范围以正式CF_ACCOUNT_ID为准；正式Wrangler配置中的资源ID须与云端真实回执一致，禁止猜填。配置完成后仍须通过产品资源入口核对模块schema、私桶、Worker四绑定、SQLite DO命名空间及唯一Queue消费者，不能仅凭候选配置称作数据面已启用。
 
 scripts/tatachat.mjs提供plan/create/maintain/rebuild/verify同一配方。plan回执含账户/环境/操作/schema/真实资源ID与数量，批准摘要必须匹配重新清点现状。create只建缺件，既有D1须核真实DDL及模块归属，R2/Queue须核实际绑定或本任务匹配回执，私桶managed/custom公开访问必须关闭。配置回执只含公开ID并保存在当前工作根，DO namespace与Queue实际消费者留待部署后验真。verify检查真实DDL、私桶、Worker四绑定、SQLite DO class/script和唯一Queue消费者；只证明这些资源事实，不能代替API联调。D1官方保留表_cf_KV单独排除，未知业务对象仍拒绝，依据https://developers.cloudflare.com/d1/best-practices/import-export-data/。
 
 rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象键，禁止资源删除。开始先把冻结状态与随机活动backup_id绑定，拒绝未知writing；数量漂移要求重新规划。在同一受保护D1中复制并按数量及EXCEPT比较验真快照，不把密文、端点token或私钥导出本机。破坏性阶段只在快照verified后开始；恢复按原列顺序插入并回读全部表，最后解除该活动备份的冻结。中断后只接受同账户/环境/schema且与活动backup_id匹配的verified快照；恢复现状、冻结状态或来源未知必须失败，不把空库当恢复。快照保留在云内，快照清理需要单独准确授权。
 
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
+
+本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
+控制台“测试 · macOS”按本仓 `scripts/publish.mjs` 公开清单执行发布与配置声明的既有Node回归；完整Worker测试需要产品编译产物，继续由所属正式流程按顺序验收。
 
 
 
@@ -485,7 +488,7 @@ Cargo registry闭包按包名、版本与checksum物化并生成离线vendor校�
 
 ### Cloudflare完整检查与正式产物
 
-自动化只由本仓release-cloudflare.yml和同名mjs执行。它按Cargo.toml唯一声明独立准备工具、执行真实测试、编译Worker并组包，核对十件成员的准确名称、唯一性、大小与摘要，为当前Run生成release-manifest.json和SHA256SUMS。自动化仅收集三件准确正式资产；Tag/Release创建、上传与逐件回读均归自动化。正式产物仍包含Worker、SQL、Wrangler配置及锁文件。独立publish.mjs只读消费唯一成功Run对应的Tag、Release、三件资产及归档全部成员，不创建Tag/Release也不改变Cloudflare资源。
+自动化只由本仓release-cloudflare.yml和同名mjs执行。它按Cargo.toml唯一声明独立准备工具、执行真实测试、编译Worker并组包，核对十件成员的准确名称、唯一性、大小与摘要，为当前Run生成release-manifest.json和SHA256SUMS。自动化仅收集三件准确正式资产；Tag/Release创建、上传与逐件回读均归自动化。正式产物仍包含Worker、SQL、Wrangler配置及锁文件。独立publish.mjs只读消费唯一成功Run对应的Tag、Release、三件资产及归档全部成员；候选逐项核对固定路由、D1/R2/KV/Queue及SQLite DO声明、三限速器和两个Cron、Cloudflare资源回执、12项Secret名称与九项公开运行值（含聊天KID），值仅在内存核验，公开回执只含变量名称。正式配置中的九项动态公开值保留空占位，缺值或越界不能形成候选。本地尚未装载锁定Wrangler，因此真实Wrangler预演与无落盘Secret上传尚未验证；候选通过不代表已部署，不创建Tag/Release也不改变Cloudflare资源。
 
 全部前置成功后清理本目标旧成功，否则撤销本次产物并清理旧失败；撤销失败不跳过历史失败清理，任何未确认操作均报告失败。清理只匹配当前目标的准确Workflow，不根据已经删除的入口猜测历史归属。
 
