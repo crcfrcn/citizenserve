@@ -17,6 +17,7 @@ pub enum ChainRoute {
     Bootstrap,
     SdkBootstrap,
     Constitution,
+    RuntimeTarget,
     Extrinsics,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +115,7 @@ pub fn route(method: &str, path: &str) -> Result<Route> {
         ("GET", "/chain/bootstrap") => Some(ChainRoute::Bootstrap),
         ("GET", "/chain/citizensdk/bootstrap") => Some(ChainRoute::SdkBootstrap),
         ("GET", "/chain/constitution") => Some(ChainRoute::Constitution),
+        ("GET", "/chain/runtime-target") => Some(ChainRoute::RuntimeTarget),
         ("POST", "/chain/extrinsics") => Some(ChainRoute::Extrinsics),
         _ => None,
     } {

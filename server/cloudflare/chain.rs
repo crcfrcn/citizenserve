@@ -195,6 +195,7 @@ impl Rpc for Chain {
                     | "chain_getFinalizedHead"
                     | "chain_getHeader"
                     | "chain_getBlock"
+                    | "state_getRuntimeVersion"
                     | "state_getMetadata"
                     | "state_getStorage"
             ) {

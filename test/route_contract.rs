@@ -239,11 +239,12 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
         ("GET", "bootstrap"),
         ("GET", "citizensdk/bootstrap"),
         ("GET", "constitution"),
+        ("GET", "runtime-target"),
         ("POST", "extrinsics"),
     ] {
         list.push((method, format!("/api/chain/{p}"), Permission::Public));
     }
-    assert_eq!(list.len(), 28);
+    assert_eq!(list.len(), 29);
     for (m, p, permission) in list {
         let r = route(m, &p).unwrap();
         assert_eq!(r.permission(), permission);
@@ -256,9 +257,11 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
         "/api/operations/citizenchain/download-publications/macos",
         "/api/downloads/citizenchain/macOS",
         "/api/chain/extrinsic",
+        "/api/chain/runtime-target/",
     ] {
         assert!(route("GET", p).is_err());
     }
+    assert!(route("POST", "/api/chain/runtime-target").is_err());
 }
 
 #[test]

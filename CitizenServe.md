@@ -326,7 +326,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 
 ### 业务与权限合同
 
-1. **固定精确路径与权限。** 统一功能前缀为/api/topup、/api/downloads、/api/chain；不保留旧/square、单数/download、根/constitution或/operations别名。将以下28项API方法及独立rpc域明确分为公共链/下载工具、HMAC付款意图、SETTLE_TOKEN结算和专用HMAC发布四类，逐方法逐路径登记；它们均不能访问广场、聊天、通讯录、会员或用户资料，现有普通账户服务守卫和MLS实际路径证明不改。保留冷钱包/代充的原产品能力，充值目标AccountId可未绑定CID；RPC失败不能记成“未绑定CID”。客户端不得让未完成准入的主体访问账户服务。
+1. **固定精确路径与权限。** 统一功能前缀为/api/topup、/api/downloads、/api/chain；不保留旧/square、单数/download、根/constitution或/operations别名。将以下29项API方法及独立rpc域明确分为公共链/下载工具、HMAC付款意图、SETTLE_TOKEN结算和专用HMAC发布四类，逐方法逐路径登记；它们均不能访问广场、聊天、通讯录、会员或用户资料，现有普通账户服务守卫和MLS实际路径证明不改。保留冷钱包/代充的原产品能力，充值目标AccountId可未绑定CID；RPC失败不能记成“未绑定CID”。客户端不得让未完成准入的主体访问账户服务。
 2. **报价、付款意图与付款人授权。** Base主网8453、USDC/USDT两条既有代币轨、6位最小单位；pkg_15为15000000原子单位→1000000公民币分，pkg_1400为1400000000→100000000分，金额以精确整数字符串交付。意图绑定目标AccountId、实际当前CID或null、付款地址、币轨/合约、收款地址、套餐/金额、唯一intent_id和签发/十分钟到期时间，保留服务器HMAC能力令牌。旧代码只有客户端申报payer_address及“签发早于区块”检查；观察待打包交易后仍能先造不同目标意图，所以增加**付款钱包签署完整充值意图**：intent响应返回服务端生成的wallet_authorization_message；confirm准确增加payer_signature字段。EOA以ERC-191 personal_sign恢复付款地址；合约付款钱包按该canonical付款块的ERC-1271只读验签。任何地址、目标、金额、链/域或意图变更均使签名失效，私钥不上传。客户端签名交互归CitizenApp，服务端按同一公开付款授权合同验证。
 3. **以真实EVM链事实创建订单。** 固定TOPUP_BASE_RPC_URL，不接受客户端RPC URL；核对eth_chainId=8453、交易/receipt哈希、成功状态、实际token Transfer事件、付款/收款地址、足额u256金额、log所属canonical区块、区块时间和确认策略。付款发生时间必须晚于意图签发且不晚于十分钟到期；配置min_confirmations=0沿用finalized，否则使用准确确认数并核对canonical hash。未知编码、链错、重组、超时或缺区块不能成功。同(chain_id,evm_tx_hash)与intent_id双唯一，同意图/同准确规范事实幂等，不同意图抢占拒绝；保留原pending/paid/exception三态，RPC待确认不落新终态。将准确付款区块/日志、意图及钱包授权摘要和核验期限存入原topup_orders相应列，一次原子写入，不设影子用户。保留IP和目标AccountId限速、外部付款RPC每链300次/60秒D1全局硬顶；重复已确认查询不再打付款RPC。
 4. **排他claim与双链结算。** 仅常量时间匹配SETTLE_TOKEN的结算客户端可操作。pending≤50，history≤100并用(confirmed_at,order_id)稳定游标合并三态。claim同ID幂等、不同ID排斥，永不自动过期释放；服务端不持发币私钥，不自动签发/广播公民币。settled在当前claim下复核Base付款，并用目标块metadata完整解析OnchainTransaction::transfer_with_remark、整交易哈希、canonical finalized块/准确index/整签名字节、配置发币账户、准确受益AccountId/金额、topup:<order_id>备注、同phase的唯一System.ExtrinsicSuccess且无失败、准确TransferWithRemark事件；不靠硬编码pallet/call index或“交易包含在块中”宣称转账成功。抽取现有通用signed/finalized核心时保留会员/帖子专用CID及SquarePost核验。最后一次D1事务比较claim、订单与全部证据，重复paid须完整证据一致；同GMB交易不能付给两笔订单。exception须匹配claim及准确理由，不从异常自动恢复或重新发币。
@@ -370,12 +370,15 @@ API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST�
 | GET https://www.crcfrcn.com/api/chain/bootstrap | /chain/bootstrap | App准确引导schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/citizensdk/bootstrap | /chain/citizensdk/bootstrap | CitizenSDK准确窄schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/constitution | /chain/constitution | 已生效宪法；公开只读。 |
+| GET https://www.crcfrcn.com/api/chain/runtime-target | /chain/runtime-target | WASM Release只读链目标：块0哈希、finalized头、spec_version与spec_name；固定字段、无查询与请求体，读取限流及no-store。 |
 | POST https://www.crcfrcn.com/api/chain/extrinsics | /chain/extrinsics | 仅signed_extrinsic_hex；显式开关、限流/去重的广播工具。 |
 | GET/HEAD https://nrcrpc.crcfrcn.com/ | 独立域根/ | MetaMask接入页，读取固定受保护静态源。 |
 | GET/HEAD https://nrcrpc.crcfrcn.com/icons/gmb.png | 独立域/icons/gmb.png | 指定PNG图标；其余路径及该路径其他方法拒绝。 |
 | POST/OPTIONS https://nrcrpc.crcfrcn.com/ | 独立域根/ | 26方法JSON-RPC公共钱包网络入口；不接受/api别名。 |
 
 public是保留的链网络/安装包/报价能力，不代表未通过验证者能进入账户业务。上述公共广播同区块链P2P一样不能在共识层强制所有链上CID注册都经过Cloudflare；本项目要求落实的是CitizenApp完整注册主线和CitizenServe账户服务准入，不能把网络API误说成全链真人证明。
+
+`/api/chain/runtime-target`由现有Worker使用自身`CHAIN_URL`及Access服务身份经既有Tunnel查询，先以配置的创世哈希核对真实块0与canonical finalized头，再在该头读取`state_getRuntimeVersion`并要求`specName=citizenchain`及有效u32版本。公开请求仅接受精确GET、空正文与无查询参数，返回四个固定字段；沿用`RATE_READ`，响应`no-store`，不向调用方交付上游URL、Access凭据、任意RPC方法或错误正文。GitHub WASM Release另以本仓冻结常量复核返回的块0哈希；该接口成功不代表Runtime已经升级。
 
 ### 实际固定后端地址和配置来源
 
@@ -558,7 +561,7 @@ scripts/build.mjs按本仓公开声明和原始Cargo/npm锁准备协议、工具
 
 Worker运行测试的唯一npm声明与原生闭包在test/worker/package.json和package-lock.json：wrangler4.149.0、miniflare5.20261006.1-alpha及workerd1.20261006.1，不加overrides。生产compatibility_date继续使用2026-10-07，锁定运行时必须实际装载同一本轮WASM产物。开发取得的新npm归档只存当前固定工作根，不发布到永久资源库存。
 
-独立original与协议prepare共用originalStore边界：源码内存储只允许本轮准确target/build/cloudflare或target/test的真子目录，要求对应产品、工作根和仍运行的占用标记；拒绝源码其他目录、另一固定根、非规范路径及缺少所有权的现场，边界检查早于建目录。源码外已有原件目录沿用显式输入。正常获取、离线复用/缺件、获取失败、流中取消及越界不留源码目录均由真实资源函数回归覆盖。
+独立original与协议prepare共用originalStore边界：源码内存储只允许本轮准确target/build/cloudflare或target/test的真子目录，要求对应产品、工作根和仍运行的占用标记；拒绝源码其他目录、另一固定根、非规范路径及缺少所有权的现场，边界检查早于建目录。固定工作根直接复用本产品既有checkFixedWork入口；同一路径兼作协议依赖库与工具库时只验一次。本机协议模式直接读取TataChatSDK源码，不校验或创建未使用的协议依赖原件库，仍校验并取得实际protoc工具。源码外已有原件目录沿用显式输入。正常获取、离线复用/缺件、获取失败、流中取消及越界不留源码目录均由真实资源函数回归覆盖。
 
 ## 第3步本机完整复验（2026-10-09）
 
@@ -610,3 +613,5 @@ Worker运行测试的唯一npm声明与原生闭包在test/worker/package.json�
 本仓保留自己的.github/tatagate门禁实现和合同。main的push只触发本仓.github/workflows/tatagate.yml，gate与cleanup在这一个文件内执行；检出准确GITHUB_SHA并验证本仓GitHub事件、main引用和HTTPS origin，门禁继续执行本仓现有检查。gate成功时删除本仓该门禁旧成功Run；gate失败时删除旧失败Run；另一类最近记录和活动Run保留。清理前重新验真Run、Attempt和结论，删除后回查；清理错误如实记录并由后续运行补清，不影响gate检查结论。塔塔控制台通过塔塔鹿鹿的一次生物识别保存、推送本仓，并按准确SHA与Run ID追踪独立门禁任务；门禁结果不影响已确认的推送。
 
 本仓 GitHub 门禁接受 actions/checkout 的准确 HTTPS origin（同一仓库地址有或没有 `.git` 后缀），仓库、事件、提交和工作流身份仍逐项校验。
+
+门禁清理接口只对 URL 的路径部分拒绝越界，允许 created 查询中的时间范围分隔符；同文件回归直接执行正式 HTTP 参数校验，覆盖时间范围和越界拒绝。

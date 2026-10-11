@@ -1400,7 +1400,9 @@ async fn chain_tool(
     r: routes::ChainRoute,
     url: &url::Url,
 ) -> citizenserve::shared::Result<Response> {
-    use citizenserve::chain::{bootstrap, constitution, network_ports::Cache, relay};
+    use citizenserve::chain::{
+        bootstrap, constitution, finalized, network_ports::Cache, ports::Rpc, relay,
+    };
     use routes::ChainRoute;
     if url.query().is_some() {
         return Err(BusinessError::new(400, "invalid_chain_request"));
@@ -1451,6 +1453,36 @@ async fn chain_tool(
             let value = constitution::read(&chain::Chain::configured(env)?, &genesis, now).await?;
             let _ = cache.put(&key, &value, now, 300).await;
             json_response(&value, 200)
+        }
+        ChainRoute::RuntimeTarget => {
+            // 只返回固定链身份字段；请求方不能选择RPC方法、参数或区块锚点。
+            if !citizenserve::shared::ids::hex(&genesis, 32, true) {
+                return Err(BusinessError::new(503, "chain_runtime_target_unavailable"));
+            }
+            let chain = chain::Chain::configured(env)?;
+            let anchor = finalized::head(&chain, &genesis).await?;
+            let version = chain
+                .call(
+                    "state_getRuntimeVersion",
+                    serde_json::json!([anchor.hash.clone()]),
+                )
+                .await?;
+            let spec_version = version["specVersion"]
+                .as_u64()
+                .filter(|value| *value <= u32::MAX as u64)
+                .ok_or_else(|| BusinessError::new(503, "chain_runtime_target_unavailable"))?;
+            if version["specName"].as_str() != Some("citizenchain") {
+                return Err(BusinessError::new(503, "chain_runtime_target_unavailable"));
+            }
+            json_response(
+                &serde_json::json!({
+                    "genesis_hash": genesis,
+                    "finalized_head": anchor.hash,
+                    "spec_version": spec_version,
+                    "spec_name": "citizenchain",
+                }),
+                200,
+            )
         }
         ChainRoute::Extrinsics => {
             if !enabled {

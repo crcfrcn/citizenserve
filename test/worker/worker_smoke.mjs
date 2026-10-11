@@ -16,7 +16,7 @@ const receivedRpc=[];
 // 静态上游为闭合合成夹具，只证明Rust Worker传输合同，不冒充正式安装页或TLS验收。
 const networkHTML='<html><body>MetaMask 静态交付夹具</body></html>';
 const networkPNG=Buffer.from('89504e470d0a1a0a0000000049454e44ae426082','hex');
-let networkAssetMode='normal';
+let networkAssetMode='normal',runtimeTargetMode='normal';
 const keys=testKeys();const mls=generateKeyPairSync('ed25519');const publicKey='0x'+mls.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('hex');const device=publicKey.slice(2);
 const token='sqs_'+'12'.repeat(16);const digest=b=>createHash('sha256').update(b).digest('hex');const tokenHash=digest(token);
 let mf,db,worker,privateBucket,publicBucket,chatDB,chatBucket;
@@ -78,6 +78,10 @@ async function outbound(req){
   if(method==='chain_getFinalizedHead')result=fixture.head;
   else if(method==='chain_getBlockHash')result=params[0]===0?fixture.genesis:h(Number(params[0]));
   else if(method==='chain_getHeader'){const n=parseInt(params[0]?.slice(2,4)||'09',16);result={number:'0x'+n.toString(16),parentHash:h(Math.max(0,n-1)),stateRoot:h(1),extrinsicsRoot:h(2),digest:{logs:[]}};}
+  else if(method==='state_getRuntimeVersion'){
+   assert.deepEqual(params,[fixture.head]);
+   result=runtimeTargetMode==='wrong-name'?{specVersion:7,specName:'other'}:runtimeTargetMode==='overflow'?{specVersion:2**32,specName:'citizenchain'}:{specVersion:7,specName:'citizenchain'};
+  }
   else if(method==='state_getMetadata')result=fixture.metadata;
   else if(method==='state_getStorage'){
    result=fixture.storage[params[0]]??null;
@@ -105,7 +109,7 @@ async function outbound(req){
 }
 export async function startWorker(extraBindings={},readLimit=1000){
  anchorTime=Date.now();
- mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:root+'/target/build/cloudflare/worker/index.js'},{type:'CompiledWasm',path:root+'/target/build/cloudflare/worker/index_bg.wasm'}],modulesRoot:root+'/target/build/worker',compatibilityDate:'2026-10-07',
+ mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:root+'/target/build/cloudflare/worker/index.js'},{type:'CompiledWasm',path:root+'/target/build/cloudflare/worker/index_bg.wasm'}],modulesRoot:root+'/target/build/cloudflare/worker',compatibilityDate:'2026-10-07',
  bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CHAIN_ID:'offline-test',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
  d1Databases:['DB','CITIZENCHAIN_DOWNLOAD_DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:n==='RATE_READ'?readLimit:1000,period:60}}])),outboundService:outbound}]}));
  db=await mf.getD1Database('DB');worker=await mf.getWorker();privateBucket=await mf.getR2Bucket('SQUARE_PRIVATE');publicBucket=await mf.getR2Bucket('SQUARE_PUBLIC_MEDIA');
@@ -161,6 +165,36 @@ before(()=>startWorker());after(()=>stopWorker());
 // 直接调用真实ESM/WASM入口；上游只允许受保护的两个固定资源及现有RPC。
 const networkFetch=(path='/',method='GET',body,headers={})=>mf.dispatchFetch('https://nrcrpc.crcfrcn.com'+path,
  {method,headers:{'cf-connecting-ip':'192.0.2.123',...(body===undefined?{}:{'content-type':'application/json','content-length':String(Buffer.byteLength(body))}),...headers},...(body===undefined?{}:{body})});
+const runtimeTargetFetch=(path='/api/chain/runtime-target',method='GET')=>mf.dispatchFetch(registration.service_origin+path,
+ {method,headers:{'cf-connecting-ip':'192.0.2.124'}});
+test('WASM只读目标绑定块0、finalized版本及固定响应字段',async()=>{
+ const before=receivedRpc.length,response=await runtimeTargetFetch();
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('cache-control'),'no-store');
+ assert.deepEqual(await response.json(),{genesis_hash:fixture.genesis,finalized_head:fixture.head,spec_version:7,spec_name:'citizenchain'});
+ assert.deepEqual(receivedRpc.slice(before),['chain_getBlockHash','chain_getFinalizedHead','chain_getHeader','chain_getBlockHash','state_getRuntimeVersion']);
+});
+test('WASM只读目标拒绝其它路径、方法、查询和错误链状态',async t=>{
+ t.after(()=>{runtimeTargetMode='normal';unknownChain=false;});
+ for(const [path,method,status] of [['/api/chain/runtime-target/','GET',404],['/api/chain/runtime-target','POST',404],['/api/chain/runtime-target','PUT',404],['/api/chain/runtime-target?scope=other','GET',400]]){
+  const before=receivedRpc.length,response=await runtimeTargetFetch(path,method);
+  assert.equal(response.status,status);await response.arrayBuffer();assert.equal(receivedRpc.length,before);
+ }
+ for(const mode of ['wrong-name','overflow']){
+  runtimeTargetMode=mode;
+  const response=await runtimeTargetFetch();assert.equal(response.status,503);assert.doesNotMatch(await response.text(),/other|4294967296/);
+ }
+ runtimeTargetMode='normal';unknownChain=true;
+ const response=await runtimeTargetFetch();assert.equal(response.status,503);assert.doesNotMatch(await response.text(),/chain\.example\.test/);
+});
+test('WASM只读目标在真实块0不等于配置创世时失败关闭',async()=>{
+ await stopWorker();
+ try{
+  await startWorker({CHAIN_GENESIS_HASH:h(99)});
+  const response=await runtimeTargetFetch();assert.equal(response.status,503);
+  assert.doesNotMatch(await response.text(),/chain\.example\.test|offline-test/);
+ }finally{await stopWorker();await startWorker();}
+});
 test('公共网络交付HTML和PNG字节，HEAD核验相同资源且不透传上游头',async()=>{
  for(const [path,expected,type] of [['/',Buffer.from(networkHTML),'text/html; charset=utf-8'],['/icons/gmb.png',networkPNG,'image/png']]){
   for(const method of ['GET','HEAD']){

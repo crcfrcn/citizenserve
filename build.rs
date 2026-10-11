@@ -51,16 +51,13 @@ fn main() {
     // 协议需求由本产品Build准备器交付；Rust只消费当前任务的公开文件列表和工具路径。
     assert!(receipt.starts_with(&work), "协议回执必须归当前任务");
     let delivery: serde_json::Value =
-        serde_json::from_slice(&fs::read(&receipt).expect("读取协议回执"))
-            .expect("协议回执JSON");
+        serde_json::from_slice(&fs::read(&receipt).expect("读取协议回执")).expect("协议回执JSON");
     assert_eq!(delivery["schema"], 1);
     assert_eq!(delivery["product_id"], "citizenserve");
     assert_eq!(delivery["work"].as_str(), work.to_str());
     assert_eq!(delivery["protocol"].as_str(), protocol.to_str());
     assert_eq!(delivery["protoc"].as_str(), protoc.to_str());
-    let files = delivery["files"]
-        .as_array()
-        .expect("本轮协议文件清单");
+    let files = delivery["files"].as_array().expect("本轮协议文件清单");
     assert!(!files.is_empty(), "协议文件清单为空");
     let mut names = std::collections::BTreeSet::new();
     let mut inputs = Vec::new();
@@ -78,7 +75,12 @@ fn main() {
     }
     let actual: std::collections::BTreeSet<_> = fs::read_dir(&protocol)
         .expect("读取本轮协议目录")
-        .map(|item| item.expect("协议目录条目").file_name().into_string().expect("协议名称UTF-8"))
+        .map(|item| {
+            item.expect("协议目录条目")
+                .file_name()
+                .into_string()
+                .expect("协议名称UTF-8")
+        })
         .collect();
     assert_eq!(actual, names, "协议目录与本轮交付不符");
     println!("cargo:rerun-if-changed={}", protoc.display());

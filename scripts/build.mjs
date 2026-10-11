@@ -2333,7 +2333,7 @@ return Object.freeze({fixedWork,checkFixedWork,checkScratchPath,fixedScratch,ass
 export const {fixedWork,checkFixedWork,checkScratchPath,fixedScratch,assertTargetTopology,clearFixedWork,claimFixedWork,trackFixedProcess,trackWorkProcess,workEnvironment,prepareSourceView,retainWork,releaseFixedWork,withFixedWorkSync,withFixedWork,finishFixedWork,finishLifecycleWork,taskScope}=targetRuntime;
 
 const resourceRuntime=await(async()=>{
-const {claimFixedWork,releaseFixedWork,trackFixedProcess,fixedWork,finishLifecycleWork}=targetRuntime;
+const {claimFixedWork,releaseFixedWork,trackFixedProcess,fixedWork,checkFixedWork,finishLifecycleWork}=targetRuntime;
 const {readFileSync}=await import('node:fs');
 // 聊天协议资源配方归本产品；控制台供给与独立准备共用同一声明及验真。
 const {createHash, randomUUID}=await import('node:crypto');
@@ -2507,19 +2507,21 @@ async function fetchOriginal(entry, store, {offline, signal, fetcher}) {
 async function prepare({work, mode, store, toolStore = store, supply, offline = false, signal, fetcher = fetch}) {
   await workDirectory(work);
   if (!['independent', 'console'].includes(mode)) fail('供给模式必须显式选择');
-  const requested = await protocolRequirements(); let originals, executable, originalPath;
+  const requested = await protocolRequirements(), local = requested.source_mode === 'local';
+  let originals, executable, originalPath;
   if (mode === 'console') {
     // 控制台必须先按公开需求准备供给；缺件、损坏或越界绝不自行下载。
     if (!supply || supply.schema !== 1 || supply.product_id !== 'citizenserve'
         || supply.platform !== 'cloudflare' || supply.work !== work) fail('控制台供给身份不符');
-    await checked(supply.dependency_root, 'directory'); await checked(supply.tool_root, 'directory');
+    if (!local) await checked(supply.dependency_root, 'directory');
+    await checked(supply.tool_root, 'directory');
     originalPath = supply.protoc_archive;
     if (!inside(supply.tool_root, originalPath) || !inside(supply.tool_root, supply.protoc) && !inside(work, supply.protoc)) fail('工具供给越界');
     executable = protocBytes(await archive(originalPath, requested.tools[0].archive, 32 * 1024 ** 2));
     originals = [];
     for (const entry of requested.archives) {
       signal?.throwIfAborted();
-      if(localSdkMode()){
+      if(local){
         await checked(entry.local_path,'file');const bytes=await readFile(entry.local_path);
         if(bytes.length!==entry.bytes||digest(bytes)!==entry.sha256)fail('本地聊天协议读取期间变化');
         originals.push(bytes);
@@ -2532,14 +2534,14 @@ async function prepare({work, mode, store, toolStore = store, supply, offline = 
   } else {
     if (supply) fail('独立模式不混入控制台供给');
     signal?.throwIfAborted();
-    await originalStore(store, work);
+    if (!local) await originalStore(store, work);
     const options = {offline, signal, fetcher};
     const entry = requested.tools[0].archive;
-    await originalStore(toolStore, work);
+    if (local || toolStore !== store) await originalStore(toolStore, work);
     executable = protocBytes(await fetchOriginal(entry, toolStore, options));
     originalPath = join(toolStore, entry.sha256 + '.blob'); originals = [];
     for (const file of requested.archives){
-      if(localSdkMode()){
+      if(local){
         await checked(file.local_path,'file');const bytes=await readFile(file.local_path);
         if(bytes.length!==file.bytes||digest(bytes)!==file.sha256)fail('本地聊天协议读取期间变化');
         originals.push(bytes);
@@ -2866,9 +2868,9 @@ async function treeManifest(path) {
 }
 // 独立原件可存于本轮已领取的准确固定根；边界检查先于建目录，不能污染源码或另一工作根。
 async function originalStore(store, work) {
-  if (typeof store !== 'string' || !isAbsolute(store) || resolve(store) !== store) fail('原件存储路径无效');
+  if (typeof store !== 'string' || resolve(store) !== store) fail('原件存储路径无效');
   if (store === root || inside(root, store)) {
-    try { await workDirectory(work); } catch { fail('原件存储必须位于源码外或本轮工作根内'); }
+    try { checkFixedWork(work); } catch { fail('原件存储必须位于源码外或本轮工作根内'); }
     if (!inside(work, store)) fail('原件存储必须位于源码外或本轮工作根内');
     const owner = JSON.parse(await bounded(join(work, '.active.json'), 65536));
     if (owner.schema !== 1 || owner.product_id !== 'citizenserve' || owner.work !== work || owner.state !== 'running'
@@ -3808,11 +3810,9 @@ test('独立临时原件只允许本轮固定根，正常缓存、离线、失�
   }
   await assert.rejects(original(absent, {...options, dependencyRoot: store + '/../escape', offline: true}, 'dependency'), /路径无效/);
   await assert.rejects(original(absent, {...options, work: temporary, offline: true}, 'dependency'), /源码外或本轮/);
-  const requested = await protocolRequirements();
   const toolStore = join(temporary, 'tools'); await mkdir(toolStore);
-  await writeFile(join(toolStore, requested.tools[0].archive.sha256 + '.blob'), zip());
   await assert.rejects(prepare({work, mode: 'independent', store, toolStore, offline: true}), /离线缺少/);
-  assert.deepEqual(await readdir(toolStore), [requested.tools[0].archive.sha256 + '.blob']);
+  assert.deepEqual(await readdir(toolStore), []);
 }));
 
 test('本机协议来自TataChatSDK仓库，自动化仍固定提交与protoc35', async () => {
@@ -3846,7 +3846,7 @@ test('供给身份必须绑定当前产品平台和工作根', async () => fixtu
 }));
 test('供给路径经过链接时先拒绝，不接触下载', async () => fixture(async work => {
   const link = join(work, 'link'); await symlink(work, link);
-  const supply = {schema: 1, product_id: 'citizenserve', platform: 'cloudflare', work, dependency_root: link, tool_root: work};
+  const supply = {schema: 1, product_id: 'citizenserve', platform: 'cloudflare', work, dependency_root: work, tool_root: link};
   await assert.rejects(prepare({work, mode: 'console', supply}), /链接/);
 }));
 test('资源模式必须显式且永久存储不得进入源码', async () => fixture(async work => {
