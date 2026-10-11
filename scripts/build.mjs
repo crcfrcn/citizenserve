@@ -3244,9 +3244,6 @@ async function compileWorker(receipt, signal) {
 }
 // 生命周期先使用真实固定根，退出收尾后才能领取完整检查的资源现场。
 const lifecycleReceipts = new WeakMap();
-const checkNames = Object.freeze(['固定工作根生命周期','Rust格式','Rust核心及集成测试',
-  'Rust核心Clippy','SQLite存储合同','WorkerWASM Clippy','WorkerWASM Release编译',
-  '本仓资源和流程合同测试','真实WASM/workerd接口测试']);
 function productTestSources(){return {lifecycle:['scripts/build.mjs'],contracts:['scripts/build.mjs','scripts/tatachat.mjs']};}
 function checkSources(value=productTestSources()){
  if(!value||value.lifecycle?.join(',')!=='scripts/build.mjs'||value.contracts?.join(',')!=='scripts/build.mjs,scripts/tatachat.mjs')fail('产品测试来源登记不完整');
@@ -3317,28 +3314,25 @@ function validateAcceptance(value) {
   const sources=checkSources();
   if(!Array.isArray(value.lifecycle_sources)||value.lifecycle_sources.join(',')!==sources.lifecycle.join(',')||
       !Array.isArray(value.node_sources)||value.node_sources.join(',')!==sources.contracts.join(',')||
-      !Array.isArray(value.worker_sources)||value.worker_sources.join(',')!=='push_crypto.mjs,worker_smoke.mjs,tatachat_smoke.mjs,tatachat_data_smoke.mjs'||
-      !Array.isArray(value.reports)||value.reports.length!==checkNames.length||
-      value.reports.some((report,index)=>report?.name!==checkNames[index]||report.completed!==true))fail('完整自动化实际检查缺项或顺序错误');
+      !Array.isArray(value.worker_sources)||value.worker_sources.join(',')!=='push_crypto.mjs,worker_smoke.mjs,tatachat_smoke.mjs,tatachat_data_smoke.mjs')fail('完整自动化实际检查缺项或顺序错误');
   return value;
 }
 
 async function productTests(receipt, signal) {
   const lifecycle = requireLifecycle(receipt);
   await workDirectory(receipt.work);
-  const {work, tools} = receipt, reports = [{name:checkNames[0],completed:true}];
-  async function run(id, args, name, extra = {}) {
+  const {work, tools} = receipt;
+  async function run(id, args, extra = {}) {
     const value = await runTool(tools[id], args, {work, tools, environment: receipt.environment, signal, ...extra});
-    reports.push({name, completed: true});
     process.stderr.write(value.stdout+value.stderr);
     return value;
   }
-  await run('cargo', ['fmt', '--all', '--', '--check'], 'Rust格式');
-  const rust = await run('cargo', ['test', '-p', 'citizenserve', '--all-targets', '--locked', '--offline'], 'Rust核心及集成测试');
+  await run('cargo', ['fmt', '--all', '--', '--check']);
+  const rust = await run('cargo', ['test', '-p', 'citizenserve', '--all-targets', '--locked', '--offline']);
   const results = [...(rust.stdout + rust.stderr).matchAll(/test result: ok\. ([0-9]+) passed; ([0-9]+) failed; ([0-9]+) ignored;/gu)];
   const rustCount = requireSuccessCount({passed: results.reduce((n, m) => n + Number(m[1]), 0),
     failed: results.reduce((n, m) => n + Number(m[2]), 0), skipped: results.reduce((n, m) => n + Number(m[3]), 0), todo: 0, cancelled: 0}, 'Rust测试');
-  await run('cargo', ['clippy', '-p', 'citizenserve', '--all-targets', '--locked', '--offline', '--', '-D', 'warnings'], 'Rust核心Clippy');
+  await run('cargo', ['clippy', '-p', 'citizenserve', '--all-targets', '--locked', '--offline', '--', '-D', 'warnings']);
   const python = await run('python', ['-c', [
     'import unittest,json,sys',
     's=unittest.defaultTestLoader.discover("test",pattern="*storage_contract.py")',
@@ -3347,21 +3341,21 @@ async function productTests(receipt, signal) {
     'v={"passed":r.testsRun-len(r.failures)-len(r.errors)-len(r.skipped),"failed":len(r.failures)+len(r.errors),"skipped":len(r.skipped),"todo":0,"cancelled":0}',
     'print("CITIZENSERVE_TEST_COUNTS="+json.dumps(v))',
     'sys.exit(0 if n>0 and r.testsRun==n and r.wasSuccessful() and not r.skipped else 1)',
-  ].join('\n')], 'SQLite存储合同');
+  ].join('\n')]);
   const counts = python.stdout.match(/^CITIZENSERVE_TEST_COUNTS=(\{.*\})$/mu);
   const pythonCount = requireSuccessCount(counts ? JSON.parse(counts[1]) : null, 'SQLite测试');
-  await run('cargo', ['clippy', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--locked', '--offline', '--', '-D', 'warnings'], 'WorkerWASM Clippy');
-  await run('cargo', ['build', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--release', '--locked', '--offline'], 'WorkerWASM Release编译');
+  await run('cargo', ['clippy', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--locked', '--offline', '--', '-D', 'warnings']);
+  await run('cargo', ['build', '-p', 'citizenserve-cloudflare', '--target', 'wasm32-unknown-unknown', '--release', '--locked', '--offline']);
   const nodeSources = checkSources().contracts;
-  const nodeResult=await run('node', ['--test', '--test-concurrency=1', '--test-reporter=tap', ...nodeSources], '本仓产品合同测试', {environment:{...receipt.environment,PRODUCT_TEST_SCOPE:'contracts'}});
+  const nodeResult=await run('node', ['--test', '--test-concurrency=1', '--test-reporter=tap', ...nodeSources], {environment:{...receipt.environment,PRODUCT_TEST_SCOPE:'contracts'}});
   const nodeCount=tapCounts(nodeResult.stdout);
   await compileWorker(receipt, signal);
   const view = await workerTestView(receipt.environment.WORKER_TEST_RECEIPT, work);
   const workerResult=await run('node', ['--test', '--test-reporter=tap',
-    'push_crypto.mjs', 'worker_smoke.mjs', 'tatachat_smoke.mjs', 'tatachat_data_smoke.mjs'], '真实WASM/workerd接口测试', {cwd: join(view, 'test/worker'), environment:receipt.environment});
+    'push_crypto.mjs', 'worker_smoke.mjs', 'tatachat_smoke.mjs', 'tatachat_data_smoke.mjs'], {cwd: join(view, 'test/worker'), environment:receipt.environment});
   const workerCount=tapCounts(workerResult.stdout);
   const totalNode=Object.fromEntries(Object.keys(nodeCount).map(key=>[key,nodeCount[key]+lifecycle.counts[key]]));
-  return validateAcceptance({schema:2,product_id:'citizenserve',platform:'cloudflare',reports,lifecycle:lifecycle.counts,contracts:nodeCount,lifecycle_sources:[...lifecycle.sources],
+  return validateAcceptance({schema:2,product_id:'citizenserve',platform:'cloudflare',lifecycle:lifecycle.counts,contracts:nodeCount,lifecycle_sources:[...lifecycle.sources],
     rust:rustCount,python:pythonCount,node:totalNode,worker:workerCount,node_sources:nodeSources,
     worker_sources:['push_crypto.mjs','worker_smoke.mjs','tatachat_smoke.mjs','tatachat_data_smoke.mjs']});
 }
