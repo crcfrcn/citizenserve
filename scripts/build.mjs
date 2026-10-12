@@ -2117,14 +2117,14 @@ function cleanEnvironment(work, tools, extra = {}) {
   }
   return Object.fromEntries(Object.entries(environment).filter(([, v]) => v !== undefined));
 }
-async function runTool(path, args, {work, cwd = root, tools = {}, environment = {}, signal, capture = true, binary = false, timeout = 30 * 60 * 1000} = {}) {
+async function runTool(path, args, {work, cwd = root, tools = {}, environment = {}, signal, capture = true, binary = false, diagnostic = false, timeout = 30 * 60 * 1000} = {}) {
   await checked(path, 'file'); await checked(cwd, 'directory'); await workDirectory(work);
   signal?.throwIfAborted();
   if (cwd !== root && cwd !== work && !inside(work, cwd) && cwd !== join(root, 'server/cloudflare')) fail('工具执行目录越界');
-  return runProcess(path,args,{work,cwd,environment:cleanEnvironment(work,tools,environment),signal,capture,binary,timeout});
+  return runProcess(path,args,{work,cwd,environment:cleanEnvironment(work,tools,environment),signal,capture,binary,diagnostic,timeout});
 }
 // 前置阶段不持有资源工作根，仍使用同一真实子进程取消与后代退出处理。
-async function runProcess(path,args,{work,cwd=root,environment={},signal,capture=true,binary=false,timeout=30*60*1000}={}) {
+async function runProcess(path,args,{work,cwd=root,environment={},signal,capture=true,binary=false,diagnostic=false,timeout=30*60*1000}={}) {
   signal?.throwIfAborted();
   const child = spawn(path, args, {cwd, env: environment,
     detached: true, stdio: ['ignore', 'pipe', 'pipe']});
@@ -2171,7 +2171,17 @@ async function runProcess(path,args,{work,cwd=root,environment={},signal,capture
   } catch { quiet = false; }
   if (!quiet) { unsafeWork.add(work); fail('实际工具后代退出未确认'); }
   if (processError || failed || signal?.aborted || result.code !== 0 || result.terminalSignal) {
-    fail('工具运行未完整成功：' + basename(path));
+    // 仅获准的Perl准备失败交付有界脱敏尾部；正常工具输出和其它流程仍不进入错误回执。
+    const tail=value=>{
+      const safe=Buffer.from(value).subarray(-2048).toString('utf8')
+        .replace(/gh[sopur]_[A-Za-z0-9_]+/gu,'[已脱敏]')
+        .replace(/\b(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY)\s*[:=]\s*\S+/giu,'[已脱敏]')
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu,' ');
+      return Buffer.from(safe).subarray(-2048).toString('utf8');
+    };
+    fail('工具运行未完整成功：' + basename(path) + (diagnostic
+      ? '\n退出状态：'+String(result.code)+'；信号：'+String(result.terminalSignal)+'；过程失败：'+String(failed || processError)
+        +'\nstdout尾部：'+tail(stdout)+'\nstderr尾部：'+tail(stderr) : ''));
   }
   return {stdout, stderr};
 }
@@ -2311,7 +2321,7 @@ async function nativeLinux(id, archive, options, tools) {
   } else if (id === 'perl') {
     await runTool(tools.sh, [join(source, 'Configure'), '-des', '-Dprefix=' + prefix,
       '-Dcc=' + join(options.work, 'bin/cc'), '-Dar=' + join(options.work, 'bin/ar'),
-      '-Dranlib=' + join(options.work, 'bin/ranlib'), '-Duseshrplib=false'], common);
+      '-Dranlib=' + join(options.work, 'bin/ranlib'), '-Duseshrplib=false'], {...common, diagnostic: true});
     await make(); await make(['install']);
   } else if (id === 'openssl') {
     await runTool(tools.perl, [join(source, 'Configure'), 'linux-x86_64', 'no-shared', 'no-tests',
