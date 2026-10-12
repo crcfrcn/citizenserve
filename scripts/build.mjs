@@ -2117,14 +2117,14 @@ function cleanEnvironment(work, tools, extra = {}) {
   }
   return Object.fromEntries(Object.entries(environment).filter(([, v]) => v !== undefined));
 }
-async function runTool(path, args, {work, cwd = root, tools = {}, environment = {}, signal, capture = true, binary = false, timeout = 30 * 60 * 1000} = {}) {
+async function runTool(path, args, {work, cwd = root, tools = {}, environment = {}, signal, capture = true, binary = false, diagnostic = null, timeout = 30 * 60 * 1000} = {}) {
   await checked(path, 'file'); await checked(cwd, 'directory'); await workDirectory(work);
   signal?.throwIfAborted();
   if (cwd !== root && cwd !== work && !inside(work, cwd) && cwd !== join(root, 'server/cloudflare')) fail('工具执行目录越界');
-  return runProcess(path,args,{work,cwd,environment:cleanEnvironment(work,tools,environment),signal,capture,binary,timeout});
+  return runProcess(path,args,{work,cwd,environment:cleanEnvironment(work,tools,environment),signal,capture,binary,diagnostic,timeout});
 }
 // 前置阶段不持有资源工作根，仍使用同一真实子进程取消与后代退出处理。
-async function runProcess(path,args,{work,cwd=root,environment={},signal,capture=true,binary=false,timeout=30*60*1000}={}) {
+async function runProcess(path,args,{work,cwd=root,environment={},signal,capture=true,binary=false,diagnostic=null,timeout=30*60*1000}={}) {
   signal?.throwIfAborted();
   const child = spawn(path, args, {cwd, env: environment,
     detached: true, stdio: ['ignore', 'pipe', 'pipe']});
@@ -2171,7 +2171,17 @@ async function runProcess(path,args,{work,cwd=root,environment={},signal,capture
   } catch { quiet = false; }
   if (!quiet) { unsafeWork.add(work); fail('实际工具后代退出未确认'); }
   if (processError || failed || signal?.aborted || result.code !== 0 || result.terminalSignal) {
-    fail('工具运行未完整成功：' + basename(path));
+    // 仅Perl的Make失败交付有界脱敏尾部；其它工具与成功路径不增加日志。
+    const tail=value=>{
+      const safe=Buffer.from(value).subarray(-2048).toString('utf8')
+        .replace(/gh[sopur]_[A-Za-z0-9_]+/gu,'[已脱敏]')
+        .replace(/\b(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY)\s*[:=]\s*\S+/giu,'[已脱敏]')
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu,' ');
+      return Buffer.from(safe).subarray(-2048).toString('utf8');
+    };
+    fail('工具运行未完整成功：' + basename(path) + (diagnostic
+      ? '\n阶段：'+diagnostic+'；退出状态：'+String(result.code)+'；信号：'+String(result.terminalSignal)
+        +'\nstdout尾部：'+tail(stdout)+'\nstderr尾部：'+tail(stderr) : ''));
   }
   return {stdout, stderr};
 }
@@ -2304,7 +2314,8 @@ async function nativeLinux(id, archive, options, tools) {
       AR: join(options.work, 'bin/ar'), RANLIB: join(options.work, 'bin/ranlib'),
       CONFIG_SHELL: tools.sh, SHELL: tools.sh}};
   const make = (args = [], environment = {}) => runTool(tools.make, ['-j2', 'SHELL=' + tools.sh, ...args],
-    {...common, environment: {...common.environment, ...environment}});
+    {...common, environment: {...common.environment, ...environment},
+      diagnostic: id === 'perl' ? (args.includes('install') ? 'Perl make install' : 'Perl make') : null});
   const configure = args => runTool(tools.sh, [join(source, 'configure'), '--prefix=' + prefix, ...args], common);
   if (id === 'zlib') {
     await configure(['--static']); await make(); await make(['install']);
