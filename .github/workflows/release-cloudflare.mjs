@@ -21,7 +21,8 @@ async function workerRelease(release,platform,readTag){
 }
 const shaPattern = /^[0-9a-f]{40}$/u;
 const fail = message => { throw new Error(message); };
-const root = fileURLToPath(new URL('../../', import.meta.url));
+// 文件URL的目录末尾分隔符先规范化；真实链接仍由工作根检查拒绝。
+const root = resolve(fileURLToPath(new URL('../../', import.meta.url)));
 const workflowPath = `.github/workflows/release-${owner.platform}.yml`;
 const prefix = `${owner.product}-${owner.platform}-v`;
 // 自动化与Build、Publish只消费产品Cargo声明，不互相读取流程脚本。

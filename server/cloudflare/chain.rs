@@ -128,7 +128,10 @@ impl Chain {
         let missing = || Error::new(503, "chain_not_configured");
         let url = env.var("CHAIN_URL").map_err(|_| missing())?.to_string();
         trusted_rpc_url(&url)?;
-        let client_id = env.var("CF_ACCESS_CLIENT_ID").map_err(|_| missing())?.to_string();
+        let client_id = env
+            .var("CF_ACCESS_CLIENT_ID")
+            .map_err(|_| missing())?
+            .to_string();
         let client_secret = env
             .secret("CHAIN_SECRET")
             .map_err(|_| missing())?
