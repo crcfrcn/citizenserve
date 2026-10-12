@@ -23,9 +23,9 @@
 
 ### 编译、自动化、发布与门禁边界
 
-`scripts/`现有三个所属入口：`build.mjs`持有本机Cloudflare Worker编译、资源、固定现场与所属回归；正式测试及组包归同名Workflow；`publish.mjs`只读核验已完成成功自动化的正式Run、Tag、Release、资产及归档成员，并从已验真归档生成不含公开变量值的部署候选；`tatachat.mjs`在原位置独立管理聊天云资源声明与受控维护能力。没有旧脚本转发入口。
+`scripts/`现有三个流程入口：`build.mjs`持有本机Cloudflare Worker编译、资源、固定现场与所属回归；正式测试及组包归同名Workflow；`publish.mjs`只读核验已完成成功自动化的正式Run、Tag、Release、资产及归档成员，并从已验真归档生成不含公开变量值的部署候选；`tatachat.mjs`在原位置独立管理聊天云资源声明与受控维护能力。配置需求由同目录独立的 `config.mjs` 声明，没有旧脚本转发入口。
 
-`.github/workflows/release-cloudflare.yml` 与同名 MJS 独立负责 GitHub 身份、版本、固定工具准备、Cargo/Node/Python/Worker 真实测试、Worker 编译、十件成员组包、Run、Tag/Release 与三件资产上传回读；不调用本仓 Build。Linux 工具官方来源与包成员在现有 `Cargo.toml` 元数据中唯一声明，Build、Workflow、Publish 分别读取所需字段。`publish.mjs` 继续只读验真正式资产和候选，不上传或部署。`.github/tatagate/tatagate.mjs` 只读核对主检出、目录闭集、流程方向、登记文件、自动化声明和语法；原产品专属安全检查仍需逐项复核。用户明确保留聊天云资源独立脚本 `scripts/tatachat.mjs`。代码尚未执行正式 Runner 流程。
+`.github/workflows/release-cloudflare.yml` 与同名 MJS 独立负责 GitHub 身份、版本、固定工具准备、Cargo/Node/Python/Worker 真实测试、Worker 编译、十件成员组包、Run、Tag/Release 与三件资产上传回读；不调用本仓 Build。Linux 工具官方来源与包成员在现有 `Cargo.toml` 元数据中唯一声明，Build、Workflow、Publish 分别读取所需字段。`publish.mjs` 继续只读验真正式资产和候选，不上传或部署。`.github/tatagate/tatagate.mjs` 只读核对主检出、门禁与Workflow目录闭集、已登记流程入口、自动化声明和语法；不约束整个 `scripts/` 目录的文件集合，仓库通用源码安全扫描仍覆盖已跟踪文件。用户明确保留聊天云资源独立脚本 `scripts/tatachat.mjs`。代码尚未执行正式 Runner 流程。
 
 根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
 

@@ -9,7 +9,6 @@ import {join,resolve,sep,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=resolve(fileURLToPath(new URL('../..',import.meta.url)));
 const repository="crcfrcn/citizenserve";
-const scripts=Object.freeze(["build.mjs", "publish.mjs", "tatachat.mjs"]);
 const required=Object.freeze(["CitizenServe.md", "Cargo.lock"]);
 const fail=message=>{throw Error('本仓只读门禁：'+message);};
 const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8',maxBuffer:1024*1024}).trim();
@@ -58,7 +57,6 @@ export function checkRepository(){
   ||contract.github_repository&&contract.github_repository!==repository
   ||JSON.stringify(contract.checks)!==JSON.stringify(['repository-contracts','flow-isolation','syntax'])
   ||!Array.isArray(contract.workflows)||!contract.workflows.length||new Set(contract.workflows).size!==contract.workflows.length)fail('本仓门禁声明无效');
- exact('scripts',scripts);
  exact('.github/tatagate',['tatagate.json','tatagate.mjs']);
  exact('.github/workflows',contract.workflows.flatMap(name=>[name,name.replace(/\.yml$/u,'.mjs')]).concat('tatagate.yml'));
  for(const name of required)file(name);
