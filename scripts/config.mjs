@@ -46,7 +46,6 @@ export function validateDynamicPublic(values){
 const items=[
   {environment:'cloudflare',name:'SERVER_DEPLOY',title:'SERVER_DEPLOY',description:'Worker、Route与D1部署令牌',revealable:false,accessLevel:'publish',kind:'operation'},
   {environment:'cloudflare',name:'KV',title:'KV',description:'会员镜像对账Workers KV令牌',revealable:true,accessLevel:'protected',kind:'operation'},
-  {environment:'production',name:'CF_ACCOUNT_ID',title:'CF_ACCOUNT_ID',description:'Cloudflare账户编号',revealable:true,accessLevel:'public',kind:'account',format:'hex16'},
   ...names(dynamicPublicNames,'public','runtime',publicFormats),
   ...names(workerSecretNames,'protected','worker_secret',{CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET:'hex32'}),
 ].map(item=>item.name==='CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET'?
@@ -67,8 +66,5 @@ export function describeConfiguration(){
   if(declared.secrets.length!==secrets.size||declared.secrets.some(name=>!secrets.has(name))
     ||dynamicPublicNames.some(name=>!declared.vars.includes(name))
     ||resourceBindings.some(name=>!source.includes('"'+name+'"')))throw Error('公民服务端运行配置与所属声明不一致');
-  const itemNames=new Set(items.map(item=>item.name));
-  const fixed=[...declared.vars.filter(name=>!itemNames.has(name)).map(name=>({name,kind:'fixed',source:'wrangler.vars'})),
-    ...resourceBindings.map(name=>({name,environment:'cloudflare',kind:'binding',source:'wrangler.resource'}))];
-  return {schema:1,product_id:'citizenserve',configuration:{id:'citizenserve',kind:'cloud',title:'服务端配置',items},fixed};
+  return {schema:1,product_id:'citizenserve',configuration:{id:'citizenserve',kind:'cloud',title:'服务端配置',items}};
 }
