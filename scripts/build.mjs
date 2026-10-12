@@ -2445,6 +2445,10 @@ async function prepareFlowResources(options) {
     const source = join(work, 'prepare/worker-build/source'), prefix = join(work, 'prepare/worker-build/payload');
     await materialize(await unpack(file.bytes, 'tar-gzip', options, tools), source, item.platforms[requested.host].root);
     if(digest(await readFile(join(source,'Cargo.lock')))!==d.resources.worker_build_lock_sha256)fail('worker-build锁定Cargo清单不一致');
+    // 只在本次展开副本声明独立工作区；上游归档和锁保持原字节，防止Cargo上溯产品根。
+    const manifest=join(source,'Cargo.toml'),manifestText=(await bounded(manifest,128*1024)).toString('utf8');
+    if(/^\[workspace\]$/mu.test(manifestText))fail('worker-build原清单已声明工作区');
+    await chmod(manifest,0o600);await writeFile(manifest,manifestText+'\n[workspace]\n');
     await runTool(tools.cargo, ['install', '--path', source, '--locked', '--offline', '--root', prefix],
       {work, tools, signal, environment: {CC: join(work, 'bin/cc'), AR: join(work, 'bin/ar'), OPENSSL_DIR: tools.opensslPrefix,
         OPENSSL_STATIC: '1', CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: join(work, 'bin/cc')}});
