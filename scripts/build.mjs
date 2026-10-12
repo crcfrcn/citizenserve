@@ -2370,9 +2370,12 @@ async function prepareFlowResources(options) {
     const helpers = d.resources.preparation[requested.host];
     for (const id of ['busybox', 'make']) {
       const value = await original(helpers[id], options, 'tool');
-      const at = join(work, 'prepare', id);
-      await materialize(await unpack(value.bytes, 'deb', options, tools), at);
-      tools[id] = join(at, helpers[id].executable);
+      const entries = await unpack(value.bytes, 'deb', options, tools);
+      const executable = entries.get(helpers[id].executable);
+      if (!executable || !['', '0'].includes(executable.type) || !(executable.mode & 0o111) || !executable.data.length)
+        fail('官方Deb可执行入口缺失或类型无效：' + id);
+      // 只物化声明的真实工具；Deb内与编译无关的链接不进入产品任务现场。
+      tools[id] = await binaryFile(executable.data, join(work, 'prepare', id, helpers[id].executable));
     }
     // 引导闭包是固定BusyBox的实际appet，不读取系统PATH。
     const applets = ['sh', 'awk', 'grep', 'sed', 'cat', 'chmod', 'chown', 'cp', 'cut', 'date', 'dirname', 'echo',
