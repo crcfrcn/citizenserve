@@ -1,5 +1,7 @@
 [workspace]
 members = [".", "server/cloudflare"]
+# Build临时展开的worker-build使用自己的Cargo.lock，不能加入产品工作区。
+exclude = ["target/build/cloudflare/prepare/worker-build/source"]
 default-members = ["."]
 resolver = "2"
 
