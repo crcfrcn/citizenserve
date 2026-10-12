@@ -2387,6 +2387,8 @@ async function prepareFlowResources(options) {
         fail('官方Deb可执行入口缺失或类型无效：' + id);
       // 只物化声明的真实工具；Deb内与编译无关的链接不进入产品任务现场。
       tools[id] = await binaryFile(executable.data, join(work, 'prepare', id, helpers[id].executable));
+      // Perl子Makefile按PATH再次调用make；交付同一已验真字节，不读取Runner系统工具。
+      if (id === 'make') await binaryFile(executable.data, join(work, 'bin', 'make'));
     }
     // 引导闭包是固定BusyBox的实际appet，不读取系统PATH。
     const applets = ['sh', 'awk', 'grep', 'sed', 'cat', 'chmod', 'chown', 'cp', 'cut', 'date', 'dirname', 'echo',
