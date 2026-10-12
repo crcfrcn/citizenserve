@@ -2400,7 +2400,9 @@ async function prepareFlowResources(options) {
     await materialize(await unpack(zig.bytes, 'tar-xz', options, tools), zigRoot, helpers.zig.root);
     tools.zig = join(zigRoot, 'zig');
     for (const [name, args] of [['cc', 'cc -target x86_64-linux-gnu.2.39'], ['c++', 'c++ -target x86_64-linux-gnu.2.39'], ['ar', 'ar'], ['ranlib', 'ranlib']]) {
-      await binaryFile(Buffer.from('#!' + tools.sh + '\nexec ' + shellQuote(tools.zig) + ' ' + args + ' "$@"\n'), join(work, 'bin', name));
+      // cc-rs给Clang追加的宿主三元组与上方Zig固定目标等价；只过滤这一个重复参数。
+      const targetFilter = name === 'cc' ? 'for arg in "$@"; do\n  shift\n  case "$arg" in\n    --target=x86_64-unknown-linux-gnu) ;;\n    --target|--target=*|-target|-target=*) echo "编译目标不匹配" >&2; exit 1 ;;\n    *) set -- "$@" "$arg" ;;\n  esac\ndone\n' : '';
+      await binaryFile(Buffer.from('#!' + tools.sh + '\n' + targetFilter + 'exec ' + shellQuote(tools.zig) + ' ' + args + ' "$@"\n'), join(work, 'bin', name));
     }
     const z = await nativeLinux('zlib', helpers.zlib, options, tools); tools.zlibPrefix = z.prefix;
     for (const id of ['perl','openssl']) {
