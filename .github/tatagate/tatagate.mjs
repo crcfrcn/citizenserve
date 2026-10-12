@@ -67,7 +67,8 @@ export function checkRepository(){
   if(typeof name!=='string'||!/^release-[a-z0-9-]+\.yml$/u.test(name))fail('Workflow身份无效');
   const yaml=file('.github/workflows/'+name),entry='.github/workflows/'+name.replace(/\.yml$/u,'.mjs'),workflow=file(entry);
   if(!yaml.includes('workflow_dispatch:')||/^\s*push\s*:/mu.test(yaml))fail('自动化不得随推送派发');
-  if(/scripts\/(?:build|publish)\.mjs|\.github\/tatagate\//u.test(workflow))fail('自动化调用其它流程');
+  // 同仓Workflow可用产品Build的公开工作根和协议接口；发布与门禁流程仍不得互调。
+  if(/scripts\/publish\.mjs|\.github\/tatagate\//u.test(workflow))fail('自动化调用其它流程');
   syntax(entry);
  }
  sourceInventory(contract);

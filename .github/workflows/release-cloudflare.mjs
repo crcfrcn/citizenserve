@@ -6,6 +6,7 @@ import { appendFileSync, createReadStream, existsSync, lstatSync, mkdirSync, rea
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {gzipSync} from 'node:zlib';
+import {fixedWork,finishFixedWork,prepare,withFixedWork} from '../../scripts/build.mjs';
 
 export const owner = Object.freeze({"product": "citizenserve", "platform": "cloudflare", "repository": "crcfrcn/citizenserve", "required_assets": Object.freeze(["citizenserve-cloudflare-release.tgz", "release-manifest.json", "SHA256SUMS"])});
 // 本目标只解释自身已公开的Run/Tag身份；编译入口不持有此规则。
@@ -398,7 +399,7 @@ async function prepareAutomationTools(work){
  const environment=automationEnvironment({WORKER_BUILD:paths['worker-build'],WASM_BINDGEN_BIN:paths['wasm-bindgen'],WASM_OPT_BIN:paths['wasm-opt'],PROTOC:paths.protoc,ESBUILD_BIN:esbuild,PYTHON:paths.python,PATH:[...new Set(Object.values(paths).map(dirname)),process.env.PATH].join(':')});
  return {paths,environment};
 }
-// 正式自动化直接执行产品原锁和真实测试；不调用本仓Build。
+// 本仓自动化只借用产品公开的固定工作根与协议供给，验收及组包仍归当前Workflow。
 async function workflowProduct(command,input){
  if(command==='package-members')return [...packageInputs];
  const work=process.env.RELEASE_WORK;
@@ -407,7 +408,13 @@ async function workflowProduct(command,input){
  const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
  if(command==='test'){
   if(existsSync(receiptPath)||lstatSync(worker,{throwIfNoEntry:false}))fail('自动化测试已有旧现场');
-  const {environment}=await prepareAutomationTools(work);
+  const {environment:toolEnvironment}=await prepareAutomationTools(work);
+  return withFixedWork('test',async testWork=>{
+  const protocol=await prepare({work:testWork,mode:'independent',store:join(work,'protocol-originals'),toolStore:join(work,'tool-originals')});
+  if(protocol.work!==testWork||protocol.protocol!==join(testWork,'tatachat-protocol/protocol')||protocol.protoc!==join(testWork,'tatachat-protocol/protoc'))fail('自动化协议工作根回执无效');
+  const cargoTarget=join(testWork,'cargo-target');mkdirSync(cargoTarget,{mode:0o700});
+  const environment={...toolEnvironment,PRODUCT_WORK_DIR:testWork,CARGO_TARGET_DIR:cargoTarget,
+   TATACHAT_RESOURCE_RECEIPT:join(testWork,'tatachat-protocol/receipt.json'),TATACHATSDK_PROTOCOL_DIR:protocol.protocol,PROTOC:protocol.protoc};
   runAutomation('cargo',['fetch','--locked'],{environment});
   runAutomation('cargo',['fetch','--locked','--target','wasm32-unknown-unknown'],{environment});
   runAutomation('cargo',['fmt','--all','--','--check'],{environment});
@@ -431,6 +438,7 @@ async function workflowProduct(command,input){
   if(!smokeCount||!/^# fail 0$/mu.test(smoke)||/^# skipped [1-9]/mu.test(smoke))fail('真实Worker回归缺失或失败');
   writeFileSync(receiptPath,JSON.stringify({schema:1,product_id:owner.product,platform:owner.platform,run_id:input.run_id,source_sha:process.env.GITHUB_SHA,files:Object.fromEntries(Object.entries(files).map(([name,bytes])=>[name,sha(bytes)])),rust_passed:rustPassed.reduce((n,m)=>n+Number(m[1]),0),chat_passed:Number(chatCount[1]),worker_passed:Number(smokeCount[1])})+'\n',{flag:'wx'});
   return {schema:2,product_id:owner.product,platform:owner.platform};
+  });
  }
  if(command!=='package')fail('自动化产品命令无效');
  const proof=JSON.parse(readFileSync(receiptPath,'utf8'));
@@ -467,6 +475,7 @@ async function productCommand(command,{invoke=workflowProduct,identity:chosen,en
 function cleanAutomation(){
  const identity=runVersion(),expected=join(process.env.RUNNER_TEMP,owner.product,owner.platform,String(identity.run_id),String(identity.run_attempt),process.env.GITHUB_JOB);
  if(process.env.GITHUB_JOB!=='flow'||(process.env.RELEASE_WORK&&process.env.RELEASE_WORK!==expected)||!expected.startsWith(resolve(process.env.RUNNER_TEMP)+sep))fail('自动化清理归属无效');
+ const testWork=fixedWork('test');if(existsSync(testWork))finishFixedWork(testWork);
  const owned=workerParent();if(owned)rmSync(owned,{recursive:true,force:true});
  rmSync(expected,{recursive:true,force:true});
 }
