@@ -12,6 +12,8 @@ export const contract=Object.freeze({
         "worker/index_bg.wasm"
       ],
       "completion": "compile-only",
+      "work": "target/build/cloudflare",
+      "precompile_checks": false,
       "work_claim": "product"
     }
   },

@@ -51,7 +51,8 @@ const items=[
   ...names(workerSecretNames,'protected','worker_secret',{CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET:'hex32'}),
 ].map(item=>item.name==='CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET'?
   {...item,revealable:false,accessLevel:'publish',generator:'hex32'}:
-  item.name==='TATACHAT_AUTH_KEY'?{...item,revealable:false}:item);
+  item.name==='TATACHAT_AUTH_KEY'?{...item,revealable:false,format:'ed25519_pkcs8_pem',generator:'ed25519_pkcs8_pem'}:
+  item.name==='TATACHAT_AUTH_KID'?{...item,generator:'auth_kid'}:item);
 
 function configuredNames(source){
   const section=/\[vars\]([^[]*)/u.exec(source)?.[1];

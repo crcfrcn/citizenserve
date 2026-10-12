@@ -4,6 +4,8 @@
 
 本产品编译任务使用本仓 `target/build/<平台>` 独立临时目录，平台键为 `cloudflare`。不同平台同时领取并执行；同平台已有活跃任务时立即拒绝再次领取。资源准备、工程副本、缓存和编译输出只写本平台现场；确认进程及后代退出、结果被调用方消费后，删除整个平台目录。`target/build` 仅是父目录，`target/test` 仍用于独立测试。独立执行和控制台调度调用同一本仓编译入口与清理接口。
 
+`scripts/build.mjs` 的 Cloudflare 平台声明交付编译工作根 `target/build/cloudflare`，并声明本机编译不运行编译前测试。控制台只解析该声明并传给产品 `execute`；本仓 `claimBuildWork` 创建、校验和占用工作根，`finishBuild` 在结果消费且进程退出后清理。独立测试仍使用本仓自己的测试入口与 `target/test`，不作为本机编译前置步骤。
+
 
 ## 工具与依赖的声明和供给职责
 
@@ -468,7 +470,8 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
 
 本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
-控制台“测试 · macOS”按本仓 `scripts/publish.mjs` 公开清单执行发布与配置声明的既有Node回归；完整Worker测试需要产品编译产物，继续由所属正式流程按顺序验收。
+`TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
+控制台发起的本机编译直接调用本仓 `scripts/build.mjs` 完整编译入口；发布与配置声明回归不在编译前执行。正式自动化按本仓 Workflow 自己的阶段执行并核验完整 Worker。
 
 
 
