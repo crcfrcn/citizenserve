@@ -2016,6 +2016,8 @@ function tarEntries(bytes) {
     name = (extended.path ?? name).replace(/\/$/u, '');
     const target = extended.linkpath ?? string(h.subarray(157, 257)); extended = {};
     if (!name || name === '.') continue;
+    // Ubuntu官方Deb的常规条目以./开头；仅去掉该前缀，再执行原有越界校验。
+    if (name.startsWith('./')) name = name.slice(2);
     name = safeRelative(name);
     if (entries.has(name)) fail('tar重复路径');
     if (!['', '0', '1', '2', '5'].includes(type)) fail('tar含特殊设备或未知类型');
