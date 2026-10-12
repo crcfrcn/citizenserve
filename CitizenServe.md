@@ -2,9 +2,9 @@
 
 ## 平台编译现场
 
-本产品编译任务使用本仓 `target/build/<平台>` 独立临时目录，平台键为 `cloudflare`。不同平台同时领取并执行；同平台已有活跃任务时立即拒绝再次领取。资源准备、工程副本、缓存和编译输出只写本平台现场；确认进程及后代退出、结果被调用方消费后，删除整个平台目录。`target/build` 仅是父目录，`target/test` 仍用于独立测试。独立执行和控制台调度调用同一本仓编译入口与清理接口。
+公民服务端的软件流程只有自动化与发布。自动化在GitHub Ubuntu24.04 Runner调用本仓`scripts/build.mjs`，使用`target/build/cloudflare`临时编译现场；GitHub三件正式资产由`.github/workflows/cloudflare.yml`交付。控制台没有本机编译或测试按钮。
 
-`scripts/build.mjs` 的 Cloudflare 平台声明交付编译工作根 `target/build/cloudflare`，并声明本机编译不运行编译前测试。控制台只解析该声明并传给产品 `execute`；本仓 `claimBuildWork` 创建、校验和占用工作根，`finishBuild` 在结果消费且进程退出后清理。独立测试仍使用本仓自己的测试入口与 `target/test`，不作为本机编译前置步骤。
+`scripts/build.mjs`仅声明Cloudflare Worker真实编译输出和锁定资源，公开`contract`、`fixedWork`、`executeBuild`、`buildOutputDigest`供Workflow调用。编译根由本仓独占，Runner在消费两件输出后清空；不提供本机测试、控制台编译供给或本机安装入口。
 
 
 ## 工具与依赖的声明和供给职责
@@ -15,23 +15,23 @@
 
 通过塔塔控制台执行本产品流程时，本产品向控制台声明所需资源并使用其已准备好的供给。控制台先核对并复用已有的匹配工具与依赖；没有的由控制台按本产品声明下载、准备并保存到控制台工具库或依赖库，再交付本产品复用。本产品负责直接使用交付路径，不因控制台缺件或供给失败改为自行下载，也不另建同一资源的永久副本；可写包管理器视图与流程过程数据仍归本产品当前任务工作目录。
 
-两种执行方式使用本产品同一声明、锁和流程实现，仅资源供给职责随执行方式改变。该职责适用于本产品全部平台与已实现流程。独立模式下资源缺失由产品处理；控制台模式下资源缺失由控制台处理。显式离线缺件、交付失败、损坏、错误摘要、来源漂移或越界必须据实失败，不自动升级、覆盖可疑原件或切换执行方式。
+当前正式编译只有GitHub Runner独立模式：产品按本仓声明与锁在源码外准备资源，缺件、损坏、摘要错误、来源漂移或路径越界据实失败，不切换来源或执行方式。
 
 本篇规定当前产品资源职责及已实现入口；完整运行态验收和实际执行结果归所属任务卡，不以资源接口存在证明全部流程通过。
 
 ## 当前能力与验收边界
 
-### 编译、自动化、发布与门禁边界
+### 自动化与发布边界
 
-`scripts/`现有三个流程入口：`build.mjs`持有本机Cloudflare Worker编译、资源、固定现场与所属回归；正式测试及组包归同名Workflow；`publish.mjs`只读核验已完成成功自动化的正式Run、Tag、Release、资产及归档成员，并从已验真归档生成不含公开变量值的部署候选；`tatachat.mjs`在原位置独立管理聊天云资源声明与受控维护能力。配置需求由同目录独立的 `config.mjs` 声明，没有旧脚本转发入口。
+`scripts/build.mjs`只负责GitHub Runner上的Cloudflare Worker编译与资源准备；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产，供后续Cloudflare部署候选使用。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
 
-`.github/workflows/release-cloudflare.yml` 与同名 MJS 独立负责 GitHub 身份、版本、固定工具准备、Cargo/Node/Python/Worker 真实测试、Worker 编译、十件成员组包、Run、Tag/Release 与三件资产上传回读；工作根领取、收尾和聊天协议准备调用本产品 `scripts/build.mjs` 的公开接口，其它自动化阶段仍由Workflow拥有。Linux 工具官方来源与包成员在现有 `Cargo.toml` 元数据中唯一声明，Build、Workflow、Publish 分别读取所需字段。`publish.mjs` 继续只读验真正式资产和候选，不上传或部署。`.github/tatagate/tatagate.mjs` 只读核对主检出、门禁与Workflow目录闭集、已登记流程入口、自动化声明和语法；不约束整个 `scripts/` 目录的文件集合，仓库通用源码安全扫描仍覆盖已跟踪文件。用户明确保留聊天云资源独立脚本 `scripts/tatachat.mjs`。
+`.github/workflows/cloudflare.yml`定义GitHub手动触发、Runner、产品Build调用、十件成员组包、Tag/Release与三件资产回读；产品`build.mjs`仅拥有资源准备、固定工作根和Worker编译。`linuxarm.yml`仍为空占位，不代表LinuxARM已实现；`publish.mjs`保持只读候选验真。塔塔门禁是独立流程，不作为本产品自动化的前置步骤。
 
 根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
 
 ## 根目录职责
 
-test保存所属测试源码、夹具及test/worker/package.json、package-lock.json。测试依赖展开件归当前临时工作现场：target/test/worker-smoke/test/worker/node_modules或target/build/cloudflare/worker-smoke/test/worker/node_modules，按当前流程选择；与npmView、workerTestView使用同一位置。这些内部目录仅在本轮任务期间存在，工具退出、结果核验与记录完成后，成功和失败均清空当前工作根，不保留依赖展开件。源码test目录不保存node_modules；根target整体排除源码目录结构审查，依赖仍须按资源回执与锁验真后使用。
+正式Build仍从`test/worker/package-lock.json`读取esbuild的锁定npm闭包；该历史路径是实际构建依赖，本轮没有删除或移动文件。其余测试源码不由自动化执行。Runner展开目录改为本轮`target/build/cloudflare/npm/node_modules`，编译结束后由产品清理。
 
 server通用宿主位于第1级，cloudflare平台适配位于第2级；普通业务存储适配、SQL及聊天平台适配分别归第3级repositories、sql、tatachat。Cloudflare聊天适配的attachment、key、mailbox、push、realtime仅为Rust逻辑模块，不再建立对应第4级源码目录。
 
@@ -97,11 +97,11 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 未来自建接入须使用相同逻辑身份、对象键、时间单位、摘要和授权合同，scope/origin不编码部署商，缓存不作准入事实源。当前没有自建服务器运行crate、迁移crate、导出/导入、切流、迁移CLI或控制台按钮。
 
-## 检查与构建
+## GitHub构建
 
-Cargo.lock与rust-toolchain.toml锁定本产品工具和依赖。产品测试通过scripts/build.mjs test cloudflare --work /Users/rhett/citizenserve/target/test显式执行；门禁通过.github/tatagate/tatagate.mjs local消费同一公开测试与资源能力，门禁自身仓库检查和回执独立完成。测试先对本轮固定现场执行生命周期用例并收尾，再准备当前任务资源。控制台模式只经公开供给接口交付原件路径；缺件或真实执行失败据实失败，不切换独立获取。Python用例直接加载Cloudflare生产SQL运行实际SQLite，不冒充线上D1。
+Cargo.lock与rust-toolchain.toml锁定本产品工具和依赖。当前没有产品测试入口；GitHub Workflow只调用产品编译接口并交付正式资产。门禁仍独立，不进入自动化的先后步骤。
 
-Cargo生成 /Users/rhett/citizenserve/target/build/cloudflare/cargo-target/wasm32-unknown-unknown/release/citizenserve_cloudflare.wasm；官方worker-build 0.8.5生成 /Users/rhett/citizenserve/target/build/cloudflare/worker/index.js 与 /Users/rhett/citizenserve/target/build/cloudflare/worker/index_bg.wasm，Wrangler直接使用index.js。兼容shim由工具生成，不作正式main、不手改生成JS。WASM禁用strip以保留wasm-bindgen所需externref表。本地测试依赖锁在 /Users/rhett/citizenserve/test/worker/package-lock.json，使用Node25.2.1、Wrangler4.149.0和Miniflare5.20261006.1-alpha，workerd及其平台二进制包统一1.20261006.1；所有外部请求由闭合测试服务接管，没有真实链/推送调用。配置 /Users/rhett/citizenserve/server/cloudflare/wrangler.toml 已包含Queue/两个Cron，生产兼容日期仍为2026-10-07；当前Worker测试使用同一生产日期2026-10-07；旧workerd1.20260804.1仅支持至2026-08-11的历史问题由本轮测试声明/锁升级处理，本轮已实际编译及打包当前WASM，并以同一日期启动新workerd；当前完整入口实际通过Rust214项、SQLite145项、生命周期14项、Node合同49项及真实WASM/workerd42项，失败/跳过/取消/todo均为0；9项静态/RPC/CORS包含3秒总超时、128KiB边界、HEAD、Access隔离及公共/App独立CORS。通过本地闭合夹具不证明云端TLS或钱包实机验收。 test/worker/worker_smoke.mjs已增加9项静态交付及RPC/CORS回归，覆盖成功、HEAD、固定源、路由拒绝、媒体类型/UTF-8/重定向、128KiB边界、响应头/正文超时、缺Access配置及RATE_READ；使用闭合合成上游，测试供给符合external_rate原有32字节密钥下限，不代表生产TLS、静态文件或钱包验收。本轮Worker测试视图的modulesRoot准确指向target/build/cloudflare/worker，夹具请求使用本轮WEB_ORIGIN；正式配置的WEB_ORIGIN仍为https://www.crcfrcn.com。Worker统一入口在附加安全头和CORS前复制可修改响应头，保留原正文流及WebSocket升级连接，兼容运行时不可修改的上游响应头。
+GitHub Runner的Cargo在当前`target/build/cloudflare/cargo-target`生成WASM；锁定worker-build把本轮Worker输出写为`worker/index.js`与`worker/index_bg.wasm`。Workflow只在消费并核对这两件输出后组包，不把历史本机测试结果当作本轮证明。
 
 ### 完整请求地址与内部路径
 
@@ -432,11 +432,11 @@ public是保留的链网络/安装包/报价能力，不代表未通过验证者
 
 通用聊天唯一归本产品根tatachat，由auth、protocol、key、mailbox、attachment、push、realtime七个功能目录及根mod/service/tests组成，共28件Rust源码。公民Subject、会员Permissions与宿主Authorization仍归user/membership/server；通用层只接受可信宿主映射的中性HostAccess，不解析CID或会员Plan。密钥包目录只有key；SDK官方KeyPackage类型和既有字段编号保持。
 
-本机Build直接读取同级TataChatSDK仓库的三件.proto，并按当前字节生成需求摘要；GitHub自动化才使用scripts/build.mjs声明的固定提交、大小与摘要。protoc35.0准确宿主坐标仍由该公开声明定义。Build提供protocol-requirements与protocol-prepare入口，以及requirements、describe、execute、test和package入口。Linux x64为现行Cloudflare构建宿主；空LinuxARM平台声明已删除。产品只读公开SDK协议，不读取邻仓工作树，也不提交生成类型。
+GitHub Runner只使用本产品声明的TataChatSDK固定提交及该提交的三件.proto，不读取本机相邻仓库。protoc35.0由产品Build在本次Runner现场按锁定来源准备并验真；Build的协议需求与准备仅作为内部公开函数使用，不再提供本机测试或控制台编译命令。
 
-资源主体必须显式选择：independent由产品按同一公开配方获取到显式源码外store或本轮已领取的准确固定工作根内临时store，直接复用已交付原件；console只核验控制台按本产品requirements提前交付的当前任务supply，缺件、损坏或错误身份直接失败，禁止自行下载或切换模式。console供给含schema/product_id/platform/work、dependency_root、tool_root、protoc_archive、protoc和按文件名映射的protocol路径。永久原件仍位于资源供给者库，生成和可写工作视图只归当前CitizenServe平台工作根；产品没有控制台私有路径或源码依赖。离线缺件据实失败；下载可取消，HTTPS重定向有界且仅限官方GitHub资源域，归档内容先验摘要，只展开固定普通protoc入口，提交不覆盖已有原件。
+资源只使用产品独立模式。锁定原件保存在Runner本轮指定的源码外store；缺件、损坏或错误身份失败，不从控制台供给、不读取本机相邻仓库，也不在源码内另建原件库。
 
-protocol-prepare读取当前任务的规范绝对输入JSON，含work、independent或console模式与准确原件/供给路径；用已交付Node25.2.1调用scripts/build.mjs protocol-prepare <绝对输入路径>。本轮receipt位于work/tatachat-protocol/receipt.json，包含规范协议目录、三件准确文件名、protoc入口及任务身份；build.rs只消费该回执和其文件列表，不解析另一份产品声明。协议原件及官方工具经Build准备与验真，缺件失败。
+产品Build在Runner编译现场直接准备并核验协议原件，回执位于当前`target/build/cloudflare/tatachat-protocol/receipt.json`；根build.rs只消费这份回执及准确文件列表。缺件或字节漂移直接失败。
 
 
 JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。server/cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及同块链权限后映射；recheck匹配原主体、会话、修订与额度并裁剪原期限，authorize_wake取得目标当前权限。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
@@ -471,29 +471,29 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 
 本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
-控制台发起的本机编译直接调用本仓 `scripts/build.mjs` 完整编译入口；发布与配置声明回归不在编译前执行。正式自动化按本仓 Workflow 自己的阶段执行并核验完整 Worker。
+控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作保留当前未实现状态，后续只能消费已核验的正式Release资产。
 
 
 
-本产品公开声明由scripts/build.mjs describe交付，资源入口同为scripts/build.mjs。当前远端自动化目标仅Cloudflare，控制台从产品公开声明读取编译入口，通过所属Workflow坐标派发自动化；Build结果与供给仍按准确任务编号和固定现场核验。聊天云资源维护保留scripts/tatachat.mjs独立入口。入口存在不代表运行态已验收。
+产品Build公开编译合同供GitHub Workflow读取；控制台不再为公民服务端读取或执行本机Build声明，只按本产品接入文件中的`cloudflare.yml`坐标派发自动化。聊天云资源维护仍由`scripts/tatachat.mjs`独立负责。
 
 ### Runner资源、可信引导与任务边界
 
-Linux资源仅在实际GitHub Linux Runner获取、准备、验真和使用；本机Mac不下载Linux原件。资源需求由真实调用、本仓声明、Cargo.lock与test/worker/package-lock.json决定，不按固定工具数量补装。Linux执行宿主锁定Ubuntu24.04及实际glibc2.39，Node25.2.1运行字节与官方发行归档逐字节对应后，才使用其HTTPS、摘要和归档能力准备后续闭包。三个Workflow使用固定提交的官方checkout/setup-node，产品自身继续核验实际运行Node字节。
+资源只在GitHub Ubuntu24.04 Linux Runner准备、验真和使用。当前Build锁定Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及其实际编译闭包；Node运行字节须与锁定官方发行归档一致。Workflow使用固定提交的官方checkout和setup-node。
 
-本仓配方声明Git2.54.0、Python3.14.3、Bash5.3.20、Rust1.97.1、protoc35.0、actionlint1.7.12、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130。Linux源构建闭包包含固定BusyBox/Make/Zig、Perl5.42.3、OpenSSL3.6.3、zlib1.3.2和SQLite3.53.4源码。SQLite为Linux Python源码准备的内部库，不替换Mac已交付Python及其实际内部SQLite；两个平台的内部闭包分别核验，不声称字节相同。Rust按官方rustc/cargo/rustfmt/clippy/host std和wasm std组件准备；Bash20份官方补丁按固定摘要及完整context原行应用，拒绝内容不符或匹配歧义。worker-build只从固定0.8.5来源及内部Cargo锁离线编译，不隐式下载esbuild/wasm-bindgen/wasm-opt。
+Build只准备Cloudflare Worker编译实际调用的资源。Linux引导使用固定BusyBox、Make、Zig、zlib、Perl与OpenSSL闭包；Rust只安装Cargo、rustc、host std与wasm std。Git、Python、Bash、actionlint、rustfmt和Clippy不由本轮Build准备。
 
-Cargo registry闭包按包名、版本与checksum物化并生成离线vendor校验；npm仅按原锁真实解析路径、os/cpu/libc物化适用闭包，不运行生命周期脚本。esbuild/workerd实际二进制直接来自该锁，工具命令只解析当前任务已验真闭包，拒绝调用者PATH、代理、系统工具、Rust包装器及下载覆盖变量。本机协议消费直接读取同级TataChatSDK仓库当前工作树；GitHub自动化才固定SDK提交b0485cf0a2c0922791741a748fdec0a49003089f及该提交lib/protocol，并核对三份协议长度与摘要。
+Cargo registry闭包按包名、版本与checksum物化并离线验真；npm仅从原锁物化esbuild及当前宿主必要闭包，不运行生命周期脚本。工具命令只解析本轮已验真闭包，拒绝调用者PATH、代理及下载覆盖变量。协议仅消费TataChatSDK固定提交，不读取本机相邻工作树。
 
-独立Runner模式将不可变原件按摘要保存于显式源码外工具库/依赖库并再次核验后复用；显式offline缺件失败，已存损坏原件保留并失败，禁止覆盖或升级。当前Workflow使用本次Runner临时资源库，没有宣称跨Runner持久缓存已验收。控制台模式只通过公开原件获取及工具供给能力消费其工具库/依赖库，缺件、验真错误或供给失败不切独立下载。Mac发起只核验本机已交付Node，不准备Linux原件。
+Runner独立模式把锁定原件按摘要保存在本轮源码外工具库与依赖库，并再次验真；显式离线缺件或原件损坏据实失败。当前Workflow使用Runner临时现场，没有跨Runner缓存或控制台资源供给分支。
 
 任务首个文件步骤取得同身份短锁、核实活跃保护、清空准确流程现场并回读为空；不同身份不互清。工具执行支持取消和超时，先收集真实close，再核对Linux实际识别后代PID及启动坐标，未确认退出时保留活跃标记并禁止清场。源构建现场在安装验真且进程退出后删除；可写Cargo/npm视图、日志、报告与中间产物只归所属当前任务target。最终公开产物目录与其他身份不因清场被删除。
 
 ### Cloudflare完整检查与正式产物
 
-自动化只由本仓release-cloudflare.yml和同名mjs执行。它按Cargo.toml唯一声明独立准备工具、执行真实测试、编译Worker并组包，核对十件成员的准确名称、唯一性、大小与摘要，为当前Run生成release-manifest.json和SHA256SUMS。自动化仅收集三件准确正式资产；Tag/Release创建、上传与逐件回读均归自动化。正式产物仍包含Worker、SQL、Wrangler配置及锁文件。独立publish.mjs只读消费唯一成功Run对应的Tag、Release、三件资产及归档全部成员；候选逐项核对固定路由、D1/R2/KV/Queue及SQLite DO声明、三限速器和两个Cron、Cloudflare资源回执、12项Secret名称与九项公开运行值（含聊天KID），值仅在内存核验，公开回执只含变量名称。正式配置中的九项动态公开值保留空占位，缺值或越界不能形成候选。本地尚未装载锁定Wrangler，因此真实Wrangler预演与无落盘Secret上传尚未验证；候选通过不代表已部署，不创建Tag/Release也不改变Cloudflare资源。
+当前自动化由本仓 `cloudflare.yml` 在GitHub Runner调用产品 `executeBuild`。产品Build按Cargo.toml唯一声明准备工具、协议、固定工作根并编译Worker；Workflow在编译现场清理前消费两件输出，在Runner临时目录按Cargo.toml的十件成员声明组包，生成归档、release-manifest.json和SHA256SUMS。Runner临时目录清理后，Workflow为本次Run创建Tag及非草稿Release，上传三件资产并逐件回读验真。自动化不设独立测试步骤、不部署Cloudflare。正式产物包含Worker、SQL、Wrangler配置及锁文件。`publish.mjs`随后只读核对成功Run及正式资产以准备部署。正式配置中的九项动态公开值仍为空占位，不在源码保存生产值。
 
-全部前置成功后清理本目标旧成功，否则撤销本次产物并清理旧失败；撤销失败不跳过历史失败清理，任何未确认操作均报告失败。清理只匹配当前目标的准确Workflow，不根据已经删除的入口猜测历史归属。
+本次Tag或Release创建后若资产上传、回读或发布核验失败，Workflow只撤销本次Tag和Release；撤销未确认按失败报告。历史Run及历史正式产物不由本次自动化删除。
 
 ### Cloudflare适配公开接口
 
@@ -501,27 +501,24 @@ R2适配从worker根公开导出读取Bucket、Conditional和Env。推送发送�
 
 ## 本机固定执行目录
 
-根build.rs只接受本仓target/build/cloudflare、target/test作为PRODUCT_WORK_DIR，CARGO_TARGET_DIR必须为该工作根内cargo-target；不再使用target/cloudflare或平台目录。server/cloudflare/wrangler.toml的main固定为../../target/build/cloudflare/worker/index.js，与当前Worker构建输出一致。target整体排除源码目录审查，编译与测试工具的内部结构不按源码目录层级检查。
+根build.rs当前仍接受`target/build/cloudflare`与历史`target/test`工作根；实际Workflow只使用`target/build/cloudflare`。Wrangler的main固定为本轮`target/build/cloudflare/worker/index.js`，编译结束后本次临时现场清空。
 
-runTool允许当前产品源码根、当前任务工作根及其内部目录、既有Cloudflare crate源码入口作为cwd；所有路径先验真，其它目录拒绝。当前任务根本身必须可执行工具，不能因不属于自身“子目录”而拒绝Apple资源校验或测试。
+runTool只允许当前产品源码根、当前GitHub编译工作根及已登记Cloudflare crate源码入口作为工作目录；其它位置拒绝。
 
-## Cloudflare本机Build公开资源与完整入口
-
-SDK版本链接仅在原入口和规范真实目标均属于该已选择Xcode时接受，返回规范真实SDK目录；越界目标、非目录及非规范入口拒绝。产品resolveSDKPath与控制台resolveProductSDK分别核验同一边界，不更改Xcode签名或版本要求。
+## Cloudflare Runner Build公开资源与完整入口
 
 
-最小宿主是本产品声明的官方Node25.2.1绝对入口；执行完整Build前先核对实际运行字节。Build只声明实际调用的Node、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127及Binaryen130，加上锁中的esbuild及Darwin arm64二进制闭包。Build不准备Worker运行测试所需Miniflare/workerd，也不补装Git、Python、Bash或actionlint。当前Mac Rust WASM标准库使用准确官方tar.xz坐标与固定摘要；Linux继续使用自身既有坐标，只在实际GitHub Linux Runner准备和执行。Xcode27.0及随包clang/ar/ranlib、macOS SDK每次核验官方签名、准确版本、规范真实路径和包归属；固定Apple定位和签名入口不加入PATH。
 
-requirements(platform,work)异步返回当前Build完整需求；protocolRequirements及protocol-requirements只返回根build.rs消费的协议需求。SDK消费固定b0485cf0a2c0922791741a748fdec0a49003089f及该提交lib/protocol/，公开要求中的URL和路径校验使用同一最终目录。工具入口槽位、所需目标组件、准确官方归档和产品准备配方摘要均在公开需求中。prepareToolSupply按当前需求准备缺件，不读取控制台私有登记或实现；源码工具使用官方源归档、原始Cargo锁及递归闭包离线编译。XZ/LZMA2在本产品Node内解码并核验流、块、索引及输出校验，不以系统xz或系统Shell作为Mac工具自举条件。
+当前唯一编译宿主是GitHub Ubuntu24.04 Linux x64 Runner，使用锁定Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及esbuild。Build不准备Mac Xcode或本机测试工具。
 
-独立执行须显式选择independent，给出规范工具和依赖原件目录及准确工作根；目录可位于源码外，或本轮已领取的准确工作根内。产品按声明与原锁准备并直接复用原件，工具对象引用对应交付路径。显式offline缺件失败，已有损坏对象或配方变化保留并失败，禁止自动覆盖或升级。控制台调用使用provided和当前任务FD4：控制台先复用已验真对象，缺件按本产品公开配方取得、准备、验真并保存，再交付完整实际文件清单、入口与组件。产品再次核验工具、Apple、协议、Cargo/npm视图和资源环境。PRODUCT_TOOL_ROOT、PRODUCT_DEPENDENCY_ROOT只用于核对交付边界；缺通道、取消、错身份、损坏或供给失败不切换独立下载。FD4仅传身份、需求摘要及资源回执位置/摘要；完整清单留在当前任务资源回执内，不传归档字节。
+Build按本仓合同与锁读取唯一编译需求；协议配方固定消费TataChatSDK提交b0485cf0a2c0922791741a748fdec0a49003089f及其lib/protocol三件文件。Linux工具从锁定官方来源准备；XZ/LZMA2由产品Node解码，不依赖系统xz。
+
+Workflow调用产品公开`executeBuild`并显式交付本次Runner源码外工具库、依赖库与编译工作根。Build按本仓声明取得、验真、使用和清理资源；缺件、取消、错身份或未确认的工具后代均失败。
 
 work_claim=product使完整入口在创建内部现场前持短锁领取长期守卫，核验活跃保护并清空准确build现场；独立与控制台调用互斥。控制台在产品实际close及结果核验后登记确认，守卫继续保护两件候选直到既有SQLite记录完成；然后在同一短锁内删除守卫并清空当前任务现场。独立执行在返回成功或失败前确认全部工具退出并清空现场，返回的文件坐标仅作当前任务结果证据，不是持久可下载包。退出未确认或SQLite记录失败保留受保护现场，不登记成功清理；不建立替代持久产物目录。本机仅实现既有Cloudflare Build，未新增CitizenServe Start或LinuxARM实现。
 
-Xcode官方工具别名由macApple核对入口和真实目标均在选中包内，并仅返回普通真实文件；closeCommands生成的包装器以argv0保留原命令身份，ranlib解析到libtool后仍按ranlib模式执行。跨包、越界、目录和缺失目标拒绝；同文件后置回归与原有资源模块40项实际通过，Xcode安装、工具版本及通用路径拒绝不由该修复改动。
 
 
-回归源码覆盖最小闭包、资源身份/摘要/离线策略、真实close先于完成确认、原件复用、清单链接边界、未退出保存保护、短锁竞争和清场回读，以及独立编码的压缩XZ样本和损坏/取消。全部获准步骤实现、同步和清理完成后才统一执行测试与编译。生产compatibility_date继续2026-10-07；本轮已将测试工具锁统一升级到workerd1.20261006.1及匹配Wrangler/Miniflare，实际完整检查与39项当前WASM/workerd回归已通过；这份本地结果不代替云端或两端钱包验收。SDK固定消费已同步至真实新提交；原件物化验真、本机门禁供给、业务回归和云/真机联调仍须取得本轮实际结果。
 
 ## 会员确认回执
 
@@ -557,21 +554,20 @@ scripts/build.mjs按本仓公开声明和原始Cargo/npm锁准备协议、工具
 
 供给缺件、离线缺件、工具非零退出、取消或后代未退出按实际结果失败。固定工作根、任务身份、隔离、互斥与清场合同继续适用。业务授权、钱包及链签名、TLS和正式应用产物的签名安装合同保持各自职责。
 
-固定根中的工程视图按产品根的直接子项复制，排除target与既有生成目录，避免Node把整个源码根复制进自身子目录时拒绝操作。视图根仍为当前已领取工作根中的source，不成为另一个任务工作根；成功、失败和中断恢复均由本仓target入口完成清场。
 
-### scripts 同文件回归
+### 脚本边界
 
-正式脚本与对应测试维护在所属文件末尾，普通导入不注册测试。Build的固定根生命周期和产品合同按显式PRODUCT_TEST_SCOPE分两阶段执行；Publish、聊天资源维护、Workflow及门禁用例各归自己文件。Node测试现场由scripts/build.mjs管理，工具确认退出后清空准确固定根。
+本产品当前自动化不运行测试；`scripts/build.mjs`的测试命令、测试编排和内嵌回归已移除。正式资产成功由GitHub Runner实际编译、上传及逐件回读证明。
 
-门禁独立领取本产品唯一声明的actionlint并执行仓库检查，不在产品测试资源闭包中隐式领取该工具。固定根生命周期与Build互斥回归归scripts/build.mjs；门禁从Build公开测试接口取得实际Rust、SQLite、Node和WASM/workerd结果，再独立执行自身与自动化/发布合同回归。PRODUCT_LIFECYCLE_RUN只保护同轮测试现场，未知后代或任务身份漂移时保留守卫并失败。
+塔塔门禁保持独立，不作为公民服务端自动化或发布的前置步骤。原有门禁中涉及已移除Build测试接口的旧引用须按门禁自身任务单独处理；自动化不会调用该接口。
 
-Worker运行测试的唯一npm声明与原生闭包在test/worker/package.json和package-lock.json：wrangler4.149.0、miniflare5.20261006.1-alpha及workerd1.20261006.1，不加overrides。生产compatibility_date继续使用2026-10-07，锁定运行时必须实际装载同一本轮WASM产物。开发取得的新npm归档只存当前固定工作根，不发布到永久资源库存。
+`test/worker/package-lock.json`仍是Build所需esbuild的历史锁文件路径；Build只按该锁物化esbuild当前Linux闭包，不安装Miniflare或workerd，不执行测试。
 
-独立original与协议prepare共用originalStore边界：源码内存储只允许本轮准确target/build/cloudflare或target/test的真子目录，要求对应产品、工作根和仍运行的占用标记；拒绝源码其他目录、另一固定根、非规范路径及缺少所有权的现场，边界检查早于建目录。固定工作根直接复用本产品既有checkFixedWork入口；同一路径兼作协议依赖库与工具库时只验一次。本机协议模式直接读取TataChatSDK源码，不校验或创建未使用的协议依赖原件库，仍校验并取得实际protoc工具。源码外已有原件目录沿用显式输入。正常获取、离线复用/缺件、获取失败、流中取消及越界不留源码目录均由真实资源函数回归覆盖。
+产品Build的原件库只允许位于源码根之外；Runner使用本次显式工具库与依赖库，缺件、损坏、取消或路径越界均失败。协议准备只读取锁定的TataChatSDK固定提交，未使用本机相邻仓库模式。
 
 ## 第3步本机完整复验（2026-10-09）
 
-该日期此前记录的完整检查结果归进行中任务卡，本轮源码调整后须重新按Build产品测试、门禁仓库检查和自动化各入口验收；历史结果不作为当前代码通过证据。
+历史本机测试与编译结果不代表当前GitHub自动化产物；本轮实际编译、正式Release及三件资产回读以新Workflow运行终态为准。
 
 实际复验覆盖可写响应头且保留101升级/流正文、安全和CORS头、HTML/PNG的GET/HEAD及128KiB边界、3秒响应头与正文总截止时间、公共RPC、单一活动storage维护任务和注销pending/complete及未知IO屏障。现有Worker夹具HASH_KEY使用符合正式最小长度的合成值；不降低业务约束或放宽断言。复验完成由本仓入口清空本轮build/test；本机通过不等于云部署、真实推送到达、设备安装或账户服务开放，account_services_ready继续为false。
 
@@ -579,34 +575,34 @@ Worker运行测试的唯一npm声明与原生闭包在test/worker/package.json�
 
 仓库推送仅上传本仓已经保存的main提交。控制台推送的唯一实现为console/tuisong.mjs，每仓一次生物识别，授权成功后建立独立任务，任务栏记录Git进度、准确SHA、取消及成功/失败终态。只执行Git与GitHub main只读回查，不执行源码、依赖、注释、文档、测试、签名或资源门禁；不派发产品Workflow、不运行hooks、不续签或重复认证、不自动重试、合并或强推。
 
-本仓已移除GitHub main推送门禁触发器；main上传后不自动运行产品自动化。自动化由用户单独发起，产品仍拥有自己的Workflow、声明、资源、测试和产物实现；产品不导入控制台源码，不依赖控制台工具库、私有规则或其它仓库工作树。控制台只是可选Git客户端。各仓可独立使用公开Git接口完成仓库操作，公开SDK依赖不构成流程耦合。
+main推送后不自动启动本产品Workflow。公民服务端自动化由控制台单独派发，产品GitHub Runner独立准备资源并产出正式资产；控制台只发起、展示任务，不参与Worker编译。
 
-## 本机编译入口
+## GitHub Runner编译入口
 
-本产品完整本机编译只由scripts/build.mjs实现。声明与资源配方归本仓；独立执行自行准备，控制台发起时只消费其明确供给，不因缺件或失败切换到独立下载。控制台调用、移动端安装与macOS App约束归console/build.mjs，控制台供给的原件获取、命令执行和对象提交归tools/toolchain.mjs，产品负责自身现场与资源配方临时路径清理；供给方只收尾自己创建的候选和提交锁。
+本产品不再提供本机编译或测试流程。GitHub Workflow直接调用`scripts/build.mjs`的`executeBuild`，由产品独立准备锁定资源、编译Worker，并在输出被本轮Runner消费后清空固定工作根。
 
-公开编译、测试、组包及资源配方唯一归scripts/build.mjs，产品独立执行或接收控制台明确供给使用同一实现。自动化将GitHub运行身份投影为产品任务编号及输出目录，不交付GitHub令牌；发布只消费自动化的公开正式产物。
+公开编译及资源配方唯一归`scripts/build.mjs`；GitHub Workflow将当前Run身份投影为产品任务编号，不向编译子流程交付GitHub令牌。Tag/Release步骤只消费已验真的Runner输出。
 
 ## GitHub自动化
 
-本仓自动化只在GitHub的main源码上执行；控制台只调用与展示。各目标独立拥有同名的YAML与Node实现，不调用其他仓或其他目标的Workflow。版本、构建、测试、签名、完整产物核验与正式tag/Release均由本仓负责。自动化入口先将源码文件URL转换的目录规范为无末尾分隔符的绝对路径，再校验真实路径；测试阶段使用本产品公开接口领取 `target/test`、准备聊天协议并交付 `build.rs` 所需的准确工作根、Cargo目录和协议回执；工具退出后由产品接口清理，正式Worker输出供同轮组包消费，清场继续拒绝实际符号链接。
+Cloudflare自动化只在GitHub main源码上执行。YAML调用产品Build公开接口，Build在Runner准备资源、编译Worker并于输出被消费后清空固定工作根；YAML随后组包、创建正式Tag/Release、上传并回读三件资产，不设测试步骤，也不部署Cloudflare。
 
-- `.github/workflows/release-cloudflare.yml`及同名`.mjs`。
+- `.github/workflows/cloudflare.yml`；空白 `.github/workflows/linuxarm.yml` 仅为平台文件预留。
 
-每个目标的最后任务使用always读取所有前置结果：全部成功清本仓本目标旧成功，否则清旧失败并失败退出。仅保留最新成功、最新失败各一条；保护本次Run和所有活动任务，另一类结果与其他目标不受影响。删除关联正式Release、tag、Actions产物和Run后回查；任何清理错误都按实际失败报告，不自动重试。
+本次Run的正式资产必须逐件上传并回读；任何失败都使本次自动化失败，已创建的本次Tag/Release由Workflow尝试撤销并报告结果。历史Run与正式资产保持原状。
 
 当前自动化目标仅Cloudflare；未实现的Linux ARM自动化入口、声明及对应断言移除。
 
-所属回归位于各目标同名mjs，覆盖前置结果、版本边界、平台隔离、活动保护和完整分页；真实GitHub构建与发布验收依任务授权另行执行。
+Build文件不再含本机测试入口；GitHub真实编译、正式Release及资产回读以本次Workflow终态为准。
 
-本机编译现场由本产品领取和收尾。调度任务编号随本产品领取记录保存；本轮结果消费后，只允许匹配该编号的收尾请求。产品确认自身进程及资源供给后代全部退出后才清场；异常、编号不符或退出未确认时保留现场。控制台只持有调度锁、调用本产品入口并供给资源，不实现产品清理。
+GitHub Runner编译现场由本产品领取和收尾。固定工作根互斥、输出被Workflow消费且子进程退出后清场；Workflow持有Tag/Release和Runner临时资产，不由控制台实现产品编译。
 
-软件版本计算使用本目标GitHub运行序号作为单调下界，并与本仓已成功版本比较；失败或历史清理不使版本返回源码初值。版本只在GitHub本次运行内产生，同一Run重试保持运行序号，Tag另绑定准确attempt。
+软件版本计算使用本目标GitHub运行序号作为单调下界，并与本仓已有正式Release版本比较；版本只在GitHub本次运行内产生，Tag另绑定准确Run与attempt。
 
 
 ### 当前自动化最后处理
 
-本仓每个自动化目标仅由自身release-<平台>.yml与同名mjs执行，最后处理依赖全部前置任务。清理只接受该目标准确Workflow路径、main和手动事件，不根据已删除文件或旧入口名称猜测归属。前置失败时，本次产物撤销与旧失败清理分别尝试并汇总错误；任何一项未确认均失败。固定依赖仍由本仓声明和原锁管理，不参加自产历史结果分类。
+本仓Cloudflare自动化仅由 `cloudflare.yml` 调用产品 `scripts/build.mjs`。Build收尾只处理本次固定编译现场，Workflow清理本次Runner临时目录；正式产物失败时仅撤销本次Tag/Release，不根据已删除的旧入口猜测历史归属。固定依赖仍由本仓声明和原锁管理。
 
 
 ### 本仓 GitHub 自动化与塔塔门禁目录

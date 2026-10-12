@@ -58,18 +58,17 @@ export function checkRepository(){
   ||JSON.stringify(contract.checks)!==JSON.stringify(['repository-contracts','flow-isolation','syntax'])
   ||!Array.isArray(contract.workflows)||!contract.workflows.length||new Set(contract.workflows).size!==contract.workflows.length)fail('本仓门禁声明无效');
  exact('.github/tatagate',['tatagate.json','tatagate.mjs']);
- exact('.github/workflows',contract.workflows.flatMap(name=>[name,name.replace(/\.yml$/u,'.mjs')]).concat('tatagate.yml'));
+ exact('.github/workflows',[...contract.workflows,'linuxarm.yml','tatagate.yml']);
  for(const name of required)file(name);
  const build=file('scripts/build.mjs'),publish=file('scripts/publish.mjs');
  if(/\.github\/tatagate\//u.test(build)||/(?:from|import\()\s*['"][^'"]*(?:publish\.mjs|\.github\/workflows)/u.test(build))fail('Build读取其它流程');
  if(/(?:from|import\()\s*['"][^'"]*(?:build\.mjs|\.github\/tatagate)/u.test(publish))fail('Publish调用其它流程');
  for(const name of contract.workflows){
-  if(typeof name!=='string'||!/^release-[a-z0-9-]+\.yml$/u.test(name))fail('Workflow身份无效');
-  const yaml=file('.github/workflows/'+name),entry='.github/workflows/'+name.replace(/\.yml$/u,'.mjs'),workflow=file(entry);
-  if(!yaml.includes('workflow_dispatch:')||/^\s*push\s*:/mu.test(yaml))fail('自动化不得随推送派发');
-  // 同仓Workflow可用产品Build的公开工作根和协议接口；发布与门禁流程仍不得互调。
-  if(/scripts\/publish\.mjs|\.github\/tatagate\//u.test(workflow))fail('自动化调用其它流程');
-  syntax(entry);
+  if(name!=='cloudflare.yml')fail('Workflow身份无效');
+  const yaml=file('.github/workflows/'+name);
+  if(!yaml.includes('workflow_dispatch:')||/^\s*push\s*:/mu.test(yaml)
+   ||!yaml.includes('run: node scripts/build.mjs automation cloudflare')
+   ||!yaml.includes('run: node scripts/build.mjs automation-finish cloudflare'))fail('自动化只调用所属产品Build');
  }
  sourceInventory(contract);
  checkPublicSource();

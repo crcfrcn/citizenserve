@@ -2,13 +2,12 @@
   "schema": 1,
   "repository": "citizenserve",
   "workflows": [
-    "release-cloudflare.yml"
+    "cloudflare.yml"
   ],
   "node_tests": [
     "scripts/build.mjs",
     "scripts/publish.mjs",
-    "scripts/tatachat.mjs",
-    ".github/workflows/release-cloudflare.mjs"
+    "scripts/tatachat.mjs"
   ],
   "checks": [
     "repository-contracts",

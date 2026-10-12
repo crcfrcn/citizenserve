@@ -3,7 +3,7 @@
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 
-const repository='crcfrcn/citizenserve',workflow='.github/workflows/release-cloudflare.yml';
+const repository='crcfrcn/citizenserve',workflow='.github/workflows/cloudflare.yml';
 const assets=['citizenserve-cloudflare-release.tgz','release-manifest.json','SHA256SUMS'];
 // 所属测试入口只交付本仓实际变更覆盖的Node回归，不要求先编译Worker产物。
 // 发布包成员只读取本仓既有Cargo声明，不维护第二份清单。
