@@ -2171,7 +2171,16 @@ async function runProcess(path,args,{work,cwd=root,environment={},signal,capture
   } catch { quiet = false; }
   if (!quiet) { unsafeWork.add(work); fail('实际工具后代退出未确认'); }
   if (processError || failed || signal?.aborted || result.code !== 0 || result.terminalSignal) {
-    fail('工具运行未完整成功：' + basename(path));
+    // Build工具错误长期保留有界诊断；隔离环境不交付凭据，输出再次脱敏并限量。
+    const safe=Buffer.from(stderr).subarray(-4096).toString('utf8')
+      .replace(/gh[sopur]_[A-Za-z0-9_]+/gu,'[已脱敏]')
+      .replace(/\b(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|AUTHORIZATION)\s*[:=]\s*\S+/giu,'[已脱敏]')
+      .replace(/(https:\/\/[^\s?#]+)[?#][^\s]+/gu,'$1?[已脱敏]')
+      .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/gu,'[已脱敏]')
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu,' ');
+    const detail=Buffer.from(safe).subarray(-4096).toString('utf8');
+    fail('工具运行未完整成功：' + basename(path) + '；退出状态：' + String(result.code)
+      + '；信号：' + String(result.terminalSignal) + (detail ? '\nstderr尾部：' + detail : ''));
   }
   return {stdout, stderr};
 }
