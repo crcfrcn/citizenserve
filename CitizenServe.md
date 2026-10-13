@@ -25,9 +25,9 @@
 
 ### 自动化与发布边界
 
-`scripts/build.mjs`只负责GitHub Runner上的Cloudflare Worker编译与资源准备；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产，供后续Cloudflare部署候选使用。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
+`scripts/build.mjs`只负责GitHub Runner上的Cloudflare Worker编译与资源准备；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产和部署配置，生成Cloudflare部署候选；不以前置资源回执阻塞部署，部署请求由Cloudflare据实接受或拒绝。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
 
-`.github/workflows/cloudflare.yml`定义GitHub手动触发、Runner、产品Build调用、十件成员组包、Tag/Release与三件资产回读；产品`build.mjs`仅拥有资源准备、固定工作根和Worker编译。`linuxarm.yml`仍为空占位，不代表LinuxARM已实现；`publish.mjs`保持只读候选验真。塔塔门禁是独立流程，不作为本产品自动化的前置步骤。
+`.github/workflows/cloudflare.yml`定义GitHub手动触发、Runner、产品Build调用、十件成员组包、Tag/Release与三件资产回读；产品`build.mjs`仅拥有资源准备、固定工作根和Worker编译。`linuxarm.yml`仍为空占位，不代表LinuxARM已实现；`publish.mjs`保持正式资产只读候选验真，并在单独发布授权后从正式包准备临时部署现场，从控制台工具库取得已登记Node25.2.1及其npm，按正式包原锁临时安装Wrangler4.149.0，完整部署软件和Wrangler配置；密钥由控制台安全层装配，不写入仓库或任务文件。塔塔门禁是独立流程，不作为本产品自动化的前置步骤。
 
 根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
 
@@ -473,7 +473,9 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 
 本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
-控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作保留当前未实现状态，后续只能消费已核验的正式Release资产。
+控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。
+`scripts/config.mjs` 另声明 `citizenserve-approval:COLD_SIGNER_PUBLIC_KEY` 为受保护且只用于正式发布批准验签的公钥。它因信任锚身份只存控制台 Touch ID Keychain，不属于九项Worker运行变量，也不交付Cloudflare；公钥值尚须由用户在控制台配置，缺失时生产批准失败关闭。离线钱包私钥不进入本仓或控制台。
+本仓发布接口在冷签后重新验真同一份正式归档摘要，并将摘要连同任务、Tag和源码提交交给控制台原生安全层核对；返回的部署回执必须带回相同摘要。任何候选资产漂移都不能进入 Cloudflare 部署。
 
 
 

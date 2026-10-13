@@ -12,7 +12,7 @@ const descriptions={CHAIN_URL:'公民链受保护服务HTTPS根地址',ZONE_ID:'
   FCM_KEY:'Firebase服务账户私钥',TATACHAT_AUTH_KEY:'聊天授权签发密钥'};
 const names=(values,access,kind,format)=>values.map(name=>({
   environment:'production',name,title:name==='CF_ACCESS_CLIENT_ID'?'Cloudflare Access ID':name,
-  description:descriptions[name]??name,revealable:access!=='publish',
+  description:descriptions[name]??name,revealable:true,
   accessLevel:access,kind,...(format?.[name]?{format:format[name]}:{})
 }));
 const publicFormats={CHAIN_URL:'https_root_url:chain.crcfrcn.com',CF_ACCESS_CLIENT_ID:'cloudflare_access_client_id',ZONE_ID:'hex16',APNS_KID:'apple_id',APNS_TEAM:'apple_id',
@@ -44,12 +44,13 @@ export function validateDynamicPublic(values){
   return Object.freeze(Object.fromEntries(dynamicPublicNames.map(name=>[name,values[name]])));
 }
 const items=[
-  {environment:'cloudflare',name:'SERVER_DEPLOY',title:'SERVER_DEPLOY',description:'Worker、Route与D1部署令牌',revealable:false,accessLevel:'publish',kind:'operation'},
+  {environment:'cloudflare',name:'SERVER_DEPLOY',title:'SERVER_DEPLOY',description:'Worker、Route与D1部署令牌',revealable:false,accessLevel:'protected',kind:'operation'},
   {environment:'cloudflare',name:'KV',title:'KV',description:'会员镜像对账Workers KV令牌',revealable:true,accessLevel:'protected',kind:'operation'},
+  {environment:'citizenserve-approval',name:'COLD_SIGNER_PUBLIC_KEY',title:'发布冷签公钥',description:'仅用于公民服务端正式发布批准验签',revealable:true,accessLevel:'protected',kind:'authorization',format:'hex32'},
   ...names(dynamicPublicNames,'public','runtime',publicFormats),
   ...names(workerSecretNames,'protected','worker_secret',{CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET:'hex32'}),
 ].map(item=>item.name==='CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET'?
-  {...item,revealable:false,accessLevel:'publish',generator:'hex32'}:
+  {...item,revealable:false,generator:'hex32'}:
   item.name==='TATACHAT_AUTH_KEY'?{...item,revealable:false,format:'ed25519_pkcs8_pem',generator:'ed25519_pkcs8_pem'}:
   item.name==='TATACHAT_AUTH_KID'?{...item,generator:'auth_kid'}:item);
 
