@@ -472,6 +472,7 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
 
 本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
+`CHAIN_URL` 指向固定主机上的 Access 保护 RPC 路径，格式为 `/rpc-` 后接48位小写十六进制；产品只校验结构，不在源码、文档、日志或夹具保存实际路径。该值保持现有公开运行配置类别，真正的 Access 凭据仍由 `CHAIN_SECRET` 保管；发布冷签只携带最终配置摘要。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
 控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。
 `scripts/config.mjs` 另声明 `citizenserve-approval:COLD_SIGNER_PUBLIC_KEY` 为受保护且只用于正式发布批准验签的公钥。它因信任锚身份只存控制台 Touch ID Keychain，不属于九项Worker运行变量，也不交付Cloudflare；公钥值尚须由用户在控制台配置，缺失时生产批准失败关闭。离线钱包私钥不进入本仓或控制台。

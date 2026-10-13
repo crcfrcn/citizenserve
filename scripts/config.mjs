@@ -2,7 +2,7 @@
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
-const descriptions={CHAIN_URL:'公民链受保护服务HTTPS根地址',ZONE_ID:'广场公开媒体所属Cloudflare Zone编号',
+const descriptions={CHAIN_URL:'公民链Access保护RPC HTTPS端点',ZONE_ID:'广场公开媒体所属Cloudflare Zone编号',
   APNS_KID:'Apple推送Key ID',APNS_TEAM:'Apple开发者Team ID',APNS_TOPIC:'Apple推送Topic',
   FCM_EMAIL:'Firebase服务账户邮箱',FCM_PROJECT:'Firebase项目编号',TATACHAT_AUTH_KID:'聊天授权密钥标识',
   HASH_KEY:'敏感索引HMAC密钥',TURNSTILE_SECRET:'Turnstile服务端校验密钥',CF_ACCESS_CLIENT_ID:'Cloudflare Access客户端ID',
@@ -15,7 +15,7 @@ const names=(values,access,kind,format)=>values.map(name=>({
   description:descriptions[name]??name,revealable:true,
   accessLevel:access,kind,...(format?.[name]?{format:format[name]}:{})
 }));
-const publicFormats={CHAIN_URL:'https_root_url:chain.crcfrcn.com',CF_ACCESS_CLIENT_ID:'cloudflare_access_client_id',ZONE_ID:'hex16',APNS_KID:'apple_id',APNS_TEAM:'apple_id',
+const publicFormats={CHAIN_URL:'https_rpc_url:chain.crcfrcn.com',CF_ACCESS_CLIENT_ID:'cloudflare_access_client_id',ZONE_ID:'hex16',APNS_KID:'apple_id',APNS_TEAM:'apple_id',
   APNS_TOPIC:'apns_topic',FCM_EMAIL:'fcm_email',FCM_PROJECT:'fcm_project',TATACHAT_AUTH_KID:'auth_kid'};
 export const dynamicPublicNames=Object.freeze(['CHAIN_URL','CF_ACCESS_CLIENT_ID','ZONE_ID','APNS_KID','APNS_TEAM','APNS_TOPIC','FCM_EMAIL','FCM_PROJECT','TATACHAT_AUTH_KID']);
 export const workerSecretNames=Object.freeze(['HASH_KEY','TURNSTILE_SECRET','CHAIN_SECRET','R2_KEY','R2_SECRET','PURGE',
@@ -29,9 +29,10 @@ export function validateDynamicPublic(values){
     const value=values[name],format=publicFormats[name];
     if(typeof value!=='string'||!value||value.length>512||/[\x00-\x1f\x7f]/u.test(value))throw Error('公开运行变量无效：'+name);
     let valid=false;
-    if(format.startsWith('https_root_url:')){
-      try{const url=new URL(value);valid=url.protocol==='https:'&&url.hostname===format.slice(15)
-        &&!url.username&&!url.password&&!url.hash&&!url.search&&url.pathname==='/'&&!url.port;}catch{}
+    if(format.startsWith('https_rpc_url:')){
+      try{const host=format.slice('https_rpc_url:'.length),url=new URL(value);
+        valid=url.protocol==='https:'&&url.hostname===host&&/^\/rpc-[a-f0-9]{48}$/u.test(url.pathname)
+          &&value==='https://'+host+url.pathname&&!url.username&&!url.password&&!url.hash&&!url.search&&!url.port;}catch{}
     }else if(format==='hex16')valid=/^[a-f0-9]{32}$/u.test(value);
     else if(format==='apple_id')valid=/^[A-Za-z0-9]{10}$/u.test(value);
     else if(format==='apns_topic')valid=/^[A-Za-z0-9.-]{1,255}$/u.test(value);
