@@ -467,6 +467,7 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 `CHAIN_URL` 指向固定主机上的 Access 保护 RPC 路径，格式为 `/rpc-` 后接48位小写十六进制；产品只校验结构，不在源码、文档、日志或夹具保存实际路径。该值保持现有公开运行配置类别，真正的 Access 凭据仍由 `CHAIN_SECRET` 保管；发布冷签只携带最终配置摘要。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
 控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。
+发布器核对正式Wrangler时仅接受 `DB` 和 `TATACHAT_DB` 两个D1绑定，分节数量由这两个准确名称推导；旧公民链下载指针的第三个D1绑定仍按多余资源拒绝。
 `scripts/config.mjs` 另声明 `citizenserve-approval:COLD_SIGNER_PUBLIC_KEY` 为受保护且只用于正式发布批准验签的公钥。它因信任锚身份只存控制台 Touch ID Keychain，不属于九项Worker运行变量，也不交付Cloudflare；公钥值尚须由用户在控制台配置，缺失时生产批准失败关闭。离线钱包私钥不进入本仓或控制台。
 本仓发布接口在冷签后重新验真同一份正式归档摘要，并将摘要连同任务、Tag和源码提交交给控制台原生安全层核对；返回的部署回执必须带回相同摘要。任何候选资产漂移都不能进入 Cloudflare 部署。九项公开运行值由同一产品配置声明校验，注入正式包Wrangler模板后以实际将写出的UTF-8字节计算SHA-256，作为独立QR_V1动作码17的最终配置摘要；发布前重新取得公开值并重建同一配置，摘要不一致则在任何密钥装配或云写入前失败。Worker Secret值不进入冷签载荷。
 
@@ -488,7 +489,7 @@ Runner独立模式把锁定原件按摘要保存在本轮源码外工具库与�
 
 ### Cloudflare完整检查与正式产物
 
-当前自动化由本仓 `cloudflare.yml` 在GitHub Runner调用产品 `executeBuild`。产品Build按Cargo.toml唯一声明准备工具、协议、固定工作根并编译Worker；Workflow在编译现场清理前消费两件输出，在Runner临时目录按Cargo.toml的十件成员声明组包，生成归档、release-manifest.json和SHA256SUMS。Runner临时目录清理后，Workflow为本次Run创建Tag及非草稿Release，上传三件资产并逐件回读验真。自动化不设独立测试步骤、不部署Cloudflare。正式产物包含Worker、SQL、Wrangler配置及锁文件。`publish.mjs`随后只读核对成功Run及正式资产以准备部署。正式配置中的九项动态公开值仍为空占位，不在源码保存生产值。
+当前自动化由本仓 `cloudflare.yml` 在GitHub Runner调用产品 `executeBuild`。产品Build按Cargo.toml唯一声明准备工具、协议、固定工作根并编译Worker；Workflow在编译现场清理前消费两件输出，在Runner临时目录按Cargo.toml的九件成员声明组包，生成归档、release-manifest.json和SHA256SUMS。Runner临时目录清理后，Workflow为本次Run创建Tag及非草稿Release，上传三件资产并逐件回读验真。自动化不设独立测试步骤、不部署Cloudflare。正式产物包含Worker、SQL、Wrangler配置及锁文件。`publish.mjs`随后只读核对成功Run及正式资产以准备部署。正式配置中的九项动态公开值仍为空占位，不在源码保存生产值。
 
 本次Tag或Release创建后若资产上传、回读或发布核验失败，Workflow只撤销本次Tag和Release；撤销未确认按失败报告。历史Run及历史正式产物不由本次自动化删除。
 
