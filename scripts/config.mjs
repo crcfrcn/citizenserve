@@ -8,7 +8,7 @@ const descriptions={CHAIN_URL:'公民链Access保护RPC HTTPS端点',ZONE_ID:'�
   HASH_KEY:'敏感索引HMAC密钥',TURNSTILE_SECRET:'Turnstile服务端校验密钥',CF_ACCESS_CLIENT_ID:'Cloudflare Access客户端ID',
   CHAIN_SECRET:'公民链Access服务身份密钥',R2_KEY:'媒体桶上传Access Key ID',R2_SECRET:'媒体桶上传Secret Key',
   PURGE:'媒体精确URL缓存清理令牌',TOPUP_INTENT_SECRET:'充值付款意图HMAC密钥',SETTLE_TOKEN:'结算令牌',
-  CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET:'公民链下载发布指针HMAC密钥',APNS_KEY:'Apple推送私钥',
+  APNS_KEY:'Apple推送私钥',
   FCM_KEY:'Firebase服务账户私钥',TATACHAT_AUTH_KEY:'聊天授权签发密钥'};
 const names=(values,access,kind,format)=>values.map(name=>({
   environment:'production',name,title:name==='CF_ACCESS_CLIENT_ID'?'Cloudflare Access ID':name,
@@ -19,8 +19,8 @@ const publicFormats={CHAIN_URL:'https_rpc_url:chain.crcfrcn.com',CF_ACCESS_CLIEN
   APNS_TOPIC:'apns_topic',FCM_EMAIL:'fcm_email',FCM_PROJECT:'fcm_project',TATACHAT_AUTH_KID:'auth_kid'};
 export const dynamicPublicNames=Object.freeze(['CHAIN_URL','CF_ACCESS_CLIENT_ID','ZONE_ID','APNS_KID','APNS_TEAM','APNS_TOPIC','FCM_EMAIL','FCM_PROJECT','TATACHAT_AUTH_KID']);
 export const workerSecretNames=Object.freeze(['HASH_KEY','TURNSTILE_SECRET','CHAIN_SECRET','R2_KEY','R2_SECRET','PURGE',
-  'TOPUP_INTENT_SECRET','SETTLE_TOKEN','CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET','APNS_KEY','FCM_KEY','TATACHAT_AUTH_KEY']);
-export const resourceBindings=Object.freeze(['DB','CITIZENCHAIN_DOWNLOAD_DB','TATACHAT_DB','RATE_AUTH','RATE_READ','RATE_WRITE',
+  'TOPUP_INTENT_SECRET','SETTLE_TOKEN','APNS_KEY','FCM_KEY','TATACHAT_AUTH_KEY']);
+export const resourceBindings=Object.freeze(['DB','TATACHAT_DB','RATE_AUTH','RATE_READ','RATE_WRITE',
   'SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS','SQUARE_CACHE','NOTIFY','TATACHAT_PUSH','TATACHAT_DEVICES']);
 export function validateDynamicPublic(values){
   if(!values||typeof values!=='object'||Array.isArray(values)
@@ -49,10 +49,8 @@ const items=[
   {environment:'cloudflare',name:'KV',title:'KV',description:'会员镜像对账Workers KV令牌',revealable:true,accessLevel:'protected',kind:'operation'},
   {environment:'citizenserve-approval',name:'COLD_SIGNER_PUBLIC_KEY',title:'发布冷签公钥',description:'仅用于公民服务端正式发布批准验签',revealable:true,accessLevel:'protected',kind:'authorization',format:'hex32'},
   ...names(dynamicPublicNames,'public','runtime',publicFormats),
-  ...names(workerSecretNames,'protected','worker_secret',{CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET:'hex32'}),
-].map(item=>item.name==='CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET'?
-  {...item,revealable:false,generator:'hex32'}:
-  item.name==='TATACHAT_AUTH_KEY'?{...item,revealable:false,format:'ed25519_pkcs8_pem',generator:'ed25519_pkcs8_pem'}:
+  ...names(workerSecretNames,'protected','worker_secret'),
+].map(item=>item.name==='TATACHAT_AUTH_KEY'?{...item,revealable:false,format:'ed25519_pkcs8_pem',generator:'ed25519_pkcs8_pem'}:
   item.name==='TATACHAT_AUTH_KID'?{...item,generator:'auth_kid'}:item);
 
 function configuredNames(source){

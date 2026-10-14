@@ -11,7 +11,7 @@ pub fn asset(
     name: &str,
     digest: Option<&str>,
 ) -> Result<String> {
-    if !matches!(product, "citizenapp" | "citizenwallet" | "citizenchain")
+    if !matches!(product, "citizenapp" | "citizenwallet")
         || release["tag_name"] != tag
         || release["draft"] != false
         || release["prerelease"] != false
@@ -51,7 +51,7 @@ pub fn android(releases: &Value, product: &str) -> Result<String> {
         if let Some(tag) = r["tag_name"].as_str() {
             if tag
                 .strip_prefix(prefix)
-                .is_some_and(super::publication::version)
+                .is_some_and(version)
                 && r["draft"] == false
                 && r["prerelease"] == false
             {
@@ -62,4 +62,14 @@ pub fn android(releases: &Value, product: &str) -> Result<String> {
         }
     }
     Err(missing())
+}
+// Android 正式版仅接受有界的三段数字版本，拒绝预发布后缀。
+fn version(s: &str) -> bool {
+    let parts = s.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().enumerate().all(|(i, part)| {
+            !part.is_empty()
+                && part.len() <= if i == 0 { 9 } else { 2 }
+                && part.bytes().all(|b| b.is_ascii_digit())
+        })
 }

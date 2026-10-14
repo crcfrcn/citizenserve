@@ -7,7 +7,7 @@ preview_urls = false
 routes = [{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }, { pattern = "nrcrpc.crcfrcn.com", custom_domain = true }]
 
 [secrets]
-required = ["HASH_KEY", "TURNSTILE_SECRET", "CHAIN_SECRET", "R2_KEY", "R2_SECRET", "PURGE", "TOPUP_INTENT_SECRET", "SETTLE_TOKEN", "CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET", "APNS_KEY", "FCM_KEY", "TATACHAT_AUTH_KEY"]
+required = ["HASH_KEY", "TURNSTILE_SECRET", "CHAIN_SECRET", "R2_KEY", "R2_SECRET", "PURGE", "TOPUP_INTENT_SECRET", "SETTLE_TOKEN", "APNS_KEY", "FCM_KEY", "TATACHAT_AUTH_KEY"]
 
 [[d1_databases]]
 binding = "DB"
@@ -77,11 +77,6 @@ namespace_id = "896402"
 [ratelimits.simple]
 limit = 30
 period = 60
-
-[[d1_databases]]
-binding = "CITIZENCHAIN_DOWNLOAD_DB"
-database_name = "citizenweb-download"
-database_id = "428b28ae-e02d-4ebb-b4a2-ac03faf2f58a"
 
 [[kv_namespaces]]
 binding = "SQUARE_CACHE"

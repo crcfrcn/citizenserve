@@ -208,11 +208,6 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
             "/api/downloads/citizenwallet/android".into(),
             Permission::Public,
         ),
-        (
-            "GET",
-            "/api/downloads/citizenchain/macos/updater".into(),
-            Permission::Public,
-        ),
     ];
     for action in ["claim", "settled", "exception"] {
         list.push((
@@ -220,20 +215,6 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
             format!("/api/topup/settlement/{id}/{action}"),
             Permission::Settlement,
         ));
-    }
-    for p in ["macos", "windows", "linux-arm", "linux-amd"] {
-        list.push((
-            "GET",
-            format!("/api/downloads/citizenchain/{p}"),
-            Permission::Public,
-        ));
-        for method in ["GET", "PUT"] {
-            list.push((
-                method,
-                format!("/api/downloads/citizenchain/{p}/publication"),
-                Permission::Publication,
-            ));
-        }
     }
     for (method, p) in [
         ("GET", "bootstrap"),
@@ -244,7 +225,7 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
     ] {
         list.push((method, format!("/api/chain/{p}"), Permission::Public));
     }
-    assert_eq!(list.len(), 29);
+    assert_eq!(list.len(), 16);
     for (m, p, permission) in list {
         let r = route(m, &p).unwrap();
         assert_eq!(r.permission(), permission);
@@ -253,6 +234,9 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
     }
     for p in [
         "/api/download/citizenapp/android",
+        "/api/downloads/citizenchain/macos",
+        "/api/downloads/citizenchain/macos/updater",
+        "/api/downloads/citizenchain/windows/publication",
         "/api/constitution",
         "/api/operations/citizenchain/download-publications/macos",
         "/api/downloads/citizenchain/macOS",
@@ -261,6 +245,7 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
     ] {
         assert!(route("GET", p).is_err());
     }
+    assert!(route("PUT", "/api/downloads/citizenchain/macos/publication").is_err());
     assert!(route("POST", "/api/chain/runtime-target").is_err());
 }
 

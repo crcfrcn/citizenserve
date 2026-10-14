@@ -2,7 +2,6 @@ pub mod auth;
 pub mod chat_access;
 pub mod contacts;
 pub mod deletion;
-pub mod downloads;
 pub mod identity;
 pub mod media;
 pub mod membership;
@@ -132,7 +131,7 @@ pub(crate) async fn batch(
 pub(crate) fn string(v: &str) -> JsValue {
     JsValue::from_str(v)
 }
-/// 非账户权限事务独立装配，不能将资金/发布凭据塞进AUTH_ASSERT。
+/// 非账户权限事务独立装配，不能将资金凭据塞进AUTH_ASSERT。
 pub(crate) async fn external_batch(
     db: &D1Database,
     mut command: Value,
@@ -154,8 +153,6 @@ pub(crate) async fn external_batch(
         worker::Error::D1(c)
             if c.cause().contains("topup_orders.order_id")
                 || c.cause().contains("topup_orders.gmb_tx_hash")
-                || c.cause()
-                    .contains("citizenchain_download_publications.platform")
                 || c.cause().contains("chain_extrinsic_relays.relay_id") =>
         {
             conflict

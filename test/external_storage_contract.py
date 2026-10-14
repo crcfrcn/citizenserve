@@ -1,8 +1,6 @@
 """原文生产SQL在真实SQLite执行，24并发连接；RPC证据是公开合成向量。"""
 import concurrent.futures
 import copy
-import hashlib
-import hmac
 import json
 import re
 import sqlite3
@@ -11,8 +9,7 @@ import unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MAIN = (ROOT / 'server/cloudflare/schema.sql').read_text()
-DOWNLOAD = (ROOT / 'server/cloudflare/download-schema.sql').read_text()
-SQL = {n: (ROOT / f'server/cloudflare/sql/{n}.sql').read_text() for n in ['insert_topup','claim_topup','settle_topup','exception_topup','relay_attempt','publish_download']}
+SQL = {n: (ROOT / f'server/cloudflare/sql/{n}.sql').read_text() for n in ['insert_topup','claim_topup','settle_topup','exception_topup','relay_attempt']}
 TOPUP = json.loads((ROOT / 'test/contract/topup.json').read_text())
 
 def execute(db, name, command):
@@ -181,20 +178,6 @@ class ExternalStorage(unittest.TestCase):
             self.db.execute('UPDATE chain_extrinsic_relays SET relay_status=?',(status,))
             execute(self.db,'relay_attempt',{'attempt':self.attempt(1,True),'now':1600000})
             self.assertEqual(self.db.execute('SELECT COUNT(*) FROM chain_extrinsic_relays').fetchone()[0],count)
-    def test_publication_24_cas_writers_have_one_winner(self):
-        pub=json.loads((ROOT/'test/contract/downloads.json').read_text())['publication']
-        def op(db,i):
-            if i is None:return db.execute("SELECT revision FROM citizenchain_download_publications WHERE platform='macos'").fetchone()[0]
-            p={**pub,'asset_sha256':f'{i:064x}'}
-            return execute(db,'publish_download',{'platform':'macos','input':{'expected_revision':0,'publication':p},'now':1000000})
-        outcomes,revision=self.parallel(DOWNLOAD,op);self.assertEqual(sum(outcomes),1);self.assertEqual(revision,1)
-    def test_withdrawal_idempotence_and_old_revision_never_overwrites(self):
-        db=sqlite3.connect(':memory:',isolation_level=None);db.executescript(DOWNLOAD)
-        pub=json.loads((ROOT/'test/contract/downloads.json').read_text())['publication'];c={'platform':'macos','input':{'expected_revision':0,'publication':pub},'now':1000000}
-        self.assertTrue(execute(db,'publish_download',c));self.assertTrue(execute(db,'publish_download',c));self.assertEqual(db.execute("SELECT revision FROM citizenchain_download_publications WHERE platform='macos'").fetchone()[0],1)
-        v=copy.deepcopy(c);v['input']['publication']=None;self.assertFalse(execute(db,'publish_download',v));v['input']['expected_revision']=1;self.assertTrue(execute(db,'publish_download',v));self.assertFalse(execute(db,'publish_download',c));self.assertTrue(execute(db,'publish_download',v));db.close()
-    def test_publication_hmac_vector_is_raw_api_body_not_reserialized(self):
-        v=json.loads((ROOT/'test/contract/downloads.json').read_text());message='\n'.join([v['method'],v['path'],v['time'],v['nonce'],hashlib.sha256(v['body'].encode()).hexdigest()]);self.assertEqual(hmac.new(v['key'].encode(),message.encode(),hashlib.sha256).hexdigest(),v['signature'])
     def test_actual_rpc_budget_is_three_hundred_calls_not_three_hundred_orders(self):
         source=(ROOT/'server/cloudflare/repositories/topup.rs').read_text();sql=next(s for s in re.findall(r'r#"(.*?)"#',source,re.S) if "topup-rpc:8453" in s)
         for i in range(300):self.assertTrue(execute(self.db,sql,{'now':1000000}))

@@ -45,14 +45,9 @@ class StorageContract(unittest.TestCase):
     def test_schema_is_repeatable_and_preserves_business_data_model(self):
         self.db.executescript(SCHEMA)
         tables = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        self.assertEqual(len(tables), 39)  # 包含账户注销的挑战、任务和断言；下载DB独立。
+        self.assertEqual(len(tables), 39)  # 包含账户注销的挑战、任务和断言。
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset({row[0] for row in tables}))
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
-        download = sqlite3.connect(":memory:")
-        download.executescript((ROOT / "server/cloudflare/download-schema.sql").read_text())
-        download.executescript((ROOT / "server/cloudflare/download-schema.sql").read_text())
-        self.assertEqual(download.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 1)
-        download.close()
 
     def test_same_context_has_eight_live_entries(self):
         counts = [self.db.execute(CREATE, parameters(record(i))).rowcount for i in range(9)]

@@ -49,7 +49,7 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 | /Users/rhett/citizenserve/membership/ | 有效期、独立会员轴、三档完整额度与创作者 | 当前权益、交易确认/投影、档位/订阅/概览、调度及30天/24小时清理提醒已实现。 |
 | /Users/rhett/citizenserve/topup/ | 原包ID/金额、claim及结算状态规则 | HMAC意图、ERC-191/1271付款钱包自证、EVM canonical付款/原子订单及完整GMB结算API已实现。 |
 | /Users/rhett/citizenserve/notifications/ | 当前设备端点、持久任务、扇出与发送合同 | 未读、端点登记/代际、原子outbox、40端点分页、单端点APNs/FCM与Queue消费已本地验收。 |
-| /Users/rhett/citizenserve/downloads/ | 正式安装包固定目标和下载源校验 | 正式GitHub源/Tag提交/资产digest核验、四平台指针及实际/api发布HMAC/CAS已实现。 |
+| /Users/rhett/citizenserve/downloads/ | 正式安装包固定目标和下载源校验 | App/Wallet正式 GitHub Release、唯一安装资产及准确 HTTPS 目标校验。 |
 | /Users/rhett/citizenserve/chain/ | canonical finalized、metadata/SCALE、身份/会员/完整交易 | 身份/订阅/完整交易、两引导schema、同块宪法/清单、受控广播和26方法EVM代理已实现。 |
 | /Users/rhett/citizenserve/tatachat/ | 按auth/protocol/key/mailbox/attachment/push/realtime分目录维护的通用聊天 | 通用核心已接入根库；Cloudflare数据面源码已装配，当前Worker统一编译与运行态仍待验收。原chat已删除，公民授权归user/membership/server。 |
 | /Users/rhett/citizenserve/server/cloudflare/ | 10项用户授权/恢复、35账户、29工具API、RPC、D1/R2/Queue/Cron/WebCrypto | 完整ESM/WASM、本地fetch/queue/scheduled验收通过；生产兼容日期、线上资源/推送与正式发布未验收。 |
@@ -330,14 +330,14 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 
 ### 业务与权限合同
 
-1. **固定精确路径与权限。** 统一功能前缀为/api/topup、/api/downloads、/api/chain；不保留旧/square、单数/download、根/constitution或/operations别名。将以下29项API方法及独立rpc域明确分为公共链/下载工具、HMAC付款意图、SETTLE_TOKEN结算和专用HMAC发布四类，逐方法逐路径登记；它们均不能访问广场、聊天、通讯录、会员或用户资料，现有普通账户服务守卫和MLS实际路径证明不改。保留冷钱包/代充的原产品能力，充值目标AccountId可未绑定CID；RPC失败不能记成“未绑定CID”。客户端不得让未完成准入的主体访问账户服务。
+1. **固定精确路径与权限。** 统一功能前缀为/api/topup、/api/downloads、/api/chain；不保留旧/square、单数/download、根/constitution或/operations别名。将以下16项API方法及独立rpc域明确分为公共链/下载工具、HMAC付款意图、SETTLE_TOKEN结算三类，逐方法逐路径登记；它们均不能访问广场、聊天、通讯录、会员或用户资料，现有普通账户服务守卫和MLS实际路径证明不改。保留冷钱包/代充的原产品能力，充值目标AccountId可未绑定CID；RPC失败不能记成“未绑定CID”。客户端不得让未完成准入的主体访问账户服务。
 2. **报价、付款意图与付款人授权。** Base主网8453、USDC/USDT两条既有代币轨、6位最小单位；pkg_15为15000000原子单位→1000000公民币分，pkg_1400为1400000000→100000000分，金额以精确整数字符串交付。意图绑定目标AccountId、实际当前CID或null、付款地址、币轨/合约、收款地址、套餐/金额、唯一intent_id和签发/十分钟到期时间，保留服务器HMAC能力令牌。旧代码只有客户端申报payer_address及“签发早于区块”检查；观察待打包交易后仍能先造不同目标意图，所以增加**付款钱包签署完整充值意图**：intent响应返回服务端生成的wallet_authorization_message；confirm准确增加payer_signature字段。EOA以ERC-191 personal_sign恢复付款地址；合约付款钱包按该canonical付款块的ERC-1271只读验签。任何地址、目标、金额、链/域或意图变更均使签名失效，私钥不上传。客户端签名交互归CitizenApp，服务端按同一公开付款授权合同验证。
 3. **以真实EVM链事实创建订单。** 固定TOPUP_BASE_RPC_URL，不接受客户端RPC URL；核对eth_chainId=8453、交易/receipt哈希、成功状态、实际token Transfer事件、付款/收款地址、足额u256金额、log所属canonical区块、区块时间和确认策略。付款发生时间必须晚于意图签发且不晚于十分钟到期；配置min_confirmations=0沿用finalized，否则使用准确确认数并核对canonical hash。未知编码、链错、重组、超时或缺区块不能成功。同(chain_id,evm_tx_hash)与intent_id双唯一，同意图/同准确规范事实幂等，不同意图抢占拒绝；保留原pending/paid/exception三态，RPC待确认不落新终态。将准确付款区块/日志、意图及钱包授权摘要和核验期限存入原topup_orders相应列，一次原子写入，不设影子用户。保留IP和目标AccountId限速、外部付款RPC每链300次/60秒D1全局硬顶；重复已确认查询不再打付款RPC。
 4. **排他claim与双链结算。** 仅常量时间匹配SETTLE_TOKEN的结算客户端可操作。pending≤50，history≤100并用(confirmed_at,order_id)稳定游标合并三态。claim同ID幂等、不同ID排斥，永不自动过期释放；服务端不持发币私钥，不自动签发/广播公民币。settled在当前claim下复核Base付款，并用目标块metadata完整解析OnchainTransaction::transfer_with_remark、整交易哈希、canonical finalized块/准确index/整签名字节、配置发币账户、准确受益AccountId/金额、topup:<order_id>备注、同phase的唯一System.ExtrinsicSuccess且无失败、准确TransferWithRemark事件；不靠硬编码pallet/call index或“交易包含在块中”宣称转账成功。抽取现有通用signed/finalized核心时保留会员/帖子专用CID及SquarePost核验。最后一次D1事务比较claim、订单与全部证据，重复paid须完整证据一致；同GMB交易不能付给两笔订单。exception须匹配claim及准确理由，不从异常自动恢复或重新发币。
-5. **正式下载和发布指针。** App/Wallet Android从各自固定crcfrcn产品仓读取正式非draft/非prerelease Release；公民链四平台继续使用独立CITIZENCHAIN_DOWNLOAD_DB的准确显式发布指针，保留平台对应Tag/源码SHA/资产名/资产SHA/revision。只恢复实际存在的macOS updater，不能凭空增加另外三平台updater。GET/PUT publication使用CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET及准确x-citizenserve-request-time、nonce、signature三头，HMAC规范为method、**实际/api完整路径**、时间、nonce、原始body SHA-256五行，时钟±5分钟；拒绝查询、错平台/域、坏摘要与额外字段。PUT expected_revision原子CAS，publication=null明确撤回；同规范结果幂等、旧revision不能覆盖新发布。普通会话及结算令牌没有发布权。固定GitHub官方源、仓/Release Tag/资产/HTTPS路径，有界响应和精确302目标，展示缓存≤300秒；无指针或缺实际资产不能造下载结果。本产品不写线上指针、不创建Release。
+5. **正式下载。** App/Wallet Android 从各自固定 crcfrcn 产品仓读取正式非 draft、非 prerelease Release，核对准确 Tag、唯一已上传 APK、官方 HTTPS 路径及有界响应后返回 302。公民链四平台安装包由官网直接解析 GitHub 公开 Release；服务端不提供公民链下载、updater 或发布指针接口。
 6. **链引导、宪法及受控广播。** App与CitizenSDK两个bootstrap保留各自exact schema、SS58=2027/GMB两位小数、已登记创世hash/state_root/bootnodes、签名安装包bundled chainspec/light_sync_state及P2P finalized信任合同，不下发可替换checkpoint或服务端节点/Access秘密。返回当前/api实际服务路径；广播显式关闭时返回不可用。宪法从同一canonical finalized块的LegislationYuan Laws(0)已生效版本、LawVersions、LawVersionLabels与ConstitutionImmutableManifest完整解码，拒绝尾字节/非法层级/超大内容，保留中英标签与准确更新时间；展示缓存≤300秒不能用于授权。POST extrinsics只收signed_extrinsic_hex，不收私钥/助记词、账户申报或任意RPC方法；原始extrinsic≤65536B、JSON≤131584B。显式RELAY_ENABLED=1及实际固定节点配置后才调用author_submitExtrinsic；IP每分钟20次跨PoP硬顶、SHA-256十分钟去重与排他占用，验证节点tx_hash与完整extrinsic BLAKE2-256一致。广播超时保留不确定结果/定位，不假报失败后自动重发；广播成功只表示broadcast，不签发CID/准入/会话或宣称finalized。
-7. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面与PNG由CitizenChain节点自身的同一HTTPS RPC端点交付，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有下载D1/CACHE和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
-8. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播/发布CAS、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、正式Release与实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行全量fmt/测试/Clippy/WASM Release/WebAssembly.compile，回归现有授权/社区/内容合同，health继续account_services_ready:false。
+7. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面与PNG由CitizenChain节点自身的同一HTTPS RPC端点交付，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有展示缓存和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
+8. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、正式 App/Wallet Release 下载与实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行全量fmt/测试/Clippy/WASM Release/WebAssembly.compile，回归现有授权/社区/内容合同，health继续account_services_ready:false。
 
 ### 付款钱包签名合同
 
@@ -347,7 +347,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 
 ### 全部外部请求地址、内部路径和权限
 
-API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST（settled/广播除外）正文上限16KiB；settled≤131584B、广播≤131584B且原始交易≤65536B；GET/PUT publication≤16KiB（GET空正文）。GET仅接受标出的规范查询；拒绝重复/未知查询、字段和方法。动态order_id只接受top_<32位小写hex>。public/付款/结算/发布均不签发账户服务授权；现有普通账户业务始终走MLS守卫。
+API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST（settled/广播除外）正文上限16KiB；settled≤131584B、广播≤131584B且原始交易≤65536B；GET仅接受标出的规范查询；拒绝重复/未知查询、字段和方法。动态order_id只接受top_<32位小写hex>。public/付款/结算均不签发账户服务授权；现有普通账户业务始终走MLS守卫。
 
 | 方法与完整请求地址 | 内部路径 | 准确输入/权限 |
 |---|---|---|
@@ -362,15 +362,6 @@ API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST�
 | POST https://www.crcfrcn.com/api/topup/settlement/{order_id}/exception | /topup/settlement/{order_id}/exception | SETTLE_TOKEN；claim_id、reason。 |
 | GET https://www.crcfrcn.com/api/downloads/citizenapp/android | /downloads/citizenapp/android | 固定App正式安装包；公开。 |
 | GET https://www.crcfrcn.com/api/downloads/citizenwallet/android | /downloads/citizenwallet/android | 固定Wallet正式安装包；公开。 |
-| GET https://www.crcfrcn.com/api/downloads/citizenchain/macos | /downloads/citizenchain/macos | 该平台正式指针/准确dmg；公开。 |
-| GET https://www.crcfrcn.com/api/downloads/citizenchain/macos/updater | /downloads/citizenchain/macos/updater | 同指针citizenchain-node-latest-macOS.json；公开。 |
-| GET https://www.crcfrcn.com/api/downloads/citizenchain/windows | /downloads/citizenchain/windows | 该平台正式指针/准确exe；公开。 |
-| GET https://www.crcfrcn.com/api/downloads/citizenchain/linux-arm | /downloads/citizenchain/linux-arm | 该平台正式指针/准确deb；公开。 |
-| GET https://www.crcfrcn.com/api/downloads/citizenchain/linux-amd | /downloads/citizenchain/linux-amd | 该平台正式指针/准确deb；公开。 |
-| GET/PUT https://www.crcfrcn.com/api/downloads/citizenchain/macos/publication | /downloads/citizenchain/macos/publication | 专用发布HMAC；PUT expected_revision、publication。 |
-| GET/PUT https://www.crcfrcn.com/api/downloads/citizenchain/windows/publication | /downloads/citizenchain/windows/publication | 同上，仅本平台。 |
-| GET/PUT https://www.crcfrcn.com/api/downloads/citizenchain/linux-arm/publication | /downloads/citizenchain/linux-arm/publication | 同上，仅本平台。 |
-| GET/PUT https://www.crcfrcn.com/api/downloads/citizenchain/linux-amd/publication | /downloads/citizenchain/linux-amd/publication | 同上，仅本平台。 |
 | GET https://www.crcfrcn.com/api/chain/bootstrap | /chain/bootstrap | App准确引导schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/citizensdk/bootstrap | /chain/citizensdk/bootstrap | CitizenSDK准确窄schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/constitution | /chain/constitution | 已生效宪法；公开只读。 |
@@ -386,11 +377,10 @@ public是保留的链网络/安装包/报价能力，不代表未通过验证者
 
 ### 实际固定后端地址和配置来源
 
-- 正式App/Wallet Release源：https://api.github.com/repos/crcfrcn/citizenapp/releases?per_page=100、https://api.github.com/repos/crcfrcn/citizenwallet/releases?per_page=100；链固定Tag读取：https://api.github.com/repos/crcfrcn/citizenchain/releases/tags/{version_tag}。下载只返回对应https://github.com/crcfrcn/{product}/releases/download/{version_tag}/{asset_name}，禁止任意仓/外部URL。
-- 平台Tag：citizenchain-macos-v<版本>、citizenchain-windows-v<版本>、citizenchain-linux-arm-v<版本>、citizenchain-linux-amd-v<版本>；对应citizenchain-node-macOS-v<版本>.dmg、citizenchain-node-Windows-v<版本>.exe、citizenchain-node-LinuxARM-v<版本>.deb、citizenchain-node-LinuxAMD-v<版本>.deb。保持真实发布身份，路径改小写不改资产大小写。
+- 正式App/Wallet Release源：https://api.github.com/repos/crcfrcn/citizenapp/releases?per_page=100、https://api.github.com/repos/crcfrcn/citizenwallet/releases?per_page=100。App/Wallet下载只返回对应https://github.com/crcfrcn/{product}/releases/download/{version_tag}/{asset_name}，禁止任意仓/外部URL。
 - 旧正式配置登记的Base源是https://mainnet.base.org；实施时仅从TOPUP_BASE_RPC_URL加载固定HTTPS源，核实准确币轨合约/decimals/实际资产种类，以合约白名单为准，不凭symbol识别或把桥接资产说成原生资产。TOPUP_RECV_ADDRESS、TOPUP_DISBURSE_ACCOUNT_ID和两币合约对照历史公开配置，未核实不猜填、不增加新网络/供应商。
 - CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。实际CHAIN_URL部署值目前未核实，不凭空写域名。公共EVM源属于该CitizenChain节点，不转给Base源。
-- 本地声明下载D1：CITIZENCHAIN_DOWNLOAD_DB，citizenweb-download，fa70d613-ff33-43d3-aecd-84f1baef3918；展示KV沿用SQUARE_CACHE，d632942d82c94e45ab4058fa69268ce1。专用秘密为TOPUP_INTENT_SECRET、SETTLE_TOKEN、CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET，仅声明，不读值、不线上写。
+- 展示 KV 沿用 SQUARE_CACHE；服务端不再声明公民链下载 D1 和发布指针密钥。TOPUP_INTENT_SECRET 与 SETTLE_TOKEN 仍只声明，不读值、不线上写。
 - 当前/api归一化与付款签名/HMAC变更先实现服务端合同；App及产品发布器必须在各自后续接线验收新实际路径，未验收前不能替换生产。
 
 ## 通知、调度与维护
@@ -471,7 +461,7 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
 
-本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、12项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
+本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、11项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
 `CHAIN_URL` 指向固定主机上的 Access 保护 RPC 路径，格式为 `/rpc-` 后接48位小写十六进制；产品只校验结构，不在源码、文档、日志或夹具保存实际路径。该值保持现有公开运行配置类别，真正的 Access 凭据仍由 `CHAIN_SECRET` 保管；发布冷签只携带最终配置摘要。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
 控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。

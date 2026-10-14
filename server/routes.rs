@@ -27,7 +27,6 @@ pub enum Permission {
     Public,
     PaymentIntent,
     Settlement,
-    Publication,
 }
 impl Route {
     pub const fn permission(self) -> Permission {
@@ -37,7 +36,6 @@ impl Route {
                 crate::topup::routes::TopupRoute::Confirm
                 | crate::topup::routes::TopupRoute::Status,
             ) => Permission::PaymentIntent,
-            Self::Downloads(r) if r.publication() => Permission::Publication,
             Self::Topup(_) | Self::Downloads(_) | Self::Chain(_) | Self::Health => {
                 Permission::Public
             }
