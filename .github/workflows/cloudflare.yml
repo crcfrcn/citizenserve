@@ -91,7 +91,7 @@ jobs:
           const membersText=/^release_members = '''([^']+)'''$/mu.exec(cargo)?.[1];
           if(!seed||!membersText)throw Error('产品版本或正式包成员声明缺失');
           const members=JSON.parse(membersText);
-          if(!Array.isArray(members)||members.length!==10||new Set(members).size!==10
+          if(!Array.isArray(members)||members.length!==9||new Set(members).size!==9
             ||!members.includes('index.js')||!members.includes('index_bg.wasm'))throw Error('正式包成员声明无效');
           const ordinal=value=>{const match=/^(0|[1-9]\d*)\.(0|[1-9]\d?)\.(0|[1-9]\d?)$/u.exec(value);
             if(!match)throw Error('软件版本无效');return BigInt(match[1])*10000n+BigInt(match[2])*100n+BigInt(match[3]);};

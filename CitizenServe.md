@@ -27,6 +27,8 @@
 
 `scripts/build.mjs`只负责GitHub Runner上的Cloudflare Worker编译与资源准备；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产和部署配置，生成Cloudflare部署候选；不以前置资源回执阻塞部署，部署请求由Cloudflare据实接受或拒绝。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
 
+正式 Worker 归档成员由 `Cargo.toml` 的 `release_members` 闭集定义，当前为九件；旧公民链下载 D1 schema 已退出正式包。`cloudflare.yml` 按同一数量和闭集验真，单件缺失或重复均阻止 Release。
+
 `.github/workflows/cloudflare.yml`定义GitHub手动触发、Runner、产品Build调用、十件成员组包、Tag/Release与三件资产回读；产品`build.mjs`仅拥有资源准备、固定工作根和Worker编译。`linuxarm.yml`仍为空占位，不代表LinuxARM已实现；`publish.mjs`保持正式资产只读候选验真，并在单独发布授权后从正式包准备临时部署现场，从控制台工具库取得已登记Node25.2.1及其npm，按正式包原锁临时安装Wrangler4.149.0，完整部署软件和Wrangler配置；密钥由控制台安全层装配，不写入仓库或任务文件。塔塔门禁是独立流程，不作为本产品自动化的前置步骤。
 
 根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
