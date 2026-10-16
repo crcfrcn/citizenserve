@@ -87,10 +87,6 @@ path = "test/chain_services_contract.rs"
 name = "ethereum_rpc_contract"
 path = "test/ethereum_rpc_contract.rs"
 [[test]]
-name = "downloads_contract"
-path = "test/downloads_contract.rs"
-
-[[test]]
 name = "notifications_contract"
 path = "test/notifications_contract.rs"
 [[test]]

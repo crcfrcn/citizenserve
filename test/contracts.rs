@@ -638,8 +638,8 @@ fn settlement_claim_is_not_stolen_and_only_same_receipt_is_idempotent() {
 }
 
 #[test]
-fn relay_and_installer_use_exact_new_contract() {
-    use citizenserve::{chain::Relay, downloads};
+fn relay_uses_exact_new_contract() {
+    use citizenserve::chain::Relay;
     assert!(serde_json::from_str::<Relay>(r#"{"extrinsic_hex":"0x01"}"#).is_err());
     assert_eq!(
         serde_json::from_str::<Relay>(r#"{"signed_extrinsic_hex":"0x01"}"#)
@@ -648,13 +648,6 @@ fn relay_and_installer_use_exact_new_contract() {
             .unwrap(),
         [1]
     );
-    assert_eq!(
-        downloads::installer_target("/downloads/citizenapp/android")
-            .unwrap()
-            .0,
-        "citizenapp"
-    );
-    assert!(downloads::installer_target("/download/citizenapp/android").is_err());
 }
 
 #[test]

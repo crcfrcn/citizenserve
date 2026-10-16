@@ -3,7 +3,6 @@ use crate::shared::{Error, Result};
 pub enum Route {
     Health,
     Topup(crate::topup::routes::TopupRoute),
-    Downloads(crate::downloads::routes::DownloadRoute),
     Chain(ChainRoute),
     Membership(crate::membership::routes::MembershipRoute),
     User(crate::user::routes::UserRoute),
@@ -36,7 +35,7 @@ impl Route {
                 crate::topup::routes::TopupRoute::Confirm
                 | crate::topup::routes::TopupRoute::Status,
             ) => Permission::PaymentIntent,
-            Self::Topup(_) | Self::Downloads(_) | Self::Chain(_) | Self::Health => {
+            Self::Topup(_) | Self::Chain(_) | Self::Health => {
                 Permission::Public
             }
             Self::User(
@@ -48,7 +47,7 @@ impl Route {
         }
     }
     pub const fn external_tool(self) -> bool {
-        matches!(self, Self::Topup(_) | Self::Downloads(_) | Self::Chain(_))
+        matches!(self, Self::Topup(_) | Self::Chain(_))
     }
     pub const fn protected(self) -> bool {
         matches!(
@@ -67,7 +66,6 @@ impl Route {
         match self {
             Self::Health => "GET",
             Self::Topup(r) => r.method(),
-            Self::Downloads(r) => r.method(),
             Self::Chain(ChainRoute::Extrinsics) => "POST",
             Self::Chain(_) => "GET",
             Self::Membership(r) => r.method(),
@@ -82,7 +80,6 @@ impl Route {
         match self {
             Self::Health => 0,
             Self::Topup(r) => r.body_limit(),
-            Self::Downloads(r) => r.body_limit(),
             Self::Chain(ChainRoute::Extrinsics) => 131584,
             Self::Chain(_) => 0,
             Self::Membership(r) => r.body_limit(),
@@ -105,9 +102,6 @@ pub fn route(method: &str, path: &str) -> Result<Route> {
     }
     if let Some(r) = crate::topup::routes::TopupRoute::resolve(method, path) {
         return Ok(Route::Topup(r));
-    }
-    if let Some(r) = crate::downloads::routes::DownloadRoute::resolve(method, path) {
-        return Ok(Route::Downloads(r));
     }
     if let Some(r) = match (method, path) {
         ("GET", "/chain/bootstrap") => Some(ChainRoute::Bootstrap),

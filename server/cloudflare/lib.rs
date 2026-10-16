@@ -1,7 +1,6 @@
 //! Cloudflare唯一入口，装配授权、账户业务、Queue/Cron与聊天平台适配。
 mod cache;
 mod chain;
-mod downloads;
 mod maintenance;
 mod media;
 mod network;
@@ -234,7 +233,6 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
         .await?;
         return match route {
             Route::Topup(r) => topup::handle(request, env, r, &url).await,
-            Route::Downloads(r) => downloads::handle(request, env, r, &url).await,
             Route::Chain(r) => chain_tool(request, env, r, &url).await,
             _ => Err(unavailable()),
         };

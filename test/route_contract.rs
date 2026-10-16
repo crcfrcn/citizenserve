@@ -198,16 +198,6 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
             "/api/topup/settlement/history".into(),
             Permission::Settlement,
         ),
-        (
-            "GET",
-            "/api/downloads/citizenapp/android".into(),
-            Permission::Public,
-        ),
-        (
-            "GET",
-            "/api/downloads/citizenwallet/android".into(),
-            Permission::Public,
-        ),
     ];
     for action in ["claim", "settled", "exception"] {
         list.push((
@@ -225,7 +215,7 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
     ] {
         list.push((method, format!("/api/chain/{p}"), Permission::Public));
     }
-    assert_eq!(list.len(), 16);
+    assert_eq!(list.len(), 14);
     for (m, p, permission) in list {
         let r = route(m, &p).unwrap();
         assert_eq!(r.permission(), permission);
@@ -234,6 +224,8 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
     }
     for p in [
         "/api/download/citizenapp/android",
+        "/api/downloads/citizenapp/android",
+        "/api/downloads/citizenwallet/android",
         "/api/downloads/citizenchain/macos",
         "/api/downloads/citizenchain/macos/updater",
         "/api/downloads/citizenchain/windows/publication",
