@@ -1,6 +1,6 @@
 //! 真正生成Sr25519钱包签名与Ed25519 MLS证明，内存端口只模拟提交/失败。
 use citizenserve::{
-    server::guard,
+    server::gate,
     shared::{crypto, Error, Result},
     user::{
         admission::Admission,
@@ -440,14 +440,14 @@ fn complete_session_guard_denies_revoke_rebind_and_expired_chain_confirmation() 
         created_at: 1_000_000,
         expires_at: 2_000_000,
     };
-    assert!(guard::session_authority(&c.identity, &a, &d, &s, &c.config, 1_000_001).is_ok());
-    assert!(guard::session_authority(&c.identity, &a, &d, &s, &c.config, 1_060_000).is_err());
+    assert!(gate::identity::session_authority(&c.identity, &a, &d, &s, &c.config, 1_000_001).is_ok());
+    assert!(gate::identity::session_authority(&c.identity, &a, &d, &s, &c.config, 1_060_000).is_err());
     let mut i = c.identity.clone();
     i.binding_revision = 2;
-    assert!(guard::session_authority(&i, &a, &d, &s, &c.config, 1_000_001).is_err());
+    assert!(gate::identity::session_authority(&i, &a, &d, &s, &c.config, 1_000_001).is_err());
     let mut revoked = d;
     revoked.active = false;
-    assert!(guard::session_authority(&c.identity, &a, &revoked, &s, &c.config, 1_000_001).is_err());
+    assert!(gate::identity::session_authority(&c.identity, &a, &revoked, &s, &c.config, 1_000_001).is_err());
 }
 #[test]
 fn exact_six_fields_reject_old_token_unknown_and_missing_null() {
@@ -533,7 +533,7 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
     );
     c.repo.consumed.store(false, Ordering::SeqCst);
     let authenticate = || {
-        run(guard::authenticate(
+        run(gate::identity::authenticate(
             &c.repo,
             &c.identity,
             &c.config,
@@ -549,7 +549,7 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
     assert_eq!(a.recheck_deadline(), 1_060_000);
     assert_eq!(authenticate().unwrap_err().code, "invalid_mls_challenge");
     c.repo.consumed.store(false, Ordering::SeqCst);
-    assert!(run(guard::authenticate(
+    assert!(run(gate::identity::authenticate(
         &c.repo,
         &c.identity,
         &c.config,

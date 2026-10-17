@@ -3,7 +3,7 @@ use citizenserve::{
     chain::subscription::Current,
     membership::chat::Permissions,
     server::{
-        guard::{self, Authority},
+        gate::{self, identity::Authority},
         tatachat, tatachat_routes,
     },
     shared::{Error, Result},
@@ -240,7 +240,7 @@ impl Host {
         if now < start {
             return Err(Error::new(503, "chat_clock_changed"));
         }
-        let authority = guard::session_authority(&identity, &a, &d, &s, &self.config, now)?;
+        let authority = gate::identity::session_authority(&identity, &a, &d, &s, &self.config, now)?;
         lifecycle::admit(&self.env, &s.cid_number, a.human_verified_at_millis)
             .await
             .map_err(business)?;

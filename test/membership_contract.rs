@@ -926,7 +926,7 @@ impl membership::ports::Repository for NoticeRepository {
 #[test]
 fn membership_response_only_exposes_current_inactive_overage_notice() {
     use citizenserve::{
-        server::guard,
+        server::gate,
         user::{
             admission::Admission,
             auth::{device::Device, session::Session},
@@ -992,7 +992,7 @@ fn membership_response_only_exposes_current_inactive_overage_notice() {
         expires_at: 2000000,
     };
     let authority =
-        guard::session_authority(&i, &admission, &device, &session, &config, 1000000).unwrap();
+        gate::identity::session_authority(&i, &admission, &device, &session, &config, 1000000).unwrap();
     let auth = Authorization::new(&authority, &config, &token, 1000000).unwrap();
     let mut repo = NoticeRepository {
         notice: Some(membership::cleanup::Notice::new(2000000, 1000000).unwrap()),

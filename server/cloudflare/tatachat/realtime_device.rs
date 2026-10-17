@@ -135,6 +135,11 @@ impl DurableObject for TataChatDevice {
         if request.url()?.as_str() == "https://tatachat.internal/notify"
             && request.method() == Method::Post
         {
+            // 此入口仅由平台命名空间stub交付；公网请求不能识别成内部开放类型。
+            citizenserve::server::gate::open::system(
+                citizenserve::server::gate::open::SystemOperation::ChatNotify,
+                request.url()?.as_str(), "https://tatachat.internal/notify",
+            ).map_err(|_| Self::failure())?;
             let bytes = crate::body(&mut request, 4096)
                 .await
                 .map_err(|_| Self::failure())?;
@@ -152,6 +157,13 @@ impl DurableObject for TataChatDevice {
             }
             self.arm().await?;
             return Ok(Response::empty()?.with_status(204));
+        }
+        let entry = match crate::gate_entry(&request, &self.env) {
+            Ok(entry) => entry,
+            Err(_) => return Response::error("forbidden", 403),
+        };
+        if entry.require_cid(citizenserve::server::gate::policy::CidRule::Chat).is_err() {
+            return Response::error("forbidden", 403);
         }
         let host = super::super::host(&self.env).map_err(|_| Self::failure())?;
         if request.path() != "/api/tatachat/realtime"

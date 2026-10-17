@@ -4,7 +4,7 @@ use super::{
 };
 use citizenserve::{
     chain::{finalized, identity},
-    server::routes,
+    server::gate::request,
     shared::{crypto, Error, Result},
     topup::{
         self,
@@ -65,15 +65,18 @@ pub async fn handle(
     env: &Env,
     route: TopupRoute,
     url: &url::Url,
+    scope: &citizenserve::server::gate::open::Scope<'_>,
 ) -> Result<Response> {
+    scope.require_api(request::Route::Topup(route))?;
     route.validate_query(url.query())?;
     let c = configured(env)?;
     let bytes = super::read_body(request, route.body_limit()).await?;
     let repo = D1Topup {
         db: env.d1("DB").map_err(|_| topup::config::unconfigured())?,
     };
-    if route.settlement() {
-        topup::settlement::authorize(
+    if scope.rule() == citizenserve::server::gate::policy::OpenRule::Settlement {
+        citizenserve::server::gate::open::settlement(
+            scope,
             secret(env, "SETTLE_TOKEN")?.as_bytes(),
             request
                 .headers()
@@ -93,7 +96,7 @@ pub async fn handle(
     let v = match route {
         TopupRoute::Config => c.response()?,
         TopupRoute::Intent => {
-            let r: topup::intent::Request = routes::parse_json(&bytes, 16384)?;
+            let r: topup::intent::Request = request::parse_json(&bytes, 16384)?;
             citizenserve::shared::ids::account(&r.account_id)?;
             account_limit(&repo, &r.account_id).await?;
             let chain = super::chain::Chain::configured(env)?;
@@ -111,8 +114,8 @@ pub async fn handle(
             json!({"ok":true,"payment_intent":token,"wallet_authorization_message":topup::intent::message(&c,&i,&token)?,"intent":i})
         }
         TopupRoute::Confirm => {
-            let input: topup::orders::Confirm = routes::parse_json(&bytes, 16384)?;
-            let intent = topup::intent::verify(&input.payment_intent, key.as_bytes())?;
+            let input: topup::orders::Confirm = request::parse_json(&bytes, 16384)?;
+            let intent = citizenserve::server::gate::open::payment(scope, &input.payment_intent, key.as_bytes())?;
             account_limit(&repo, &intent.account_id).await?;
             topup::orders::confirm(
                 &repo,
@@ -126,10 +129,10 @@ pub async fn handle(
             .await?
         }
         TopupRoute::Status => {
-            topup::orders::status(&repo, key.as_bytes(), routes::parse_json(&bytes, 16384)?).await?
+            topup::orders::status(&repo, key.as_bytes(), request::parse_json(&bytes, 16384)?).await?
         }
         TopupRoute::Pending | TopupRoute::History => {
-            let q = routes::query(url.query())?;
+            let q = request::query(url.query())?;
             let limit = q.get("limit").and_then(|s| s.parse().ok()).unwrap_or(
                 if route == TopupRoute::Pending {
                     50
@@ -161,7 +164,7 @@ pub async fn handle(
             json!({"ok":true,"orders":items,"next_cursor":next})
         }
         TopupRoute::Claim => {
-            let r: topup::settlement::Claim = routes::parse_json(&bytes, 16384)?;
+            let r: topup::settlement::Claim = request::parse_json(&bytes, 16384)?;
             let claim = r.claim_id.unwrap_or(format!(
                 "tpc_{}",
                 crypto::hex(&super::runtime::random::<16>()?)
@@ -180,12 +183,12 @@ pub async fn handle(
                 &Now,
                 &c,
                 topup::routes::path_order(url.path())?,
-                routes::parse_json(&bytes, 131584)?,
+                request::parse_json(&bytes, 131584)?,
             )
             .await?
         }
         TopupRoute::Exception => {
-            let r: topup::settlement::Exception = routes::parse_json(&bytes, 16384)?;
+            let r: topup::settlement::Exception = request::parse_json(&bytes, 16384)?;
             topup::settlement::claim_id(&r.claim_id)?;
             if r.reason.is_empty()
                 || r.reason.len() > 1024

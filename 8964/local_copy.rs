@@ -16,7 +16,7 @@ impl Cursor {
     }
     pub fn read(raw: &str) -> Result<Self> {
         let bytes = crypto::unbase64url(raw, 256)?;
-        let c: Self = crate::server::routes::parse_json(&bytes, 256)?;
+        let c: Self = crate::server::gate::request::parse_json(&bytes, 256)?;
         if !super::routes::identifier(&c.post_id)
             || c.created_at > crate::shared::MAX_SAFE_INTEGER
             || c.encode()? != raw

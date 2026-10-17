@@ -43,7 +43,7 @@ pub fn target(request: &ChallengeRequest) -> Result<()> {
             Ok(())
         }
         Purpose::Request => {
-            crate::server::routes::protected_target(&request.method, &request.request_target)
+            crate::server::gate::request::protected_target(&request.method, &request.request_target)
                 .map_err(|_| Error::new(400, "invalid_mls_target"))?;
             if matches!(request.method.as_str(), "GET" | "DELETE")
                 && request.body_sha256 != format!("0x{}", crypto::sha256_hex(b""))

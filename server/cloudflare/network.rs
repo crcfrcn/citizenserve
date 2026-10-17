@@ -107,12 +107,15 @@ impl PaymentRpc for Base {
     }
 }
 /// 同一公共域分流页面、指定图标和RPC；静态路径不放宽原RPC根路径合同。
-pub async fn handle(request: &mut worker::Request, env: &Env) -> Result<worker::Response> {
+pub async fn handle(request: &mut worker::Request, env: &Env, scope: &citizenserve::server::gate::open::Scope<'_>) -> Result<worker::Response> {
+    if !matches!(scope.endpoint(), citizenserve::server::gate::request::Endpoint::Network(_)) {
+        return Err(Error::new(403, "gate_scope_mismatch"));
+    }
     let u = request
         .url()
         .map_err(|_| Error::new(400, "rpc_host_invalid"))?;
     if u.scheme() != "https"
-        || u.origin().ascii_serialization() != "https://nrcrpc.crcfrcn.com"
+        || u.origin().ascii_serialization() != citizenserve::server::gate::policy::NETWORK_ORIGIN
         || u.query().is_some()
         || u.fragment().is_some()
         || !u.username().is_empty()
@@ -154,17 +157,17 @@ pub async fn handle(request: &mut worker::Request, env: &Env) -> Result<worker::
         return Ok(response);
     }
     if matches!(asset, NetworkAsset::Install) {
-        return rpc(request, env).await;
+        return rpc(request, env, scope).await;
     }
     Err(Error::new(405, "rpc_method_not_allowed"))
 }
-async fn rpc(request: &mut worker::Request, env: &Env) -> Result<worker::Response> {
+async fn rpc(request: &mut worker::Request, env: &Env, scope: &citizenserve::server::gate::open::Scope<'_>) -> Result<worker::Response> {
     let u = request
         .url()
         .map_err(|_| Error::new(400, "rpc_host_invalid"))?;
     ethereum_rpc::target(u.as_str())?;
     if u.scheme() != "https"
-        || u.origin().ascii_serialization() != "https://nrcrpc.crcfrcn.com"
+        || u.origin().ascii_serialization() != citizenserve::server::gate::policy::NETWORK_ORIGIN
         || u.path() != "/"
         || u.query().is_some()
     {
@@ -186,7 +189,7 @@ async fn rpc(request: &mut worker::Request, env: &Env) -> Result<worker::Respons
             return Err(Error::new(405, "rpc_method_not_allowed"));
         }
         let b = super::body(request, 128 * 1024).await?;
-        let value = match ethereum_rpc::parse(&b) {
+        let value = match citizenserve::server::gate::open::network_rpc(scope, &b) {
             Err(v) => v,
             Ok(batch) => {
                 let write = batch.items.iter().flatten().any(|r| r.write());

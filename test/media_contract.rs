@@ -258,7 +258,7 @@ fn sigv4_matches_independent_python_golden_and_binds_every_upload_constraint() {
 }
 fn authorization() -> Authorization {
     use citizenserve::{
-        server::guard,
+        server::gate,
         user::{
             admission::Admission,
             auth::{
@@ -309,7 +309,7 @@ fn authorization() -> Authorization {
         chain_scope: i.chain_scope.clone(),
         institution: i.institution,
     };
-    let authority = guard::session_authority(&i, &a, &d, &s, &config, 1000001).unwrap();
+    let authority = gate::identity::session_authority(&i, &a, &d, &s, &config, 1000001).unwrap();
     Authorization::new(&authority, &config, &token, 1000001).unwrap()
 }
 struct Assets {

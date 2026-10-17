@@ -16,7 +16,7 @@ mod topup;
 use citizenserve::{
     server::{
         registration,
-        routes::{self, Route},
+        gate::{self, request::{self, Route}},
     },
     shared::{error::Health, Error as BusinessError},
     user::{
@@ -116,7 +116,7 @@ pub async fn main(mut request: Request, env: Env, _ctx: Context) -> Result<Respo
     response
         .headers_mut()
         .set("referrer-policy", "no-referrer")?;
-    let public_network = request.url()?.host_str() == Some("nrcrpc.crcfrcn.com");
+    let public_network = request::network_url(request.url()?.as_ref());
     if public_network {
         // 公共网络独立采用通配CORS；不再由App的WEB_ORIGIN覆盖同一响应头。
         response
@@ -175,90 +175,80 @@ pub(crate) async fn body(
     }
     Ok(bytes)
 }
+/// 只从真实请求及服务器声明提取输入；三路分类在任何业务I/O之前完成。
+fn gate_entry(request: &Request, env: &Env) -> citizenserve::shared::Result<gate::Entry> {
+    let url = request.url().map_err(|_| unavailable())?;
+    let method = request.method().to_string();
+    let service = env.var("WEB_ORIGIN").ok().map(|v| v.to_string());
+    let media = env.var("SQUARE_PUBLIC_MEDIA_BASE_URL").ok().map(|v| v.to_string());
+    let header = |name| request.headers().get(name).map_err(|_| unavailable());
+    let browser = header("origin")?;
+    let declared = header("access-control-request-method")?;
+    let length = header("content-length")?;
+    let token = header("authorization")?;
+    let proof = header("x-mls-proof")?;
+    let input = request::Incoming {
+        method: &method, url: url.as_ref(), service_origin: service.as_deref(),
+        media_origin: media.as_deref(), browser_origin: browser.as_deref(),
+        preflight_method: declared.as_deref(), content_length: length.as_deref(),
+        authorization: token.as_deref(), mls_proof: proof.as_deref(),
+        internal_header: request.headers().has("x-tatachat-internal").map_err(|_| unavailable())?,
+    };
+    match gate::classify(input) {
+        gate::Classification::Open(entry) => { entry.open()?; Ok(entry) },
+        gate::Classification::Cid(entry) => Ok(entry),
+        gate::Classification::Reject(error) => Err(error),
+    }
+}
 async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Result<Response> {
-    if request.url().map_err(|_| unavailable())?.host_str() == Some("nrcrpc.crcfrcn.com") {
-        return network::handle(request, env).await;
+    let entry = gate_entry(request, env)?;
+    if entry.preflight() {
+        entry.open()?;
+        return preflight(entry.method());
     }
     let method = request.method().to_string();
     let path = request.path();
-    if request.url().map_err(|_| unavailable())?.scheme() != "https" {
-        return Err(BusinessError::new(400, "https_required"));
-    }
-    if tatachat::routes::matches(&path) {
-        return tatachat::routes::handle(request, env)
-            .await
-            .map_err(tatachat::business);
-    }
-    let route = if method == "OPTIONS" {
-        let declared = request
-            .headers()
-            .get("access-control-request-method")
-            .map_err(|_| unavailable())?
-            .ok_or(BusinessError::new(400, "invalid_registration_request"))?;
-        routes::route(&declared, &path)?
-    } else {
-        routes::route(&method, &path)?
-    };
-    if route.external_tool() {
-        let origin = env
-            .var("WEB_ORIGIN")
-            .map_err(|_| unavailable())?
-            .to_string();
-        let browser = request.headers().get("origin").map_err(|_| unavailable())?;
-        let url = routes::validate_request_origin(
-            request.url().map_err(|_| unavailable())?.as_ref(),
-            &origin,
-            browser.as_deref(),
-        )?;
-        if method == "OPTIONS" {
-            return preflight(route.method());
+    match entry.endpoint() {
+        request::Endpoint::Network(_) => {
+            let scope = entry.open()?;
+            return network::handle(request, env, &scope).await;
         }
-        external_rate(
-            request,
-            env,
-            if method == "GET" {
-                "RATE_READ"
-            } else if matches!(
-                route,
-                Route::Topup(
-                    citizenserve::topup::routes::TopupRoute::Intent
-                        | citizenserve::topup::routes::TopupRoute::Confirm
-                )
-            ) {
-                "RATE_AUTH"
-            } else {
-                "RATE_WRITE"
-            },
-        )
-        .await?;
+        request::Endpoint::Chat(_) => {
+            entry.require_cid(gate::policy::CidRule::Chat)?;
+            return tatachat::routes::handle(request, env, &entry).await.map_err(tatachat::business);
+        }
+        request::Endpoint::Media(key) => {
+            entry.require_cid(gate::policy::CidRule::Media)?;
+            return media::serve(request, env, &entry, key).await;
+        }
+        request::Endpoint::Api(_) => {},
+    }
+    let route = entry.api()?;
+    if matches!(route, Route::Topup(_) | Route::Chain(_)) {
+        let scope = entry.open()?;
+        let origin = env.var("WEB_ORIGIN").map_err(|_| unavailable())?.to_string();
+        let browser = request.headers().get("origin").map_err(|_| unavailable())?;
+        let url = request::validate_request_origin(request.url().map_err(|_| unavailable())?.as_ref(), &origin, browser.as_deref())?;
+        external_rate(request, env, if method == "GET" { "RATE_READ" }
+            else if matches!(route, Route::Topup(citizenserve::topup::routes::TopupRoute::Intent | citizenserve::topup::routes::TopupRoute::Confirm)) { "RATE_AUTH" }
+            else { "RATE_WRITE" }).await?;
         return match route {
-            Route::Topup(r) => topup::handle(request, env, r, &url).await,
-            Route::Chain(r) => chain_tool(request, env, r, &url).await,
+            Route::Topup(r) => topup::handle(request, env, r, &url, &scope).await,
+            Route::Chain(r) => { scope.require_api(route)?; chain_tool(request, env, r, &url).await },
             _ => Err(unavailable()),
         };
     }
     if route == Route::Health {
-        if method == "OPTIONS" {
-            return preflight("GET");
-        }
-        return Response::from_json(&Health {
-            ok: true,
-            product: "CitizenServe",
-            implementation: "Rust",
-            account_services_ready: false,
-        })
-        .map_err(|_| unavailable());
+        entry.open()?.require_api(Route::Health)?;
+        return Response::from_json(&Health { ok: true, product: "CitizenServe", implementation: "Rust", account_services_ready: false }).map_err(|_| unavailable());
     }
     let config = config(env)?;
     let browser = request.headers().get("origin").map_err(|_| unavailable())?;
-    let url = routes::validate_request_origin(
+    let url = request::validate_request_origin(
         request.url().map_err(|_| unavailable())?.as_ref(),
         &config.service_origin,
         browser.as_deref(),
     )?;
-    if method == "OPTIONS" {
-        return preflight(route.method());
-    }
     let hash_secret = env
         .secret("HASH_KEY")
         .map_err(|_| configuration_error(route.registration()))?
@@ -283,9 +273,9 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
     };
     let rate_route = if let Some(bytes) = &challenge_body {
         let input: mls_authentication::ChallengeRequest =
-            routes::parse_json(bytes, route.body_limit())?;
+            request::parse_json(bytes, route.body_limit())?;
         if input.purpose == mls_authentication::Purpose::Request {
-            Some(routes::protected_target(
+            Some(request::protected_target(
                 &input.method,
                 &input.request_target,
             )?)
@@ -326,7 +316,13 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
             .map_err(|_| configuration_error(route.registration()))?,
     };
     if route.protected() {
+        entry.require_cid(gate::policy::CidRule::Business)?;
         return protected(request, env, &config, route, &url).await;
+    }
+    match route.rule() {
+        gate::policy::Rule::Open(_) => { entry.open()?.require_api(route)?; },
+        gate::policy::Rule::Cid(kind) => entry.require_cid(kind)?,
+        gate::policy::Rule::Reject => return Err(BusinessError::new(404, "route_not_found")),
     }
     let Route::User(route) = route else {
         return Err(unavailable());
@@ -402,29 +398,23 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
         };
         let response = match route {
             UserRoute::Registration => {
-                registration::prepare(
-                    &registrations,
-                    &runtime,
-                    &config,
-                    routes::parse_registration(&bytes, route.body_limit())?,
+                gate::open::registration(
+                    &entry.open()?, &registrations, &runtime, &config,
+                    gate::open::Registration::Prepare(request::parse_registration(&bytes, route.body_limit())?),
                 )
                 .await?
             }
             UserRoute::Verify => {
-                registration::verify(
-                    &registrations,
-                    &runtime,
-                    &config,
-                    routes::parse_registration(&bytes, route.body_limit())?,
+                gate::open::registration(
+                    &entry.open()?, &registrations, &runtime, &config,
+                    gate::open::Registration::Verify(request::parse_registration(&bytes, route.body_limit())?),
                 )
                 .await?
             }
             UserRoute::Status => {
-                registration::status(
-                    &registrations,
-                    &runtime,
-                    &config,
-                    routes::parse_registration(&bytes, route.body_limit())?,
+                gate::open::registration(
+                    &entry.open()?, &registrations, &runtime, &config,
+                    gate::open::Registration::Status(request::parse_registration(&bytes, route.body_limit())?),
                 )
                 .await?
             }
@@ -443,7 +433,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                 projection::confirm(
                     &rpc,
                     &identities,
-                    &routes::parse_json(&bytes, route.body_limit())?,
+                    &request::parse_json(&bytes, route.body_limit())?,
                     &config.chain_scope,
                     checked,
                 )
@@ -451,7 +441,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
             }
             UserRoute::Challenges => {
                 let input: mls_authentication::ChallengeRequest =
-                    routes::parse_json(&bytes, route.body_limit())?;
+                    request::parse_json(&bytes, route.body_limit())?;
                 challenge::target(&input)?;
                 let i = projection::current(
                     &rpc,
@@ -472,7 +462,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                         .admission(&i.cid_number)
                         .await?
                         .ok_or(BusinessError::new(403, "registration_required"))?;
-                    citizenserve::server::guard::device_authority(
+                    citizenserve::server::gate::identity::device_authority(
                         &i,
                         &a,
                         &d,
@@ -496,7 +486,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                         .admission(&i.cid_number)
                         .await?
                         .ok_or(BusinessError::new(403, "registration_required"))?;
-                    citizenserve::server::guard::session_authority(
+                    citizenserve::server::gate::identity::session_authority(
                         &i,
                         &a,
                         &d,
@@ -526,7 +516,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
             }
             UserRoute::DeletionStatusChallenge => {
                 use citizenserve::user::deletion::{self, Purpose, Subject};
-                let input: Subject = routes::parse_json(&bytes, route.body_limit())?;
+                let input: Subject = request::parse_json(&bytes, route.body_limit())?;
                 citizenserve::shared::ids::cid(&input.cid_number)?;
                 let i = projection::current(
                     &rpc,
@@ -558,7 +548,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
             }
             UserRoute::DeletionStatus => {
                 use citizenserve::user::deletion::{self, Purpose, Repository, Signed};
-                let input: Signed = routes::parse_json(&bytes, route.body_limit())?;
+                let input: Signed = request::parse_json(&bytes, route.body_limit())?;
                 if !citizenserve::shared::ids::hex(&input.challenge_id, 32, false) {
                     return Err(BusinessError::new(
                         401,
@@ -598,7 +588,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                 serde_json::to_value(receipt).map_err(|_| unavailable())?
             }
             UserRoute::Devices => {
-                let input: device::Register = routes::parse_json(&bytes, route.body_limit())?;
+                let input: device::Register = request::parse_json(&bytes, route.body_limit())?;
                 let proof = proof.as_ref().ok_or_else(unavailable)?;
                 let i = projection::current(
                     &rpc,
@@ -626,7 +616,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
                 .map_err(|_| unavailable())?
             }
             UserRoute::Sessions => {
-                let input: session::Request = routes::parse_json(&bytes, route.body_limit())?;
+                let input: session::Request = request::parse_json(&bytes, route.body_limit())?;
                 let proof = proof.as_ref().ok_or_else(unavailable)?;
                 let i = projection::current(
                     &rpc,
@@ -670,6 +660,9 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
 }
 #[event(scheduled)]
 pub async fn scheduled(event: ScheduledEvent, env: Env, ctx: ScheduleContext) {
+    if gate::open::system(gate::open::SystemOperation::Scheduled, "cloudflare.scheduled", "cloudflare.scheduled").is_err() {
+        return;
+    }
     ctx.wait_until(async move {
         if scheduled::run(&env, event.schedule() as u64).await.is_err() {
             console_error!("scheduled_task_failed");
@@ -684,8 +677,12 @@ pub async fn queue(
 ) -> worker::Result<()> {
     let expected = env.var("TATACHAT_QUEUE_NAME").ok().map(|v| v.to_string());
     if expected.as_deref() == Some(batch.queue().as_str()) {
+        gate::open::system(gate::open::SystemOperation::ChatQueue, batch.queue().as_str(), expected.as_deref().unwrap_or_default())
+            .map_err(|_| worker::Error::RustError("queue_identity_invalid".into()))?;
         tatachat::maintenance::consume(batch, &env).await
     } else if batch.queue() == "citizenserve" {
+        gate::open::system(gate::open::SystemOperation::Notifications, batch.queue().as_str(), "citizenserve")
+            .map_err(|_| worker::Error::RustError("queue_identity_invalid".into()))?;
         queue::consume(batch, &env).await
     } else {
         Err(worker::Error::RustError("queue_identity_invalid".into()))
@@ -713,7 +710,7 @@ async fn protected(
 ) -> citizenserve::shared::Result<Response> {
     use citizenserve::{
         notifications::{self, routes::NotificationRoute},
-        server::guard,
+        server::gate,
         square::{self, routes::SquareRoute},
         user::{contacts, profile_service, routes::ProtectedUserRoute},
     };
@@ -722,8 +719,8 @@ async fn protected(
         url.path(),
         url.query().map(|q| format!("?{q}")).unwrap_or_default()
     );
-    routes::protected_target(route.method(), &target)?;
-    let query = routes::query(url.query())?;
+    request::protected_target(route.method(), &target)?;
+    let query = request::query(url.query())?;
     let token = bearer(request)?;
     let auth = repositories::auth::D1Auth {
         db: env.d1("DB").map_err(|_| unavailable())?,
@@ -767,6 +764,16 @@ async fn protected(
     } else {
         body(request, route.body_limit()).await?
     };
+    let identities = repositories::identity::D1Identities {
+        db: env.d1("DB").map_err(|_| unavailable())?,
+    };
+    // 已知主体先完成低成本签名/设备/会话检查，拒绝伪造请求后才读取会员或链事实。
+    // 此步骤不消费挑战；最终统一鉴权仍使用随后取得的当前身份并消费一次。
+    if let Some(known) = identities.by_account(&session.account_id).await? {
+        gate::identity::preauthenticate(&auth,&known,config,&token,&proof,route.method(),&target,&bytes,js_sys::Date::now() as u64).await?;
+    } else {
+        proof.verify_signature()?;
+    }
     let rpc = chain::Chain::configured(env)?;
     // 先完成可能耗时的权益RPC，再核验当前身份与会话，避免旧核验时间支撑业务。
     let entitlement = if matches!(
@@ -809,9 +816,6 @@ async fn protected(
     } else {
         None
     };
-    let identities = repositories::identity::D1Identities {
-        db: env.d1("DB").map_err(|_| unavailable())?,
-    };
     let i = if matches!(route, Route::TataChat(_)) {
         // 许可必须使用会员读取冻结的同一块身份，不把另一个头/缓存身份拼成同块证明。
         let current = membership.as_ref().ok_or_else(unavailable)?;
@@ -841,7 +845,7 @@ async fn protected(
         )
         .await?
     };
-    let authority = guard::authenticate(
+    let authority = gate::identity::authenticate(
         &auth,
         &i,
         config,
@@ -899,7 +903,7 @@ async fn protected(
                     } else {
                         None
                     };
-                    let input = routes::parse_json(&bytes, route.body_limit())?;
+                    let input = request::parse_json(&bytes, route.body_limit())?;
                     let facts = membership::projection::confirm(
                         &rpc,
                         &config.chain_scope,
@@ -959,7 +963,7 @@ async fn protected(
                         &repositories::media::D1Assets { db: db()? },
                         &objects()?,
                         &authorization,
-                        routes::parse_json(&bytes, route.body_limit())?,
+                        request::parse_json(&bytes, route.body_limit())?,
                         runtime::random()?,
                     )
                     .await?
@@ -1050,7 +1054,7 @@ async fn protected(
                     profile_service::update(
                         &repo,
                         &authorization,
-                        &routes::parse_json(&bytes, route.body_limit())?,
+                        &request::parse_json(&bytes, route.body_limit())?,
                     )
                     .await?
                 }
@@ -1059,7 +1063,7 @@ async fn protected(
                     #[derive(serde::Deserialize)]
                     #[serde(deny_unknown_fields)]
                     struct Empty {}
-                    let _: Empty = routes::parse_json(&bytes, route.body_limit())?;
+                    let _: Empty = request::parse_json(&bytes, route.body_limit())?;
                     let repo = repositories::deletion::D1Deletion { db: db()? };
                     serde_json::to_value(
                         deletion::issue(
@@ -1077,7 +1081,7 @@ async fn protected(
                 ProtectedUserRoute::Delete => {
                     use citizenserve::user::deletion::{self, Purpose, Repository};
                     let repo = repositories::deletion::D1Deletion { db: db()? };
-                    let input = routes::parse_json(&bytes, route.body_limit())?;
+                    let input = request::parse_json(&bytes, route.body_limit())?;
                     let c = deletion::verify(
                         &repo,
                         config,
@@ -1097,7 +1101,7 @@ async fn protected(
                     contacts::handle(
                         &repositories::contacts::D1Contacts { db: db()? },
                         &authorization,
-                        routes::parse_json(&bytes, route.body_limit())?,
+                        request::parse_json(&bytes, route.body_limit())?,
                         runtime::random()?,
                     )
                     .await?
@@ -1118,7 +1122,7 @@ async fn protected(
                         &repositories::uploads::D1Uploads { db: db()? },
                         &objects()?,
                         &authorization,
-                        routes::parse_json(&bytes, route.body_limit())?,
+                        request::parse_json(&bytes, route.body_limit())?,
                         member()?,
                         runtime::random()?,
                     )
@@ -1160,7 +1164,7 @@ async fn protected(
                         &objects()?,
                         &authorization,
                         id,
-                        routes::parse_json(&bytes, route.body_limit())?,
+                        request::parse_json(&bytes, route.body_limit())?,
                         member()?,
                     )
                     .await?
@@ -1181,7 +1185,7 @@ async fn protected(
                         &rpc,
                         &config.chain_scope,
                         &authorization,
-                        routes::parse_json(&bytes, route.body_limit())?,
+                        request::parse_json(&bytes, route.body_limit())?,
                         member()?,
                     )
                     .await?
@@ -1254,7 +1258,7 @@ async fn protected(
                 }
                 SquareRoute::Follow => {
                     let input: square::follows::Follow =
-                        routes::parse_json(&bytes, route.body_limit())?;
+                        request::parse_json(&bytes, route.body_limit())?;
                     square::follows::change(
                         &repo,
                         &authorization,
@@ -1276,7 +1280,7 @@ async fn protected(
                 }
                 SquareRoute::Notify => {
                     let input: square::follows::Notify =
-                        routes::parse_json(&bytes, route.body_limit())?;
+                        request::parse_json(&bytes, route.body_limit())?;
                     let cid = url
                         .path()
                         .strip_prefix("/api/8964/follows/")
@@ -1303,7 +1307,7 @@ async fn protected(
                 }
                 NotificationRoute::Read => {
                     let input: notifications::inbox::Read =
-                        routes::parse_json(&bytes, route.body_limit())?;
+                        request::parse_json(&bytes, route.body_limit())?;
                     notifications::inbox::mark(&repo, &authorization, input.scope).await?
                 }
             }
@@ -1395,13 +1399,13 @@ pub(crate) async fn external_rate(
 async fn chain_tool(
     request: &mut Request,
     env: &Env,
-    r: routes::ChainRoute,
+    r: request::ChainRoute,
     url: &url::Url,
 ) -> citizenserve::shared::Result<Response> {
     use citizenserve::chain::{
         bootstrap, constitution, finalized, network_ports::Cache, ports::Rpc, relay,
     };
-    use routes::ChainRoute;
+    use request::ChainRoute;
     if url.query().is_some() {
         return Err(BusinessError::new(400, "invalid_chain_request"));
     }
@@ -1506,7 +1510,7 @@ async fn chain_tool(
                 &chain,
                 &chain,
                 &genesis,
-                routes::parse_json(&bytes, 131584)?,
+                request::parse_json(&bytes, 131584)?,
                 &hash,
                 &citizenserve::shared::crypto::hex(&runtime::random::<16>()?),
                 js_sys::Date::now() as u64,

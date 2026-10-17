@@ -17,7 +17,7 @@ pub async fn endpoint(
             endpoint::register(
                 &repo,
                 auth,
-                citizenserve::server::routes::parse_json(bytes, 16384)?,
+                citizenserve::server::gate::request::parse_json(bytes, 16384)?,
             )
             .await
         }

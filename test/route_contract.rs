@@ -1,5 +1,5 @@
 use citizenserve::{
-    server::routes::{route, Route},
+    server::gate::request::{route, Route},
     user::{
         auth::{
             challenge,
@@ -8,6 +8,102 @@ use citizenserve::{
         routes::UserRoute,
     },
 };
+
+fn gate_input<'a>(method:&'a str,url:&'a str)->citizenserve::server::gate::request::Incoming<'a> {
+    citizenserve::server::gate::request::Incoming {
+        method,url,service_origin:Some("https://registration.example.test"),
+        media_origin:Some("https://media.example.test"),browser_origin:None,
+        preflight_method:None,content_length:Some("0"),authorization:None,mls_proof:None,internal_header:false,
+    }
+}
+
+#[test]
+fn unified_gate_has_exact_open_cid_and_reject_paths_before_business_io() {
+    use citizenserve::server::gate::{self,Classification};
+    let open=gate::classify(gate_input("POST","https://registration.example.test/api/user/registration"));
+    let Classification::Open(entry)=open else {panic!("真人注册准备必须走明确开放分支")};
+    let scope=entry.open().unwrap();
+    scope.require_api(Route::User(UserRoute::Registration)).unwrap();
+    assert!(scope.require_api(Route::ProtectedUser(citizenserve::user::routes::ProtectedUserRoute::Contacts)).is_err());
+    let mut cid=gate_input("POST","https://registration.example.test/api/user/devices");
+    cid.mls_proof=Some("synthetic-shape-only");
+    let Classification::Cid(entry)=gate::classify(cid) else {panic!("取得CID后的激活必须走公民号分支")};
+    entry.require_cid(gate::policy::CidRule::Device).unwrap();
+    assert!(entry.open().is_err());
+    let mut business_io=0;
+    for url in ["https://registration.example.test/api/unknown","https://registration.example.test/api/api/user/devices",
+        "https://other.example.test/api/health","https://registration.example.test/api/user/../user/devices"] {
+        match gate::classify(gate_input("GET",url)) {
+            Classification::Reject(_)=>{},
+            _=>{business_io+=1;},
+        }
+    }
+    assert_eq!(business_io,0,"未知请求不得触发数据库、RPC或存储处理器");
+}
+
+#[test]
+fn missing_or_malformed_business_credentials_are_rejected_without_io() {
+    use citizenserve::server::gate::{self,Classification};
+    for value in [None,Some("Bearer arbitrary"),Some("Bearer sqs_short")] {
+        let mut input=gate_input("GET","https://registration.example.test/api/8964/feed/recommended");
+        input.authorization=value;
+        assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    }
+    let mut input=gate_input("GET","https://registration.example.test/api/8964/feed/recommended");
+    input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
+    assert!(matches!(gate::classify(input),Classification::Reject(_)),"缺请求证明也必须提前拒绝");
+}
+
+#[test]
+fn network_and_chat_no_longer_bypass_gate_classification() {
+    use citizenserve::server::gate::{self,Classification};
+    assert!(matches!(gate::classify(gate_input("POST","https://nrcrpc.crcfrcn.com/")),Classification::Open(_)));
+    assert!(matches!(gate::classify(gate_input("GET","https://nrcrpc.crcfrcn.com/api/user/profile")),Classification::Reject(_)));
+    assert!(matches!(gate::classify(gate_input("GET","https://registration.example.test/api/tatachat/realtime")),Classification::Reject(_)));
+    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
+    input.authorization=Some("Bearer synthetic-chat-credential");
+    let Classification::Cid(entry)=gate::classify(input) else {panic!("聊天必须走CID分支")};
+    entry.require_cid(gate::policy::CidRule::Chat).unwrap();
+}
+
+#[test]
+fn media_head_range_targets_require_cid_and_cannot_expose_other_bucket_keys() {
+    use citizenserve::server::gate::{self,Classification};
+    for method in ["GET","HEAD"] {
+        let mut input=gate_input(method,"https://media.example.test/square/CID1/posts/p1/media/0/source.webp");
+        assert!(matches!(gate::classify(input),Classification::Reject(_)));
+        input=gate_input(method,"https://media.example.test/square/CID1/posts/p1/media/0/source.webp");
+        input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
+        let Classification::Cid(entry)=gate::classify(input) else {panic!("媒体必须验证CID")};
+        entry.require_cid(gate::policy::CidRule::Media).unwrap();
+    }
+    for path in ["/square/CID1/posts/p1/manifest.json","/square/CID1/posts/p1/media/00/source.webp",
+        "/square/CID1/posts/p1/media/0/unknown.webp","/square/CID1/posts/p1/media/0/source.webp?bypass=1"] {
+        let url=format!("https://media.example.test{path}");
+        let mut input=gate_input("GET",&url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
+        assert!(matches!(gate::classify(input),Classification::Reject(_)),"{path}");
+    }
+}
+
+#[test]
+fn preflight_is_open_only_for_a_real_registered_target() {
+    use citizenserve::server::gate::{self,Classification};
+    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
+    input.preflight_method=Some("POST");
+    let Classification::Open(entry)=gate::classify(input) else {panic!("预检不执行账户业务")};
+    assert!(entry.preflight());assert_eq!(entry.method(),"POST");entry.open().unwrap();
+    let mut input=gate_input("OPTIONS","https://registration.example.test/api/unknown");input.preflight_method=Some("POST");
+    assert!(matches!(gate::classify(input),Classification::Reject(_)));
+}
+
+#[test]
+fn internal_open_rules_cannot_be_selected_by_client_headers_or_wrong_queue() {
+    use citizenserve::server::gate::{self,Classification,open::{self,SystemOperation}};
+    let mut input=gate_input("GET","https://registration.example.test/api/health");input.internal_header=true;
+    assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    assert!(open::system(SystemOperation::Notifications,"other","citizenserve").is_err());
+    assert!(open::system(SystemOperation::ChatQueue,"citizenserve-tatachat","citizenserve-tatachat").is_ok());
+}
 #[test]
 fn registration_auth_and_wallet_recovery_routes_remain_exact() {
     for r in UserRoute::ALL {
@@ -24,7 +120,7 @@ fn registration_auth_and_wallet_recovery_routes_remain_exact() {
 
 #[test]
 fn thirteen_business_routes_require_session_proof_and_explicit_budgets() {
-    use citizenserve::server::routes::protected_target;
+    use citizenserve::server::gate::request::protected_target;
     let routes = [
         ("GET", "/api/user/profiles/CID1", 0),
         ("PUT", "/api/user/profile", 16384),
@@ -77,7 +173,7 @@ fn business_aliases_duplicate_and_unknown_queries_are_closed() {
         "/api/8964/feed/recommended?limit=%zz",
     ] {
         assert!(
-            citizenserve::server::routes::protected_target("GET", target).is_err(),
+            citizenserve::server::gate::request::protected_target("GET", target).is_err(),
             "{target}"
         );
     }
@@ -140,7 +236,7 @@ fn purpose_cannot_sign_another_route_or_query_alias() {
 
 #[test]
 fn seventeen_step4_routes_are_exact_protected_and_budgeted() {
-    use citizenserve::server::routes::protected_target;
+    use citizenserve::server::gate::request::protected_target;
     for (method, path, budget) in [
         ("GET", "/api/membership", 0),
         ("POST", "/api/membership/confirm", 16384),
@@ -173,37 +269,37 @@ fn seventeen_step4_routes_are_exact_protected_and_budgeted() {
 
 #[test]
 fn step5_exact_tools_cannot_obtain_account_service_permissions() {
-    use citizenserve::server::routes::{protected_target, Permission};
+    use citizenserve::server::gate::{request::protected_target, policy::{Rule, OpenRule}};
     let id = format!("top_{}", "ab".repeat(16));
     let mut list = vec![
-        ("GET", "/api/topup/config".into(), Permission::Public),
-        ("POST", "/api/topup/intent".into(), Permission::Public),
+        ("GET", "/api/topup/config".into(), Rule::Open(OpenRule::Public)),
+        ("POST", "/api/topup/intent".into(), Rule::Open(OpenRule::Public)),
         (
             "POST",
             "/api/topup/confirm".into(),
-            Permission::PaymentIntent,
+            Rule::Open(OpenRule::PaymentIntent),
         ),
         (
             "POST",
             "/api/topup/status".into(),
-            Permission::PaymentIntent,
+            Rule::Open(OpenRule::PaymentIntent),
         ),
         (
             "GET",
             "/api/topup/settlement/pending".into(),
-            Permission::Settlement,
+            Rule::Open(OpenRule::Settlement),
         ),
         (
             "GET",
             "/api/topup/settlement/history".into(),
-            Permission::Settlement,
+            Rule::Open(OpenRule::Settlement),
         ),
     ];
     for action in ["claim", "settled", "exception"] {
         list.push((
             "POST",
             format!("/api/topup/settlement/{id}/{action}"),
-            Permission::Settlement,
+            Rule::Open(OpenRule::Settlement),
         ));
     }
     for (method, p) in [
@@ -213,12 +309,12 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
         ("GET", "runtime-target"),
         ("POST", "extrinsics"),
     ] {
-        list.push((method, format!("/api/chain/{p}"), Permission::Public));
+        list.push((method, format!("/api/chain/{p}"), Rule::Open(OpenRule::Public)));
     }
     assert_eq!(list.len(), 14);
     for (m, p, permission) in list {
         let r = route(m, &p).unwrap();
-        assert_eq!(r.permission(), permission);
+        assert_eq!(r.rule(), permission);
         assert!(!r.protected());
         assert!(protected_target(m, &p).is_err());
     }
@@ -261,7 +357,7 @@ fn public_rpc_only_uses_the_exact_separate_https_root() {
 
 #[test]
 fn push_endpoint_exact_actual_api_targets_and_budgets() {
-    use citizenserve::server::routes::protected_target;
+    use citizenserve::server::gate::request::protected_target;
     for (method, limit) in [("PUT", 16384), ("DELETE", 0)] {
         let r = protected_target(method, "/api/notifications/endpoint").unwrap();
         assert!(r.protected());
@@ -281,7 +377,7 @@ fn push_endpoint_exact_actual_api_targets_and_budgets() {
 
 #[test]
 fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority() {
-    use citizenserve::server::routes::{protected_target, Permission};
+    use citizenserve::server::gate::{request::protected_target, policy::{Rule, CidRule}};
     use citizenserve::user::routes::ProtectedUserRoute;
     assert_eq!(
         route("POST", "/api/user/deletion/challenges").unwrap(),
@@ -301,7 +397,7 @@ fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority(
         UserRoute::DeletionStatus,
     ] {
         let resolved = route("POST", &r.external()).unwrap();
-        assert_eq!(resolved.permission(), Permission::Account);
+        assert_eq!(resolved.rule(), Rule::Cid(CidRule::Recovery));
         assert!(!resolved.protected());
         assert!(!r.registration());
         assert!(!r.requires_mls());

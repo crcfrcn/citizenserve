@@ -2,7 +2,7 @@
 use citizenserve::tatachat::{push, Error, Limits, Result};
 use worker::Env;
 pub const MAX_CONNECTIONS: usize = 4;
-pub const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_CHUNK_BYTES: usize = citizenserve::server::gate::policy::MAX_CHUNK_BYTES;
 pub const LIMITS: Limits = Limits {
     max_frame_bytes: 2 * 1024 * 1024,
     max_attachment_bytes: citizenserve::shared::MAX_SAFE_INTEGER,

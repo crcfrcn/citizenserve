@@ -1,6 +1,6 @@
 //! 公民聊天的主体事实由用户模块提取；通用聊天不解释CID、钱包或真人准入。
 use crate::{
-    server::guard::Authority,
+    server::gate::identity::Authority,
     shared::{crypto, ids, Error, Result},
     user::{
         auth::{device::Device, session::Session},

@@ -1,6 +1,5 @@
-pub mod guard;
+pub mod gate;
 pub mod registration;
-pub mod routes;
 pub mod tatachat;
 pub mod tatachat_routes;
 

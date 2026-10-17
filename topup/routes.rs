@@ -1,6 +1,6 @@
 //! 精确目录是权限边界；充值能力和结算令牌均不能用来取得普通账户权限。
 use crate::{
-    server::routes::query,
+    server::gate::request::query,
     shared::{Error, Result},
     square::routes::keys,
 };

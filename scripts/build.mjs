@@ -59,6 +59,13 @@ export const contract=Object.freeze({
           "root": "node-v25.2.1-linux-x64",
           "executable": "bin/node",
           "kind": "tar-gzip"
+        },
+        "darwin-arm64": {
+          "url": "https://nodejs.org/dist/v25.2.1/node-v25.2.1-darwin-arm64.tar.gz",
+          "sha256": "be87e21bd235a451fad02c89e5bf7cb17e206e4cd89dd5664f20d19e7dfde6f9",
+          "root": "node-v25.2.1-darwin-arm64",
+          "executable": "bin/node",
+          "kind": "tar-gzip"
         }
       }
     },
@@ -1723,7 +1730,7 @@ export function fixedWork(scope){
 
 const resourceRuntime=await(async()=>{
 const {readFileSync}=await import('node:fs');
-// 聊天协议资源配方归本产品；控制台供给与独立准备共用同一声明及验真。
+// 本产品独立拥有此实现，通过自身公开接口执行。
 const {createHash, randomUUID}=await import('node:crypto');
 const {spawn}=await import('node:child_process');
 const {inflateRawSync, gunzipSync, gzipSync, zstdDecompressSync}=await import('node:zlib');
@@ -1909,7 +1916,7 @@ async function prepare({work, mode, store, toolStore = store, offline = false, s
     return receipt;
   } finally { await rm(pending, {recursive: true, force: true}); }
 }
-// 完整流程的资源需求从本仓声明和两份锁读取；不复制控制台工具实现。
+// 本产品独立拥有此实现，通过自身公开接口执行。
 async function flowDeclaration() {
   return structuredClone(contract);
 }
@@ -2764,7 +2771,7 @@ export async function executeBuild(request,options={}){
  }
 }
 
-// 塔塔自动化的远端生命周期归本产品；控制台只提供任务宿主和短期凭据。
+// 本产品公开GitHub接口只使用普通参数与返回值；平台流程及终态处理归本仓。
 const automationWorkflows=Object.freeze({'cloudflare':'cloudflare.yml'});
 const automationRepository='crcfrcn/citizenserve';
 const automationTransport=new (await import('node:async_hooks')).AsyncLocalStorage();
@@ -2772,23 +2779,11 @@ function automationRoute(route,action){
  const workflow=automationWorkflows[route?.platform];
  if(!workflow||route.repository!=='citizenserve'||route.product!=='citizenserve'
   ||route.workflow!==workflow||route.canonicalId!==`citizenserve.${route.platform}.release`
-  ||action&& (action.canonicalId!==route.canonicalId||action.platform!==route.platform
-   ||action.productId!=='citizenserve'||action.flow!=='release'||action.authorizationLevel!==2))
+  )
   throw Error('公民服务自动化目标或授权动作不匹配');
  return workflow;
 }
-async function automationAccess(route,host,actionId,task){
- if(!host?.security)throw Error('缺少自动化短期授权宿主');
- const payload={repository:automationRepository,purpose:'workflow',action_id:actionId,platform:route.platform};
- if(task){payload.run_id=task.id;payload.recovery_run_id=task.id;}
- const value=await host.security('github.repository.token',{
-  payload_base64:Buffer.from(JSON.stringify(payload)).toString('base64')});
- const token=Buffer.from(value?.values?.['repository-main:TOKEN']||'','base64').toString('utf8');
- const expiry=Number(Buffer.from(value?.values?.['repository-main:EXPIRES_AT']||'','base64').toString('utf8'));
- if(value?.ok!==true||!/^ghs_[^\s\x00-\x1f\x7f]{1,2044}$/u.test(token)
-  ||!Number.isSafeInteger(expiry)||expiry<=Date.now()/1000)throw Error('公民服务 GitHub 短期授权无效');
- return token;
-}
+
 async function automationRequest(path,token,{method='GET',body}={}){
  if(!/^actions\/(?:workflows\/(?:cloudflare\.yml)\/dispatches|runs\/[1-9]\d*(?:\/(?:jobs(?:\?per_page=100&page=[1-9]\d*)?|cancel|force-cancel))?)$/u.test(path))
   throw Error('公民服务 GitHub 请求目标无效');
@@ -2812,7 +2807,7 @@ function automationCheckedRun(run,route,expected){
   throw Error('公民服务 GitHub Run 身份不符');
  return run;
 }
-// 同一产品入口可脱离控制台运行；调用方自行提供已获准的短期令牌。
+// 本产品独立拥有此实现，通过自身公开接口执行。
 export async function dispatchAutomation(platform,token,{inputs={}}={}){
  const route={repository:'citizenserve',product:'citizenserve',platform,workflow:automationWorkflows[platform],canonicalId:`citizenserve.${platform}.release`};
  const workflow=automationRoute(route);
@@ -2878,128 +2873,13 @@ async function automationReadLogs(runId,token){
  for await(const part of download.body){size+=part.length;if(size>32*1024*1024)throw Error('GitHub 日志下载超限');parts.push(part);}
  return automationLogArchive(Buffer.concat(parts));
 }
-const automationObservers=new WeakSet();
-const automationReconnects=new WeakSet();
-function automationScheduleReconnect(task,route,host){
- if(!task.active||automationReconnects.has(task))return;
- automationReconnects.add(task);
- const timer=setTimeout(async()=>{
-  automationReconnects.delete(task);
-  if(!task.active||!task.recovered)return;
-  try{
-   // 控制台回到所属产品请求上下文领取恢复授权；独立宿主显式声明模式后才直调。
-   if(typeof host.recoverTask==='function')await host.recoverTask(task);
-   else if(host.mode==='independent')await recoverAutomation(task,route,host);
-   else throw Error('自动化恢复宿主入口缺失');
-  }catch(error){
-   if(task.active){host.report(task,'原 Run 重新连接失败：'+error.message);automationScheduleReconnect(task,route,host);}
-  }
- },120000);timer.unref?.();
-}
-async function automationObserve(task,route,host,token){
- if(automationObservers.has(task))return;automationObservers.add(task);
- let previous='';const jobStates=new Map();
- try{while(task.active){
-  const run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
-  if(task.sourceSHA&&task.sourceSHA!==run.head_sha)throw Error('公民服务 Run 提交身份变化');
-  Object.assign(task,{sourceSHA:run.head_sha,githubRunNumber:run.run_number,githubRunAttempt:run.run_attempt,
-   githubRemoteStatus:run.status});host.changed(task);
-  const status=run.status==='completed'?(run.conclusion==='success'?'成功':'失败'):run.status;
-  if(status!==previous){host.report(task,'GitHub：'+status);previous=status;}
-  for(const job of await automationJobs(run.id,token)){
-   const state=job.status+':'+job.conclusion;
-   if(jobStates.get(job.id)!==state){jobStates.set(job.id,state);
-    host.report(task,automationSafeText(job.name,token)+'：'+(job.conclusion||job.status));}
-  }
-  if(run.status==='completed'){
-   try{for(const file of await automationReadLogs(run.id,token)){
-    host.report(task,'GitHub 日志：'+automationSafeText(file.name,token));
-    for(const line of file.text.split(/\r?\n/u))if(line)host.report(task,automationSafeText(line,token));
-   }}catch{host.report(task,'GitHub 终态已确认；日志下载未完成，可从 Run 链接查看');}
-   await host.finish(task,task.cancelRequested||run.conclusion!=='success'?1:0,
-    task.cancelRequested?'任务已取消；塔塔自动化终态：'+run.conclusion:
-     run.conclusion==='success'?'塔塔自动化成功':'塔塔自动化失败：'+run.conclusion);
-   await host.refresh?.(route.repository,host.security);return;
-  }
-  await (automationTransport.getStore()?.pause?.()??new Promise(resolve=>setTimeout(resolve,5000)));
- }}catch(error){if(task.active){task.recovered=true;host.report(task,'公民服务原 Run 观察中断：'+error.message);host.changed(task);automationScheduleReconnect(task,route,host);}}
- finally{automationObservers.delete(task);}
-}
-async function automationCancel(task,route,host){
- if(task.remoteCancelOperation)return task.remoteCancelOperation;
- const operation=(async()=>{
-  automationRoute(route);if(!task.active||task.repository!==route.repository||task.platform!==route.platform)throw Error('公民服务取消目标不匹配');
-  task.cancelRequested=true;host.changed(task);
-  if(!task.githubRunId)return {id:task.id,closed:true};
-  const token=await automationAccess(route,host,task.actionId,task);
-  let run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
-  if(task.sourceSHA&&run.head_sha!==task.sourceSHA)throw Error('公民服务取消提交身份不符');
-  if(run.status!=='completed')await automationRequest(`actions/runs/${task.githubRunId}/cancel`,token,{method:'POST'});
-  for(let index=0;index<60&&run.status!=='completed';index++){
-   await (automationTransport.getStore()?.pause?.()??new Promise(resolve=>setTimeout(resolve,5000)));run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
-  }
-  if(run.status!=='completed'){
-   await automationRequest(`actions/runs/${task.githubRunId}/force-cancel`,token,{method:'POST'});
-   for(let index=0;index<60&&run.status!=='completed';index++){
-    await (automationTransport.getStore()?.pause?.()??new Promise(resolve=>setTimeout(resolve,5000)));run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
-   }
-  }
-  if(run.status!=='completed')throw Error('公民服务远端取消未到终态');
-  if(task.active)await host.finish(task,1,'任务已取消；塔塔自动化终态：'+run.conclusion);
-  return {id:task.id,closed:true};
- })().catch(error=>{if(task.active){task.recovered=true;host.report(task,'原 Run 取消待恢复：'+error.message);host.changed(task);automationScheduleReconnect(task,route,host);}throw error;});task.remoteCancelOperation=operation;
- void operation.finally(()=>{if(task.remoteCancelOperation===operation)delete task.remoteCancelOperation;}).catch(()=>{});
- return operation;
-}
-export async function startAutomation(route,action,host){
- automationRoute(route,action);
- const existing=host.listTasks().find(task=>task.active&&task.recovered&&task.githubRunId
-  &&task.repository===route.repository&&task.platform===route.platform);
- if(existing)return recoverAutomation(existing,route,host);
- const token=await automationAccess(route,host,action.id);
- const task=host.createTask({moduleFile:'citizenserve.mjs',canonicalId:route.canonicalId,actionId:action.id,
-  title:route.title,moduleId:'citizenserve'});
- Object.assign(task,{repository:route.repository,productId:route.product,platform:route.platform,
-  mode:'release',flow:'release',security:host.security,githubRepository:automationRepository,
-  githubWorkflow:route.workflow});
- task.cancel=()=>automationCancel(task,route,host);task.secrets.push(token);host.created(task);
- try{
-  // 派发回执先写入任务；回读失败时只恢复原 Run，绝不重发。
-  const value=await automationRequest(`actions/workflows/${route.workflow}/dispatches`,token,{method:'POST',body:{ref:'main',inputs:{}}});
-  if(!Number.isSafeInteger(value.workflow_run_id)||value.workflow_run_id<1
-   ||value.html_url!==`https://github.com/${automationRepository}/actions/runs/${value.workflow_run_id}`)
-   throw Error('公民服务派发未返回准确 Run，禁止再次派发');
-  Object.assign(task,{githubRunId:value.workflow_run_id,githubRunUrl:value.html_url});host.changed(task);
-  const run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
-  Object.assign(task,{sourceSHA:run.head_sha,githubRunNumber:run.run_number,githubRunAttempt:run.run_attempt,
-   githubRemoteStatus:run.status});host.changed(task);host.report(task,'GitHub 已接收：'+run.html_url);
-  if(task.cancelRequested)void automationCancel(task,route,host);
-  else void automationObserve(task,route,host,token);
- }catch(error){if(task.githubRunId){task.recovered=true;host.report(task,'原 Run 回读中断：'+error.message);host.changed(task);automationScheduleReconnect(task,route,host);}
-  else await host.finish(task,1,error.message);}
- return {id:task.id};
-}
-export async function recoverAutomation(task,route,host){
- automationRoute(route);
- if(!task?.active||task.mode!=='release'||task.canonicalId!==route.canonicalId
-  ||task.repository!==route.repository||task.platform!==route.platform
-  ||task.githubRepository!==automationRepository||task.githubWorkflow!==route.workflow
-  ||typeof task.actionId!=='string'||!task.actionId
-  ||!Number.isSafeInteger(task.githubRunId)||task.githubRunId<1
-  ||task.sourceSHA!==undefined&&!/^[0-9a-f]{40}$/u.test(task.sourceSHA))throw Error('公民服务原 Run 恢复身份无效');
- // 先恢复原任务的取消入口；读取授权失败时仍可在用户再次取消时请求新的关闭授权。
- task.security=host.security;task.cancel=()=>automationCancel(task,route,host);
- task.recovered=true;host.changed(task);
- const token=await automationAccess(route,host,task.actionId,task);
- const run=automationCheckedRun(await automationRequest(`actions/runs/${task.githubRunId}`,token),route,task.githubRunId);
- if(task.sourceSHA&&task.sourceSHA!==run.head_sha)throw Error('原 Run 提交身份不符');
- Object.assign(task,{sourceSHA:run.head_sha,githubRunNumber:run.run_number,
-  githubRunAttempt:run.run_attempt,githubRemoteStatus:run.status});
- task.secrets.push(token);task.recovered=false;host.changed(task);
- if(task.cancelRequested)void automationCancel(task,route,host);
- else void automationObserve(task,route,host,token);
- return {id:task.id};
-}
+
+
+
+
+
+
+
 // 本产品自动化合成回归：所有网络与授权均由夹具替代，不触发真实流程。
 if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===fileURLToPath(import.meta.url)){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
@@ -3012,89 +2892,59 @@ if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===fil
   repository:{full_name:automationRepository},status,conclusion,
   html_url:`https://github.com/${automationRepository}/actions/runs/${runId}`});
  const json=value=>Response.json(value),empty=status=>new Response(null,{status});
- const security=async()=>({ok:true,values:{'repository-main:TOKEN':Buffer.from(token).toString('base64'),
-  'repository-main:EXPIRES_AT':Buffer.from(String(Math.floor(Date.now()/1000)+3600)).toString('base64')}});
- const makeHost=()=>{let resolve;const finished=new Promise(done=>{resolve=done;}),tasks=[];
-  const host={security,mode:'test',createTask:value=>{const task={...value,id:'123456789',active:true,secrets:[]};tasks.push(task);return task;},
-   listTasks:()=>tasks,created:()=>{},changed:()=>{},report:()=>{},
-   finish:async(task,code,message)=>{task.active=false;task.exitCode=code;task.result=message;resolve({code,message});}};
-  return {host,tasks,finished};};
- test('citizenserve 自动化派发成功与不确定回执禁止重发',async()=>{
-  let dispatches=0;
-  const accepted=async(url,init)=>{const path=new URL(url).pathname;
-   if(path.endsWith('/dispatches')){dispatches++;return json({workflow_run_id:runId,html_url:run().html_url});}
-   if(path.endsWith(`/runs/${runId}`))return json(run());
-   if(path.endsWith('/jobs'))return json({jobs:[]});
-   if(path.endsWith('/logs'))return empty(404);
-   throw Error('未登记网络请求：'+path);
-  };
-  const fixture=makeHost();
-  await automationTransport.run({fetchImpl:accepted},()=>startAutomation(route,action,fixture.host));
-  assert.deepEqual(await fixture.finished,{code:0,message:'塔塔自动化成功'});
-  assert.equal(dispatches,1);assert.equal(fixture.tasks[0].githubRunId,runId);
-  const ambiguous=makeHost();dispatches=0;
-  await automationTransport.run({fetchImpl:async()=>{dispatches++;return empty(204);}},
-   ()=>startAutomation(route,action,ambiguous.host));
-  assert.equal((await ambiguous.finished).code,1);assert.equal(dispatches,1);
-  assert.equal(ambiguous.tasks[0].githubRunId,undefined);
- });
+
+
+
  test('citizenserve 自动化拒绝错误仓库、平台和提交身份',()=>{
   assert.throws(()=>automationRoute({...route,repository:'other'}),/目标/u);
   assert.throws(()=>automationRoute({...route,platform:'other'}),/目标/u);
   assert.throws(()=>automationCheckedRun({...run(),head_sha:'bad'},route,runId),/身份/u);
   assert.throws(()=>automationCheckedRun({...run(),repository:{full_name:'other/repo'}},route,runId),/身份/u);
  });
- test('citizenserve 自动化观察成功和失败终态',async()=>{
-  for(const conclusion of ['success','failure']){
-   const fixture=makeHost();const task=fixture.host.createTask({});
-   Object.assign(task,{githubRunId:runId,sourceSHA:sha});
-   const fetchImpl=async(url)=>{const path=new URL(url).pathname;
-    if(path.endsWith(`/runs/${runId}`))return json(run(conclusion));
-    if(path.endsWith('/jobs'))return json({jobs:[{id:3,name:'原生编译',status:'completed',conclusion}]});
-    if(path.endsWith('/logs'))return empty(404);
-    throw Error('未登记观察请求');
-   };
-   await automationTransport.run({fetchImpl},()=>automationObserve(task,route,fixture.host,token));
-   assert.equal((await fixture.finished).code,conclusion==='success'?0:1);
-  }
+
+
+
+}
+
+
+// 发布资源来自本产品声明，不增加本机Build或describe入口。
+export function publicationTools(host=process.platform+'-'+process.arch){
+ const original=contract.resources.bootstrap.platforms[host];if(!original)throw Error('CitizenServe发布宿主Node未声明');
+ return [{id:'node',version:contract.resources.bootstrap.node_version,source:original.url,archive:{...original},slots:[original.executable],cache_key:original.sha256}];
+}
+if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===fileURLToPath(import.meta.url)){
+ const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
+ test('通用供给合同：服务端只声明发布Node，不伪造本机Build入口',()=>{
+  const tools=publicationTools('darwin-arm64');assert.equal(tools.length,1);assert.equal(tools[0].version,contract.resources.bootstrap.node_version);
+  assert.equal(tools[0].archive.url,contract.resources.bootstrap.platforms['darwin-arm64'].url);assert.ok(tools[0].cache_key);
+  assert.equal(Object.hasOwn(contract,'entry'),false);assert.throws(()=>publicationTools('unknown'),/未声明/u);
  });
- test('citizenserve 自动化只取消原 Run 并恢复同一 Run',async()=>{
-  const fixture=makeHost();const task=fixture.host.createTask({canonicalId:route.canonicalId,actionId:action.id});
-  Object.assign(task,{repository:route.repository,productId:route.product,platform,mode:'release',flow:'release',
-   githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:runId,sourceSHA:sha});
-  let reads=0,cancels=0;
-  const fetchImpl=async(url,init)=>{const path=new URL(url).pathname;
-   if(path.endsWith('/cancel')){cancels++;return empty(202);}
-   if(path.endsWith(`/runs/${runId}`))return json(run(reads++===0?null:'cancelled',reads===1?'in_progress':'completed'));
-   if(path.endsWith('/jobs'))return json({jobs:[]});
-   if(path.endsWith('/logs'))return empty(404);
-   throw Error('未登记取消请求');
+}
+
+// 外部调用方使用普通参数和返回值；此公开接口不接收任务宿主。
+export const automationClient=Object.freeze({automationWorkflows,automationRepository,automationTransport,automationRoute,automationRequest,automationCheckedRun,dispatchAutomation,automationSafeText,automationJobs,automationLogArchive,automationReadLogs});
+
+// 合成回归只在本文件作为测试入口时注册；普通导入不要求调度器、其它仓库或外部服务。
+if(process.env.NODE_TEST_CONTEXT&&process.argv.length===2&&process.argv[1]===import.meta.filename){
+ const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict');
+ test('独立自动化接口不接收任务宿主，准确派发与错误回执只请求一次',async()=>{
+  const api=automationClient,workflows=api.automationWorkflows||api.automationWorkflow;
+  const platform=Object.keys(workflows)[0],workflow=workflows[platform],repository=api.automationRepository;
+  const dispatch=api.dispatchAutomation||api.dispatchProductAutomation||api.dispatch;
+  let dispatches=0,mode='success';
+  const run={id:731,run_number:1,run_attempt:1,path:'.github/workflows/'+workflow,event:'workflow_dispatch',head_branch:'main',
+   head_sha:'a'.repeat(40),repository:{full_name:repository},status:'completed',conclusion:'success',
+   html_url:'https://github.com/'+repository+'/actions/runs/731'};
+  const fetchImpl=async(url,options)=>{
+   if(new URL(url).pathname.endsWith('/dispatches')){
+    dispatches++;assert.equal(options.method,'POST');
+    return mode==='ambiguous'?new Response(null,{status:204}):Response.json({workflow_run_id:731,html_url:run.html_url});
+   }
+   assert.ok(new URL(url).pathname.endsWith('/runs/731'));
+   return Response.json(mode==='wrong'?{...run,head_sha:'invalid'}:run);
   };
-  await automationTransport.run({fetchImpl,pause:async()=>{}},()=>automationCancel(task,route,fixture.host));
-  assert.equal(cancels,1);assert.equal((await fixture.finished).code,1);
-  const recovered=makeHost();const old=recovered.host.createTask({canonicalId:route.canonicalId,actionId:action.id});
-  Object.assign(old,{repository:route.repository,productId:route.product,platform,mode:'release',flow:'release',
-   githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:runId,sourceSHA:sha,recovered:true});
-  let recoveryDispatches=0;
-  const recoveryFetch=async(url,init)=>{const path=new URL(url).pathname;
-   if(path.endsWith('/dispatches')){recoveryDispatches++;throw Error('恢复不得派发');}
-   if(path.endsWith(`/runs/${runId}`))return json(run());
-   if(path.endsWith('/jobs'))return json({jobs:[]});
-   if(path.endsWith('/logs'))return empty(404);
-   throw Error('未登记恢复请求');
-  };
-  await automationTransport.run({fetchImpl:recoveryFetch},()=>recoverAutomation(old,route,recovered.host));
-  assert.equal((await recovered.finished).code,0);assert.equal(recoveryDispatches,0);
-  assert.equal(old.githubRunId,runId);
- });
- test('citizenserve 过期令牌保留原 Run 的取消入口',async()=>{
-  const fixture=makeHost();const task=fixture.host.createTask({canonicalId:route.canonicalId,actionId:action.id});
-  Object.assign(task,{repository:route.repository,productId:route.product,platform,mode:'release',flow:'release',
-   githubRepository:automationRepository,githubWorkflow:workflow,githubRunId:runId,sourceSHA:sha,recovered:true});
-  fixture.host.security=async()=>({ok:true,values:{'repository-main:TOKEN':Buffer.from(token).toString('base64'),
-   'repository-main:EXPIRES_AT':Buffer.from('1').toString('base64')}});
-  await assert.rejects(()=>recoverAutomation(task,route,fixture.host),/授权/u);
-  assert.equal(task.githubRunId,runId);assert.equal(task.recovered,true);
-  assert.equal(typeof task.cancel,'function');
+  const invoke=()=>api.automationTransport?api.automationTransport.run({fetchImpl},()=>dispatch(platform,'fixture',{fetchImpl})):dispatch(platform,'fixture',{fetchImpl});
+  assert.equal((await invoke()).id,731);assert.equal(dispatches,1);
+  for(const failure of ['ambiguous','wrong']){mode=failure;dispatches=0;await assert.rejects(invoke);assert.equal(dispatches,1);}
  });
 }

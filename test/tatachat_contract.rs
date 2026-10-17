@@ -2,7 +2,7 @@
 use citizenserve::{
     chain::{identity, ports::Rpc, subscription},
     membership::{chat::Permissions, Status},
-    server::{guard, routes, tatachat as chat, tatachat_routes},
+    server::{gate, gate::request, tatachat as chat, tatachat_routes},
     shared::{crypto, Error, Result},
     user::{
         admission::Admission,
@@ -166,7 +166,7 @@ impl Fixture {
     }
     fn subject(&self, now: u64) -> Result<Subject> {
         let c = self.runtime.config();
-        let a = guard::session_authority(
+        let a = gate::identity::session_authority(
             &self.identity,
             &self.admission,
             &self.device,
@@ -497,13 +497,13 @@ fn access_request_is_exact_object_and_route_rejects_aliases_queries() {
         assert!(tatachat_routes::access_body(raw).is_err());
     }
     assert!(tatachat_routes::access_body(&vec![b' '; 1025]).is_err());
-    assert!(routes::protected_target("POST", "/api/tatachat/access").is_ok());
+    assert!(request::protected_target("POST", "/api/tatachat/access").is_ok());
     for (method, path) in [
         ("GET", "/api/tatachat/access"),
         ("POST", "/api/tatachat/access?x=1"),
         ("POST", "/chat/auth"),
         ("POST", "/api/chat/auth"),
     ] {
-        assert!(routes::protected_target(method, path).is_err());
+        assert!(request::protected_target(method, path).is_err());
     }
 }

@@ -545,7 +545,7 @@ fn membership_is_independent_from_identity_and_chat_deadline_is_clipped() {
         created_at: 900_000,
         expires_at: 1_080_000,
     };
-    let authority = citizenserve::server::guard::session_authority(
+    let authority = citizenserve::server::gate::identity::session_authority(
         &identity,
         &admission,
         &device,

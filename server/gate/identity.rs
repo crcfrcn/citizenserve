@@ -1,3 +1,4 @@
+//! 统一门禁的公民号校验分支；原真人准入、设备、会话及请求证明校验在此执行。
 use crate::{
     shared::{Error, Result},
     user::{
@@ -109,4 +110,29 @@ pub async fn authenticate<A: crate::user::ports::AuthRepository>(
         return Err(Error::new(401, "invalid_mls_challenge"));
     }
     Ok(authority)
+}
+
+/// 在会员/对象等昂贵I/O之前检查请求绑定、会话、设备及签名；此阶段不消费挑战，
+/// 也不把缓存身份当作最终放行依据。最终authenticate仍核对当前身份并消费一次。
+#[allow(clippy::too_many_arguments)]
+pub async fn preauthenticate<A: crate::user::ports::AuthRepository>(
+    auth: &A, identity: &Identity, config: &Config, token: &str,
+    proof: &crate::user::auth::mls_authentication::Proof, method: &str,
+    target: &str, body: &[u8], now: u64,
+) -> Result<()> {
+    let session = auth.session(&crate::user::auth::session::hash(token)?).await?
+        .ok_or(Error::new(401, "invalid_session"))?;
+    let device = auth.device(&session.cid_number, &session.device_id).await?
+        .ok_or(Error::new(401, "device_not_registered"))?;
+    let admission = auth.admission(&session.cid_number).await?
+        .ok_or(Error::new(403, "registration_required"))?;
+    // 这里只读取已知主体的绑定与本次签名；到期链事实留给后续强制刷新，不能延长期限。
+    identity.matches(&session.cid_number, &session.account_id, session.binding_revision)?;
+    admission.require(identity, config)?;
+    device.require(identity, &proof.public_key)?;
+    if session.created_at > now || session.expires_at <= now
+        || session.device_id != proof.device_id || device.public_key != proof.public_key {
+        return Err(Error::new(401, "invalid_session"));
+    }
+    proof.verify_request(identity, &config.service_origin, method, target, body, now)
 }

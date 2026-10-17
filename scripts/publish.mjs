@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 公民服务发布只消费成功自动化的公开Worker资产；不创建Release或改变Cloudflare资源。
+// 公民服务发布独立消费成功自动化资产，执行既有Worker上传与部署回读；不创建Release或重建云资源。
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {spawn} from 'node:child_process';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 
 const repository='crcfrcn/citizenserve',workflow='.github/workflows/cloudflare.yml';
@@ -49,7 +49,7 @@ function publicationConfiguration(source,publicValues){
  if(string(root,'name')!=='citizenserve'||string(root,'main')!=='../../target/build/cloudflare/worker/index.js'
   ||string(root,'compatibility_date')!=='2026-10-07'
   ||one(root,'workers_dev')!=='false'||one(root,'preview_urls')!=='false')fail('Worker部署身份无效');
- if(one(root,'routes')!=='[{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }, { pattern = "nrcrpc.crcfrcn.com", custom_domain = true }]')fail('Worker公开路由越界');
+ if(one(root,'routes')!=='[{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }, { pattern = "nrcrpc.crcfrcn.com", custom_domain = true }, { pattern = "media.crcfrcn.com/square/*", zone_name = "crcfrcn.com" }]')fail('Worker公开路由越界');
  const secretBlock=blocks(value,'secrets',1)[0];let secretNames;try{secretNames=JSON.parse(one(secretBlock,'required'));}catch{fail('必需Secret声明无效');}
  if(!Array.isArray(secretNames)||secretNames.length!==requiredSecretNames.length||new Set(secretNames).size!==secretNames.length
   ||secretNames.some(name=>typeof name!=='string'||!/^\w+$/u.test(name))
@@ -85,7 +85,7 @@ function publicationConfiguration(source,publicValues){
  if(one(durable,'bindings')!=='[{ name = "TATACHAT_DEVICES", class_name = "TataChatDevice" }]'
   ||string(migration,'tag')!=='tatachat-1'||one(migration,'new_sqlite_classes')!=='["TataChatDevice"]')fail('SQLite Durable Object声明无效');
  const account_id=string(vars,'CF_ACCOUNT_ID');if(!/^[a-f0-9]{32}$/u.test(account_id)||variables.ZONE_ID===account_id)fail('Cloudflare账户或Zone身份无效');
- return {worker:'citizenserve',account_id,zone_id:variables.ZONE_ID,routes:['www.crcfrcn.com/api/*','nrcrpc.crcfrcn.com'],secret_names:secretNames,
+ return {worker:'citizenserve',account_id,zone_id:variables.ZONE_ID,routes:['www.crcfrcn.com/api/*','nrcrpc.crcfrcn.com','media.crcfrcn.com/square/*'],secret_names:secretNames,
   public_var_names:runtimeVariables,d1,r2,kv:{SQUARE_CACHE:string(kvBlock,'id')},queues:producers,durable_object:'TataChatDevice',migration:'tatachat-1'};
 }
 async function pages(path,field,request){
@@ -166,7 +166,7 @@ async function selectedPublication(request,includeContents){
  const success=runs.filter(run=>run?.path===workflow&&run.repository?.full_name===repository&&run.head_branch==='main'
   &&run.event==='workflow_dispatch'&&run.status==='completed'&&run.conclusion==='success');
  if(!success.length)fail('缺少成功自动化');
- success.sort((a,b)=>b.id-a.id);if(success.length>1&&success[0].id===success[1].id)fail('最新成功自动化重复');
+ success.sort((a,b)=>b.id-a.id);if(success.length>1&&success[0].id===success[1].id)fail('最新成功自动化不唯一：存在重复成功');
  const run=success[0],suffix='-r'+run.id+'-a'+run.run_attempt;
  const release=releases.filter(value=>value?.tag_name?.startsWith('citizenserve-cloudflare-v')&&value.tag_name.endsWith(suffix));
  if(release.length!==1)fail('成功自动化缺少唯一Release');
@@ -175,15 +175,7 @@ async function selectedPublication(request,includeContents){
 export async function preparePublication({request=publicRequest}={}){return selectedPublication(request,false);}
 
 // 公开运行值由产品唯一声明解码；原生层只交付当前产品已保存的公开值。
-async function deploymentPublicValues(security){
- const result=await security('cloudflare.publish.public',{file:'citizenserve.mjs'});
- if(result?.ok!==true||!result.values)fail('公开部署配置缺失');
- const values=Object.fromEntries(runtimeVariables.map(name=>{
-  const encoded=result.values['production:'+name];if(typeof encoded!=='string')fail('公开部署配置缺失：'+name);
-  return [name,Buffer.from(encoded,'base64').toString('utf8')];
- }));
- return validateDynamicPublic(values);
-}
+
 function renderedDeploymentConfig(contents,publicValues){
  let config;try{config=new TextDecoder('utf-8',{fatal:true}).decode(contents.get('server/cloudflare/wrangler.toml'));}catch{fail('正式Wrangler配置编码无效');}
  const candidate=publicationConfiguration(config,publicValues);
@@ -194,8 +186,8 @@ function renderedDeploymentConfig(contents,publicValues){
  return {candidate,bytes:Buffer.from(config,'utf8')};
 }
 // 候选只读核对正式资产与最终部署配置；不输出运行值或执行上传。
-export async function prepareDeployment({request=publicRequest,publicValues,security}={}){
- if(publicValues===undefined){if(typeof security!=='function')fail('缺少公开部署配置来源');publicValues=await deploymentPublicValues(security);}
+export async function prepareDeployment({request=publicRequest,publicValues}={}){
+ if(publicValues===undefined)fail('缺少公开部署配置来源');
  const {proof,contents}=await selectedPublication(request,true);
  const {candidate,bytes}=renderedDeploymentConfig(contents,publicValues);
  const {zone_id:_verifiedZoneId,...publicCandidate}=candidate;
@@ -204,16 +196,60 @@ export async function prepareDeployment({request=publicRequest,publicValues,secu
 }
 
 // 正式包仍由本产品验真；任务现场只物化部署实际使用的Worker与锁定Wrangler。
-async function runTool(command,args,cwd,environment,signal){
+
+// 产品拥有工具执行、云请求及失败回执；凭据只驻留本轮内存，不写入命令行或日志。
+async function runTool(command,args,cwd,environment,signal,{input,protectedValues=[],timeout=300000}={}){
+ signal?.throwIfAborted();
  return new Promise((resolve,reject)=>{
-  const child=spawn(command,args,{cwd,env:environment,signal,stdio:['ignore','pipe','pipe']});let tail='',failure;
-  const collect=chunk=>{tail=(tail+chunk.toString('utf8')).slice(-4096);};
-  child.stdout.on('data',collect);child.stderr.on('data',collect);
-  child.on('error',error=>{failure=error;});
-  child.on('close',code=>code===0?resolve():reject(Error('发布工具运行失败：'+(failure?.code??code)+' '+tail.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-1024))));
+  const child=spawn(command,args,{cwd,env:environment,detached:true,stdio:[input===undefined?'ignore':'pipe','pipe','pipe']});
+  let output='',diagnostic='',failure,timer,forced;
+  const stop=()=>{try{if(child.pid)process.kill(-child.pid,'SIGTERM');}catch(error){if(error.code!=='ESRCH')failure??=error;}
+   forced??=setTimeout(()=>{try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}},5000);forced.unref();};
+  const abort=()=>{failure??=signal.reason??Error('发布已取消');stop();};
+  child.stdout.on('data',chunk=>{if(!protectedValues.length)output=(output+chunk.toString('utf8')).slice(-65536);});
+  child.stderr.on('data',chunk=>{if(!protectedValues.length)diagnostic=(diagnostic+chunk.toString('utf8')).slice(-4096);});
+  child.once('error',error=>{failure??=error;});
+  child.once('close',(code,termination)=>{
+   clearTimeout(timer);clearTimeout(forced);signal?.removeEventListener('abort',abort);
+   if(child.pid){try{process.kill(-child.pid,0);failure??=Error('发布工具后代未退出');process.kill(-child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')failure??=error;}}
+   if(failure||code!==0||termination){
+    const detail=protectedValues.length?'':diagnostic.replace(/[\x00-\x1f\x7f]/gu,' ').slice(-1024);
+    const error=Error('发布工具失败：'+(failure?.code??code)+'，信号='+(termination||'无')+(failure?'；'+(failure.code||failure.message):'')+(detail?'；'+detail:''),{cause:failure});
+    reject(error);
+   }else resolve(output);
+  });
+  signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+  timer=setTimeout(()=>{failure??=Error('发布工具超时');stop();},timeout);timer.unref();
+  if(input!==undefined){child.stdin.on('error',error=>{failure??=error;stop();});child.stdin.end(input);}
  });
 }
-export function publishTools(){return [{id:'node',version:'25.2.1'}];}
+async function publicationFile(work,name,maximum=128*1024**2){
+ const path=join(work,name),info=await lstat(path);
+ if(!info.isFile()||info.isSymbolicLink()||await realpath(path)!==path||info.size<1||info.size>maximum)fail('发布现场成员无效：'+name);
+ return readFile(path);
+}
+function deploymentCredentials(credentials,{secrets=false}={}){
+ if(!credentials||typeof credentials!=='object'||Array.isArray(credentials)
+  ||Object.keys(credentials).sort().join('\0')!==(secrets?['account','secrets','token']:['account','token']).join('\0')
+  ||!/^[a-f0-9]{32}$/u.test(credentials.account||'')||typeof credentials.token!=='string'||credentials.token.length<20
+  ||/[\s\x00-\x1f\x7f]/u.test(credentials.token))fail('本轮部署凭据无效');
+ return credentials;
+}
+async function cloudflareJSON(account,token,path,{request=fetch,signal}={}){
+ const response=await request('https://api.cloudflare.com/client/v4/accounts/'+account+'/'+path,
+  {method:'GET',redirect:'error',credentials:'omit',headers:{Authorization:'Bearer '+token},
+   signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000)});
+ if(!response.ok)fail('Cloudflare公开回读失败（HTTP '+response.status+'）');
+ const chunks=[];let size=0;for await(const chunk of response.body){size+=chunk.length;if(size>4*1024**2)fail('Cloudflare回读超限');chunks.push(chunk);}
+ let value;try{value=JSON.parse(Buffer.concat(chunks));}catch{fail('Cloudflare回读JSON无效');}
+ if(value?.success!==true)fail('Cloudflare回读未确认成功');return value.result;
+}
+
+// 发布阶段的资源策略与验收归本产品，供应端不补来源或选择离线策略。
+export async function publishTools(){
+ const version='25.2.1';if(process.version!=='v'+version)fail('发布入口必须使用本产品锁定Node '+version);
+ return {node:{version,path:process.execPath}};
+}
 function approvedArchiveDigest(proof,candidate){
  const name='citizenserve-cloudflare-release.tgz';
  const approved=proof.assets?.filter(value=>value.name===name),actual=candidate.assets?.filter(value=>value.name===name);
@@ -221,14 +257,52 @@ function approvedArchiveDigest(proof,candidate){
    ||actual[0].sha256!==approved[0].sha256)fail('冷签批准的正式资产摘要在部署前改变');
  return approved[0].sha256;
 }
-export async function publishCloudflare({proof,configSHA,runID,nodePath,security,signal,beforeDeploy,request=publicRequest}={}){
+
+// 产品独立拥有密钥装配、Worker上传和实际部署验收；外部调度只交付本轮凭据。
+export async function deployCloudflare(payload,credentials,{signal,invoke=runTool,request=fetch,now=Date.now}={}){
+ signal?.throwIfAborted();
+ const keys=['schema','product_id','platform','run_id','release_tag','source_sha','config_sha256','work','node_path'];
+ if(payload&&Object.hasOwn(payload,'archive_sha256'))keys.push('archive_sha256');exactKeys(payload,keys,'Worker执行身份');
+ if(payload.schema!==1||payload.product_id!=='citizenserve'||payload.platform!=='cloudflare'||!/^[1-9][0-9]{8}$/u.test(payload.run_id||'')
+  ||!/^citizenserve-cloudflare-v\d+\.\d+\.\d+-r[1-9][0-9]*-a[1-9][0-9]*$/u.test(payload.release_tag||'')
+  ||!/^[a-f0-9]{40}$/u.test(payload.source_sha||'')||!sha(payload.config_sha256)
+  ||Object.hasOwn(payload,'archive_sha256')&&!sha(payload.archive_sha256))fail('Worker执行身份无效');
+ const {work,node_path:node}=payload,base=fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url));
+ if(typeof work!=='string'||!work.startsWith(base+payload.run_id+'-')||await realpath(work)!==work
+  ||typeof node!=='string'||!node.startsWith('/')||await realpath(node)!==node||!(await lstat(node)).isFile())fail('Worker执行现场无效');
+ const {account,token,secrets}=deploymentCredentials(credentials,{secrets:true});exactKeys(secrets,requiredSecretNames,'Worker密钥');
+ if(Object.values(secrets).some(value=>typeof value!=='string'||!value||Buffer.byteLength(value)>64*1024))fail('Worker密钥格式无效');
+ const config=await publicationFile(work,'server/cloudflare/wrangler.toml',65536);if(hash(config)!==payload.config_sha256)fail('批准后Worker配置发生变化');
+ const rendered=new TextDecoder('utf-8',{fatal:true}).decode(config),vars=blocks(sections(rendered),'vars',1)[0];
+ const publicValues=Object.fromEntries(runtimeVariables.map(name=>[name,string(vars,name)]));let template=rendered;
+ for(const name of runtimeVariables){const pattern=new RegExp('^'+name+' = .+$','gmu');if([...template.matchAll(pattern)].length!==1)fail('Worker动态配置边界无效');template=template.replace(pattern,name+' = ""');}
+ const configuration=publicationConfiguration(template,publicValues);if(configuration.account_id!==account)fail('Worker部署账户不一致');
+ await publicationFile(work,'target/build/cloudflare/worker/index.js');await publicationFile(work,'target/build/cloudflare/worker/index_bg.wasm');
+ const lock=JSON.parse(await publicationFile(work,'test/worker/package-lock.json'));
+ if(lock.packages?.['']?.devDependencies?.wrangler!=='4.149.0')fail('Worker执行Wrangler锁无效');
+ const wrangler=join(work,'test/worker/node_modules/wrangler/bin/wrangler.js');await publicationFile(work,'test/worker/node_modules/wrangler/bin/wrangler.js');
+ const environment={PATH:dirname(node)+':/usr/bin:/bin',HOME:work,CI:'1',WRANGLER_SEND_METRICS:'false'};
+ if((await invoke(node,['--version'],work,environment,signal)).trim()!=='v25.2.1')fail('Worker执行Node不符合产品锁');
+ const privateEnvironment={...environment,CLOUDFLARE_API_TOKEN:token,CLOUDFLARE_ACCOUNT_ID:account},protectedValues=[token,...Object.values(secrets)];
+ signal?.throwIfAborted();
+ await invoke(node,[wrangler,'secret','bulk','--config',join(work,'server/cloudflare/wrangler.toml')],work,privateEnvironment,signal,{input:JSON.stringify(secrets),protectedValues});
+ const started=now();
+ await invoke(node,[wrangler,'deploy','--no-bundle','--config',join(work,'server/cloudflare/wrangler.toml')],work,privateEnvironment,signal,{protectedValues});
+ const result=await cloudflareJSON(account,token,'workers/scripts/citizenserve/deployments?per_page=1',{request,signal});
+ const latest=result?.deployments?.[0],versions=latest?.versions;
+ if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(latest?.id||'')||!Number.isFinite(Date.parse(latest.created_on))||Date.parse(latest.created_on)<started-30000
+  ||!Array.isArray(versions)||versions.length!==1||versions[0].percentage!==100||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(versions[0].version_id||''))fail('Worker部署后身份回读失败');
+ return {product_id:'citizenserve',platform:'cloudflare',worker:'citizenserve',release_tag:payload.release_tag,source_sha:payload.source_sha,config_sha256:payload.config_sha256,
+  ...(payload.archive_sha256?{archive_sha256:payload.archive_sha256}:{}),deployed:true,deployment_id:latest.id,version_id:versions[0].version_id};
+}
+
+export async function publishCloudflare({proof,configSHA,runID,nodePath=process.execPath,publicValues,credentials,deploy=payload=>deployCloudflare(payload,credentials,{signal}),signal,beforeDeploy,request=publicRequest}={}){
  if(!proof||proof.product_id!=='citizenserve'||proof.platform!=='cloudflare'||!positive(proof.run_id)
-  ||typeof runID!=='string'||!/^[1-9][0-9]{8}$/u.test(runID)||typeof security!=='function'
+  ||typeof runID!=='string'||!/^[1-9][0-9]{8}$/u.test(runID)||typeof deploy!=='function'
   ||typeof nodePath!=='string'||!nodePath.startsWith('/')||!sha(configSHA))fail('发布任务身份无效');
  const candidate=await selectedPublication(request,true);
  if(candidate.proof.tag!==proof.tag||candidate.proof.source_sha!==proof.source_sha||candidate.proof.run_id!==proof.run_id)fail('正式产物在授权后发生变化');
  const archiveSHA=approvedArchiveDigest(proof,candidate.proof);
- const publicValues=await deploymentPublicValues(security);
  const {bytes:config}=renderedDeploymentConfig(candidate.contents,publicValues);
  if(hash(config)!==configSHA)fail('冷签批准后公开运行配置发生变化');
  const base=join(fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url)));
@@ -252,10 +326,7 @@ export async function publishCloudflare({proof,configSHA,runID,nodePath,security
   const payload={schema:1,product_id:'citizenserve',platform:'cloudflare',run_id:runID,
    release_tag:proof.tag,source_sha:proof.source_sha,archive_sha256:archiveSHA,config_sha256:configSHA,
    work,node_path:nodePath};
-  const answer=await security('cloudflare.publish.execute',{file:'citizenserve.mjs',
-   payload_base64:Buffer.from(JSON.stringify(payload)).toString('base64')});
-  if(answer?.ok!==true||typeof answer.payload_base64!=='string')fail('Cloudflare发布安全执行器未确认');
-  const result=JSON.parse(Buffer.from(answer.payload_base64,'base64').toString('utf8'));
+  const result=await deploy(payload);
   if(result?.product_id!=='citizenserve'||result?.platform!=='cloudflare'||result?.release_tag!==proof.tag
    ||result?.source_sha!==proof.source_sha||result?.archive_sha256!==archiveSHA||result?.config_sha256!==configSHA
    ||result?.worker!=='citizenserve'||result?.deployed!==true)fail('Cloudflare部署回执无效');
@@ -263,7 +334,7 @@ export async function publishCloudflare({proof,configSHA,runID,nodePath,security
  }finally{await rm(work,{recursive:true,force:true});}
 }
 
-// 独立入口只进行公开GET读取，不接受部署凭据或写入能力。
+// GitHub候选读取保持只读；实际上传仅由显式publish或deploy调用进入产品实现。
 async function publicRequest(path,{raw=false}={}){
  const url=path.startsWith('https:')?new URL(path):new URL(`https://api.github.com/repos/${repository}/${path}`);
  if(url.protocol!=='https:'||url.hostname!=='api.github.com'||!url.pathname.startsWith(`/repos/${repository}/`)||url.username||url.password)fail('GitHub公开来源无效');
@@ -274,7 +345,18 @@ async function publicRequest(path,{raw=false}={}){
  return JSON.parse(Buffer.concat(chunks));
 }
 const direct=process.argv[1]===import.meta.filename,testing=direct&&Boolean(process.env.NODE_TEST_CONTEXT)&&process.argv.length===2;
-if(direct&&!testing){if(process.argv.length!==3||process.argv[2]!=='prepare')fail('发布只读入口参数无效');void preparePublication().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});}
+if(direct&&!testing){
+ const controller=new AbortController();for(const name of ['SIGTERM','SIGINT'])process.once(name,()=>controller.abort(Error('发布已取消')));
+ void (async()=>{
+  if(process.argv.length!==3||!['prepare','publish','deploy'].includes(process.argv[2]))fail('发布入口参数无效');
+  if(process.argv[2]==='prepare')return preparePublication();
+  let text='';for await(const chunk of process.stdin){text+=chunk;if(Buffer.byteLength(text)>1024**2)fail('发布输入超限');}
+  let value;try{value=JSON.parse(text);}catch{fail('发布输入JSON无效');}
+  if(!value||typeof value!=='object'||Array.isArray(value))fail('发布输入无效');
+  if(process.argv[2]==='deploy')return deployCloudflare(value.payload,value.credentials,{signal:controller.signal});
+  return publishCloudflare({...value,signal:controller.signal});
+ })().then(value=>process.stdout.write(JSON.stringify(value)+'\n')).catch(error=>{console.error(error.message);process.exitCode=1;});
+}
 
 // 回归仅使用合成公开Run和内存归档，不连接GitHub或Cloudflare。
 if(testing){
@@ -303,4 +385,39 @@ if(testing){
  const requestFor=f=>async path=>{if(path.startsWith('actions/runs?'))return {workflow_runs:[f.run]};if(path.startsWith('releases?'))return [f.release];if(path.startsWith('git/ref/tags/'))return f.readTag();return {body:await f.readAsset(f.release.assets.find(asset=>asset.url===path))};};
  test('正式包中的准确资源、路由和九项公开运行值形成无机密候选',async()=>{const f=fixture(),result=await prepareDeployment({request:requestFor(f),publicValues});assert.equal(result.publication.release_id,7);assert.equal(result.d1.TATACHAT_DB.name,'citizenserve-tatachat');assert.equal(result.public_var_names.length,9);assert.equal(result.secret_names.length,11);assert.notEqual((await prepareDeployment({request:requestFor(f),publicValues:{...publicValues,APNS_KID:'ZZZZZZZZZZ'}})).config_sha256,result.config_sha256);const declaration=describeConfiguration();assert.equal(declaration.configuration.items.length,23);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='public').length,9);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='protected').length,14);assert.equal(declaration.configuration.items.find(item=>item.name==='COLD_SIGNER_PUBLIC_KEY')?.accessLevel,'protected');assert.ok(!declaration.configuration.items.some(item=>item.accessLevel==='publish'));assert.ok(!declaration.configuration.items.some(item=>item.name==='CF_ACCOUNT_ID'));assert.equal(Object.hasOwn(declaration,'fixed'),false);const output=JSON.stringify(result);for(const name of runtimeVariables)assert.ok(!output.includes(publicValues[name]));});
  test('缺少或畸形公开值及扩大公开路由均拒绝候选',async()=>{const source=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8');for(const bad of [{...publicValues,CHAIN_URL:''},{...publicValues,CHAIN_URL:'https://chain.crcfrcn.com/'},{...publicValues,CHAIN_URL:'https://other.example.test/rpc-'+'a'.repeat(48)},{...publicValues,CHAIN_URL:publicValues.CHAIN_URL+'?x=1'},{...publicValues,CF_ACCESS_CLIENT_ID:'invalid client id'},{...publicValues,ZONE_ID:'invalid'},{...publicValues,APNS_KID:'short'},{...publicValues,FCM_EMAIL:'invalid'},{...publicValues,FCM_PROJECT:'UPPERCASE'},{...publicValues,TATACHAT_AUTH_KID:'bad key'},{...publicValues,UNKNOWN:'x'}])assert.throws(()=>publicationConfiguration(source,bad));for(const changed of [source.replace('www.crcfrcn.com/api/*','*/*'),source.replace('TATACHAT_AUTH_KID = ""','TATACHAT_AUTH_KID = "fixed"'),source.replace('citizenserve-private','other-bucket'),source.replace('TATACHAT_AUTH_KEY','UNOWNED_SECRET'),source.replace('4 3 * * *','5 3 * * *'),source.replace('limit = 120','limit = 999'),source.replace('max_retries = 5','max_retries = 50'),source.replace('WEB_ORIGIN = "https://www.crcfrcn.com"','WEB_ORIGIN = "https://other.example.test"'),source+'\n[[d1_databases]]\nbinding = "CITIZENCHAIN_DOWNLOAD_DB"\ndatabase_name = "citizenweb-download"\ndatabase_id = "428b28ae-e02d-4ebb-b4a2-ac03faf2f58a"\n'])assert.throws(()=>publicationConfiguration(changed,publicValues));});
+ // 只在本产品现场物化已有合成包；模拟全部云请求和Wrangler，绝不装配真实凭据。
+ async function workerExecutionFixture(t){
+  const f=fixture(),selected=await selectedPublication(requestFor(f),true),rendered=renderedDeploymentConfig(selected.contents,publicValues);
+  const base=fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url));await mkdir(base,{recursive:true});
+  const work=await realpath(await mkdtemp(join(base,'123456789-')));t.after(()=>rm(work,{recursive:true,force:true}));
+  for(const [name,bytes]of [['server/cloudflare/wrangler.toml',rendered.bytes],['target/build/cloudflare/worker/index.js',Buffer.from('synthetic-js')],
+   ['target/build/cloudflare/worker/index_bg.wasm',Buffer.from('synthetic-wasm')],['test/worker/package-lock.json',Buffer.from(JSON.stringify({packages:{'':{devDependencies:{wrangler:'4.149.0'}}}}))],
+   ['test/worker/node_modules/wrangler/bin/wrangler.js',Buffer.from('synthetic')]]){await mkdir(dirname(join(work,name)),{recursive:true});await writeFile(join(work,name),bytes);}
+  const payload={schema:1,product_id:'citizenserve',platform:'cloudflare',run_id:'123456789',release_tag:selected.proof.tag,source_sha:selected.proof.source_sha,
+   archive_sha256:selected.proof.assets[0].sha256,config_sha256:hash(rendered.bytes),work,node_path:await realpath(process.execPath)};
+  const credentials={account:rendered.candidate.account_id,token:'synthetic-worker-credential',secrets:Object.fromEntries(requiredSecretNames.map(name=>[name,'synthetic-value-'+name]))};
+  const calls=[];let mode='success';const invoke=async(_node,args,_work,environment,_signal,options={})=>{
+   calls.push(args);if(args[0]==='--version')return 'v25.2.1';assert.equal(args.includes(credentials.token),false);
+   assert.equal(environment.CLOUDFLARE_API_TOKEN,credentials.token);
+   if(args[1]==='secret')assert.deepEqual(JSON.parse(options.input),credentials.secrets);
+   if(mode==='tool-failure'&&args[1]==='secret')throw Error('synthetic secret failure');return '';
+  };
+  const request=async url=>{assert.ok(url.endsWith('/workers/scripts/citizenserve/deployments?per_page=1'));return Response.json({success:true,result:{deployments:[{
+   id:'00000000-0000-4000-8000-000000000001',created_on:new Date().toISOString(),versions:[{percentage:mode==='wrong-version'?50:100,version_id:'00000000-0000-4000-8000-000000000002'}]}]}});};
+  return {payload,credentials,calls,invoke,request,setMode:value=>{mode=value;calls.length=0;}};
+ }
+ test('Worker密钥装配、上传和回读独立完成，原生载荷仍使用同一入口',async t=>{
+  const f=await workerExecutionFixture(t),result=await deployCloudflare(f.payload,f.credentials,f);assert.equal(result.deployed,true);assert.equal(result.archive_sha256,f.payload.archive_sha256);
+  assert.deepEqual(f.calls.slice(1).map(args=>args[1]),['secret','deploy']);
+  const {archive_sha256,...nativePayload}=f.payload;f.setMode('success');assert.equal((await deployCloudflare(nativePayload,f.credentials,f)).deployed,true);
+ });
+ test('Worker配置漂移、密钥装配失败、错误回读和取消均停止',async t=>{
+  const f=await workerExecutionFixture(t);f.setMode('tool-failure');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/synthetic secret failure/u);
+  assert.equal(f.calls.some(args=>args[1]==='deploy'),false);
+  f.setMode('wrong-version');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/回读失败/u);
+  f.setMode('success');const abort=new AbortController();abort.abort(Error('synthetic cancellation'));
+  await assert.rejects(deployCloudflare(f.payload,f.credentials,{...f,signal:abort.signal}),/synthetic cancellation/u);assert.equal(f.calls.length,0);
+  await writeFile(join(f.payload.work,'server/cloudflare/wrangler.toml'),'changed');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/配置发生变化/u);assert.equal(f.calls.length,0);
+ });
+
 }

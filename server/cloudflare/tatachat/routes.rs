@@ -3,9 +3,6 @@ use super::{config, Host};
 use citizenserve::tatachat::{auth::Access, Error, Result};
 use wasm_bindgen::{JsCast, JsValue};
 use worker::{Env, Request, Response};
-pub(crate) fn matches(path: &str) -> bool {
-    path == "/api/tatachat/realtime" || path.starts_with("/api/tatachat/attachments/")
-}
 async fn public_key(env: &Env) -> Result<[u8; 32]> {
     let pem = env
         .secret("TATACHAT_AUTH_KEY")
@@ -99,7 +96,8 @@ pub(crate) async fn authorize(request: &Request, env: &Env, host: &Host) -> Resu
     .map_err(super::host_error)?;
     verified.authorize(host).await
 }
-pub(crate) async fn handle(request: &mut Request, env: &Env) -> Result<Response> {
+pub(crate) async fn handle(request: &mut Request, env: &Env, entry: &citizenserve::server::gate::Entry) -> Result<Response> {
+    entry.require_cid(citizenserve::server::gate::policy::CidRule::Chat).map_err(super::host_error)?;
     if !config::available(env) {
         return Err(Error::StorageUnavailable);
     }
@@ -128,17 +126,6 @@ pub(crate) async fn handle(request: &mut Request, env: &Env) -> Result<Response>
         .map_err(|_| Error::InvalidRequest)?
     {
         return Err(Error::InvalidRequest);
-    }
-    if request.method() == worker::Method::Options {
-        let declared = request
-            .headers()
-            .get("access-control-request-method")
-            .map_err(|_| Error::InvalidRequest)?
-            .ok_or(Error::InvalidRequest)?;
-        if !matches!(declared.as_str(), "GET" | "PUT") {
-            return Err(Error::InvalidRequest);
-        }
-        return crate::preflight(&declared).map_err(|_| Error::InvalidRequest);
     }
     if url.path() == "/api/tatachat/realtime" {
         return super::realtime::upgrade(request, env, &host).await;

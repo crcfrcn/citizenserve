@@ -3,7 +3,7 @@ use super::{
     mls_authentication::{Proof, Purpose},
 };
 use crate::{
-    server::guard,
+    server::gate,
     shared::{crypto, ids, Error, Result},
     user::{identity::Identity, ports::AuthRepository, registration::protocol::Config},
 };
@@ -68,7 +68,7 @@ pub async fn create<A: AuthRepository>(
         .device(&identity.cid_number, &proof.device_id)
         .await?
         .ok_or(Error::new(401, "device_not_registered"))?;
-    guard::device_authority(
+    gate::identity::device_authority(
         identity,
         &admission,
         &device,
