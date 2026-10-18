@@ -57,7 +57,7 @@ fn public_host_access_rejects_zero_limits_and_malformed_identity() {
     for case in 0..6 {
         let mut denied = snapshot(actor("user", "phone"));
         match case {
-            0 => denied.max_attachment_bytes = 0,
+            0 => denied.attachments = super::AttachmentPermission::Allowed{max_bytes:0},
             1 => denied.actor.user_id = "user:other".into(),
             2 => denied.actor.device_id.clear(),
             3 => denied.authorization_revision.clear(),
@@ -93,7 +93,7 @@ fn revision_or_unknown_host_stops_access_without_extending_the_credential() {
 fn signed(context: &CredentialContext, key: &ed25519_dalek::SigningKey, expires: u64) -> String {
     use ed25519_dalek::Signer;
     let claims = Claims {
-        version: 1,
+        version: 2,
         iss: context.issuer.clone(),
         aud: context.audience.clone(),
         purpose: context.purpose.clone(),
@@ -102,7 +102,7 @@ fn signed(context: &CredentialContext, key: &ed25519_dalek::SigningKey, expires:
         authorization_revision: "revision-1".into(),
         session_hash: "a".repeat(64),
         chat_enabled: true,
-        max_attachment_bytes: 1024,
+        attachments: super::AttachmentPermission::Allowed{max_bytes:1024},
         iat: NOW / 1000,
         nbf: NOW / 1000,
         exp: expires / 1000,
@@ -206,4 +206,16 @@ fn signing_input_cannot_issue_stale_or_inconsistent_credentials() {
         assert_eq!(changed.unsigned("test-key", NOW), Err(Error::Forbidden));
     }
     assert_eq!(claims.unsigned("bad/key", NOW), Err(Error::Forbidden));
+}
+
+#[test]
+fn attachment_scope_preserves_member_deadline_without_shortening_basic_chat() {
+    let access=Access::from_host(snapshot(actor("user","phone")),NOW).unwrap();
+    let scoped=access.for_attachments(super::AttachmentGrant{max_bytes:10,deadline_millis:NOW+1},NOW).unwrap();
+    assert!(scoped.ensure_current(NOW).is_ok());
+    assert!(scoped.ensure_current(NOW+1).is_err());
+    assert!(access.ensure_current(NOW+1).is_ok());
+    for grant in [super::AttachmentGrant{max_bytes:0,deadline_millis:NOW+1},super::AttachmentGrant{max_bytes:10,deadline_millis:NOW}] {
+        assert!(access.for_attachments(grant,NOW).is_err());
+    }
 }

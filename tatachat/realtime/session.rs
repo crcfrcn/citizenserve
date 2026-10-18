@@ -62,7 +62,7 @@ impl Session {
         if fresh.actor != saved.access.actor
             || fresh.authorization_revision != saved.access.authorization_revision
             || fresh.session_id_digest != saved.access.session_id_digest
-            || fresh.max_attachment_bytes != saved.access.max_attachment_bytes
+            || fresh.attachments != saved.access.attachments
         {
             return Err(Error::Forbidden);
         }

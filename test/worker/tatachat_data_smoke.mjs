@@ -34,6 +34,8 @@ test('真实升级、Ping/Pong与错误凭证/旧子协议/内部头边界',asyn
  assert.equal((await chatUpgrade(a,'tatachatserver')).status,400);
  const pieces=a.access_token.split('.');pieces[2]=(pieces[2][0]==='A'?'B':'A')+pieces[2].slice(1);assert.equal((await chatUpgrade({...a,access_token:pieces.join('.')})).status,403);
  assert.equal((await fetch('/api/tatachat/realtime','GET','',{upgrade:'websocket',authorization:'Bearer '+a.access_token,'sec-websocket-protocol':'tatachat','x-tatachat-internal':'notify'})).status,400);
+ assert.equal((await fetch('/api/tatachat/realtime','GET','',{upgrade:'websocket','sec-websocket-protocol':'tatachat'})).status,403);
+ assert.equal((await fetch('/api/tatachat/realtime','GET','',{authorization:'Bearer '+a.access_token,'sec-websocket-protocol':'tatachat'})).status,400);
  const c=await connect(),reply=await c.command(4,uint(1,123),5);assert.equal(fields(reply).get(1)[0],123);
  assert.equal((await fetch('/api/health')).status,200);
 });
@@ -109,4 +111,14 @@ test('连接上限、文本帧、设备撤销和未知链状态均关闭或拒�
  const peer=await connect(b);peer.ws.send('not binary');assert.equal((await closed(peer)).code,1008);
  await sql('UPDATE mls_devices SET active=0 WHERE device_id=?',sender.device);connections[0].ws.send(bytes(4,uint(1,1)));assert.equal((await closed(connections[0])).code,1008);
  await sql('UPDATE mls_devices SET active=1 WHERE device_id=?',sender.device);setUnknownChain(true);connections[1].ws.send(bytes(4,uint(1,2)));assert.equal((await closed(connections[1])).code,1008);
+});
+
+test('非会员保持Ping及消息交付，附件控制面和数据面统一拒绝',async()=>{
+ setMembership(0,0,Date.now()-1);
+ const c=await connect();await c.command(4,uint(1,9),5);
+ await c.command(20,bytes(1,envelope('citizen-basic-message')),3);
+ assert.equal((await chatFirst("SELECT count(*) AS n FROM messages WHERE message_id='citizen-basic-message'")).n,2);
+ await c.failure(30,bytes(1,attachment('nonmember-attachment',Buffer.from('opaque'))),'forbidden');
+ assert.equal((await chunk(a,'nonmember-attachment','PUT','opaque')).status,403);
+ assert.equal((await chatFirst('SELECT count(*) AS n FROM attachments')).n,0);
 });

@@ -3,7 +3,6 @@ use crate::tatachat::auth::{
     Claims, CredentialContext, VerifiedCredential, MAX_ACCESS_MILLIS, MAX_RECHECK_MILLIS,
 };
 use crate::{
-    membership::chat::Permissions,
     shared::{crypto, Error, Result},
     user::chat_access::Subject,
 };
@@ -16,7 +15,6 @@ pub struct Authorization {
     authorization_revision: String,
     session_hash: String,
     origin: String,
-    max_attachment_bytes: u64,
     issued_at: u64,
     expires_at: u64,
     recheck_at: u64,
@@ -53,9 +51,6 @@ impl Authorization {
     pub fn chat_enabled(&self) -> bool {
         true
     }
-    pub fn max_attachment_bytes(&self) -> u64 {
-        self.max_attachment_bytes
-    }
     pub fn issued_at(&self) -> u64 {
         self.issued_at
     }
@@ -67,25 +62,19 @@ impl Authorization {
     }
 }
 
-pub fn authorize(subject: &Subject, permissions: &Permissions, now: u64) -> Result<Authorization> {
+pub fn authorize(subject: &Subject, now: u64) -> Result<Authorization> {
     subject.require_current(now)?;
-    permissions.require_current(now)?;
-    if subject.identity().finalized_block_hash != permissions.anchor_hash() {
-        return Err(Error::new(409, "chat_authorization_anchor_changed"));
-    }
     let expires_at = now
         .saturating_add(MAX_ACCESS_MILLIS)
-        .min(subject.session_deadline())
-        .min(permissions.paid_until());
+        .min(subject.session_deadline());
     let recheck_at = now
         .saturating_add(MAX_RECHECK_MILLIS)
         .min(subject.recheck_deadline())
-        .min(permissions.deadline())
         .min(expires_at);
     if expires_at <= now || recheck_at <= now {
         return Err(Error::new(401, "chat_access_expired"));
     }
-    let bytes = serde_json::to_vec(&(subject.revision(), permissions.max_attachment_bytes()))
+    let bytes = serde_json::to_vec(&subject.revision())
         .map_err(|_| Error::new(503, "chat_authorization_unavailable"))?;
     Ok(Authorization {
         user_id: subject.user_id().into(),
@@ -93,7 +82,6 @@ pub fn authorize(subject: &Subject, permissions: &Permissions, now: u64) -> Resu
         authorization_revision: crypto::sha256_hex(&bytes),
         session_hash: subject.session_hash().into(),
         origin: subject.origin().into(),
-        max_attachment_bytes: permissions.max_attachment_bytes(),
         issued_at: now,
         expires_at,
         recheck_at,
@@ -104,11 +92,10 @@ pub fn authorize(subject: &Subject, permissions: &Permissions, now: u64) -> Resu
 pub fn recheck(
     previous: &Authorization,
     subject: &Subject,
-    permissions: &Permissions,
     now: u64,
 ) -> Result<Authorization> {
     previous.require_unexpired(now)?;
-    let mut next = authorize(subject, permissions, now)?;
+    let mut next = authorize(subject, now)?;
     if previous.user_id != next.user_id
         || previous.device_id != next.device_id
         || previous.authorization_revision != next.authorization_revision
@@ -140,7 +127,7 @@ pub fn unsigned(authorization: &Authorization, kid: &str, now: u64) -> Result<St
         return Err(Error::new(401, "chat_access_expired"));
     }
     let claims = Claims {
-        version: 1,
+        version: 2,
         iss: authorization.origin().into(),
         aud: AUDIENCE.into(),
         purpose: PURPOSE.into(),
@@ -149,7 +136,7 @@ pub fn unsigned(authorization: &Authorization, kid: &str, now: u64) -> Result<St
         authorization_revision: authorization.revision().into(),
         session_hash: authorization.session_hash().into(),
         chat_enabled: true,
-        max_attachment_bytes: authorization.max_attachment_bytes(),
+        attachments: crate::tatachat::auth::AttachmentPermission::Disabled,
         iat: authorization.issued_at() / 1000,
         nbf: authorization.issued_at() / 1000,
         exp: authorization.expires_at() / 1000,
@@ -181,7 +168,7 @@ pub fn verify_token(
     .map_err(|_| token_invalid())?;
     let c = verified.claims();
     ids::cid(&c.sub).map_err(|_| token_invalid())?;
-    if c.max_attachment_bytes > crate::shared::MAX_SAFE_INTEGER
+    if c.attachments != crate::tatachat::auth::AttachmentPermission::Disabled
         || c.expires_at_millis > crate::shared::MAX_SAFE_INTEGER
         || !ids::hex(&c.device_id, 32, false)
         || !ids::hex(&c.authorization_revision, 32, false)
@@ -205,7 +192,6 @@ pub fn from_token(
         || c.authorization_revision != current.authorization_revision
         || c.session_hash != current.session_hash
         || c.iss != current.origin
-        || c.max_attachment_bytes != current.max_attachment_bytes
     {
         return Err(Error::new(401, "chat_authorization_changed"));
     }

@@ -130,6 +130,7 @@ fn metadata() -> Vec<u8> {
     .encode()
 }
 struct Chain {
+    cid:String,
     value: Option<Vec<u8>>,
     fault: bool,
     clock: u64,
@@ -157,7 +158,7 @@ impl Rpc for Chain {
                 if key == scale::value_key("Timestamp", "Now") {
                     return Ok(json!(format!("0x{}", crypto::hex(&self.clock.encode()))));
                 }
-                let encoded = (b"CID1".to_vec(), Issuer::Platform).encode();
+                let encoded = (self.cid.as_bytes().to_vec(), Issuer::Platform).encode();
                 assert_eq!(key, scale::map_key("SquarePost", "Subscriptions", &encoded));
                 Ok(self
                     .value
@@ -172,6 +173,7 @@ impl Rpc for Chain {
 fn entitlement(s: Option<State>, clock: u64) -> subscription::Entitlement {
     run(subscription::current(
         &Chain {
+            cid:"CID1".into(),
             value: s.map(|v| v.encode()),
             fault: false,
             clock,
@@ -213,6 +215,7 @@ fn absent_and_inactive_are_free_but_unknown_rpc_is_an_error() {
     }
     assert!(run(subscription::current(
         &Chain {
+            cid:"CID1".into(),
             value: None,
             fault: true,
             clock: 0
@@ -228,6 +231,7 @@ fn suspend_reason_and_plan_must_match_actual_state() {
     let mut s = state(Status::Suspended);
     assert!(run(subscription::current(
         &Chain {
+            cid:"CID1".into(),
             value: Some(s.encode()),
             fault: false,
             clock: 0
@@ -250,6 +254,7 @@ fn suspend_reason_and_plan_must_match_actual_state() {
     s.plan = Plan::Creator { tier_id: [0; 16] };
     assert!(run(subscription::current(
         &Chain {
+            cid:"CID1".into(),
             value: Some(s.encode()),
             fault: false,
             clock: 0
@@ -284,6 +289,7 @@ fn malformed_scale_tail_cannot_be_ignored() {
     raw.push(0);
     assert!(run(subscription::current(
         &Chain {
+            cid:"CID1".into(),
             value: Some(raw),
             fault: false,
             clock: 0
@@ -300,9 +306,9 @@ fn utc_dates_page_size_and_remaining_budget_match_golden() {
     for row in f["days"].as_array().unwrap() {
         assert_eq!(feed::utc_day(row[0].as_u64().unwrap()), row[1]);
     }
-    assert_eq!(feed::budget(20, 95, false).unwrap(), 5);
-    assert!(feed::budget(20, 100, false).is_err());
-    assert_eq!(feed::budget(50, 100, true).unwrap(), 50);
+    assert_eq!(citizenserve::membership::usage::page_budget(20,95,citizenserve::membership::usage::Limit::Bounded(100)).unwrap(), 5);
+    assert!(citizenserve::membership::usage::page_budget(20,100,citizenserve::membership::usage::Limit::Bounded(100)).is_err());
+    assert_eq!(citizenserve::membership::usage::page_budget(50,100,citizenserve::membership::usage::Limit::Unlimited).unwrap(), 50);
     for q in f["query_invalid"].as_array().unwrap() {
         assert!(api::protected_target(
             "GET",
@@ -333,7 +339,7 @@ fn required_author_and_follow_type_cannot_be_defaulted() {
     );
 }
 
-fn authorization() -> citizenserve::user::profile_service::Authorization {
+fn profile_context() -> (citizenserve::server::gate::identity::Authority,citizenserve::user::profile_service::Authorization) {
     use citizenserve::{
         server::gate,
         user::{
@@ -387,7 +393,15 @@ fn authorization() -> citizenserve::user::profile_service::Authorization {
     let authority =
         gate::identity::session_authority(&identity, &admission, &device, &session, &config, 1000001)
             .unwrap();
-    Authorization::new(&authority, &config, &token, 1000001).unwrap()
+    let auth=Authorization::new(&authority, &config, &token, 1000001).unwrap();
+    (authority,auth)
+}
+fn authorization()->citizenserve::user::profile_service::Authorization {profile_context().1}
+fn feed_permit()->citizenserve::membership::gate::Permit {
+    let (authority,auth)=profile_context();
+    let chain=Chain {cid:authority.identity().cid_number.clone(),value:Some(state(Status::Active).encode()),fault:false,clock:authority.identity().finalized_timestamp_millis};
+    let facts=run(subscription::for_authority(&chain,&authority,auth.now())).unwrap();
+    citizenserve::membership::gate::authorize(&authority,citizenserve::membership::policy::Operation::Square(citizenserve::square::routes::SquareRoute::Feed(FeedKind::Recommended)),Some(&facts),auth.now()).unwrap()
 }
 struct Feed {
     fail_charge: bool,
@@ -405,7 +419,7 @@ impl citizenserve::square::ports::Repository for Feed {
         limit: u32,
     ) -> Result<Vec<citizenserve::square::posts::Post>> {
         let post = json!({"post_id":"post1","cid_number":"CID1","account_id":format!("0x{}","cd".repeat(32)),"post_category":"normal","post_type":"document","title":null,"excerpt":"x","content_hash":"a".repeat(64),"storage_receipt_id":"r1","chain_block":9,"chain_block_hash":format!("0x{}","09".repeat(32)),"tx_hash":format!("0x{}","08".repeat(32)),"created_at":1,"post_state":"published","identity_level":"visitor","membership_level":null,"membership_active":false,"display_name":"","avatar_object_key":null});
-        Ok((0..limit.min(3))
+        Ok((0..limit.min(2))
             .map(|_| serde_json::from_value(post.clone()).unwrap())
             .collect())
     }
@@ -422,7 +436,7 @@ impl citizenserve::square::ports::Repository for Feed {
         _: &citizenserve::user::profile_service::Authorization,
         _: &str,
         count: u32,
-        _: &subscription::Entitlement,
+        _: &citizenserve::membership::gate::Permit,
     ) -> Result<u32> {
         if self.fail_charge {
             return Err(Error::new(429, "browse_limit_reached"));
@@ -454,7 +468,7 @@ fn charge_failure_does_not_return_previously_read_posts() {
         used: 98,
         charged: 0.into(),
     };
-    let e = entitlement(None, 0);
+    let e = feed_permit();
     let result = run(feed::feed(
         &repo,
         &authorization(),
@@ -472,7 +486,7 @@ fn only_actual_returned_items_are_charged_with_remaining_budget() {
         used: 98,
         charged: 0.into(),
     };
-    let e = entitlement(None, 0);
+    let e = feed_permit();
     let result = run(feed::feed(
         &repo,
         &authorization(),
@@ -482,6 +496,6 @@ fn only_actual_returned_items_are_charged_with_remaining_budget() {
     ))
     .unwrap();
     assert_eq!(result["posts"].as_array().unwrap().len(), 2);
-    assert_eq!(result["browse_left"], 0);
+    assert_eq!(result["browse_left"], Value::Null);
     assert_eq!(repo.charged.load(std::sync::atomic::Ordering::SeqCst), 2);
 }

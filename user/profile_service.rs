@@ -197,7 +197,15 @@ pub struct Profile {
     pub is_notifying: bool,
     pub updated_at: u64,
 }
+#[derive(Clone,Debug,Serialize,Deserialize)]
+pub struct Card {
+    pub cid_number:String,pub account_id:String,pub display_name:String,
+    pub avatar_object_key:Option<String>,pub updated_at:u64,
+    pub identity_level:String,pub is_certified:bool,
+    pub membership_level:Option<String>,pub membership_active:bool,
+}
 pub trait Repository {
+    fn card(&self,target:&str,now:u64)->impl Future<Output=Result<Option<Card>>>+Send;
     fn doc(&self, cid: &str) -> impl Future<Output = Result<Option<Doc>>> + Send;
     fn profile(
         &self,
@@ -238,4 +246,11 @@ pub async fn update<R: Repository>(
         return Err(Error::new(409, "profile_conflict"));
     }
     read(repo, auth, auth.cid()).await
+}
+
+/// 基础聊天资料不读取帖子/关注/背景或完整社交资料；同样要求有效公民会话。
+pub async fn card<R:Repository>(repo:&R,auth:&Authorization,target:&str)->Result<serde_json::Value> {
+    ids::cid(target)?;
+    let card=repo.card(target,auth.now()).await?.ok_or(Error::new(404,"user_not_found"))?;
+    Ok(serde_json::json!({"ok":true,"card":card}))
 }

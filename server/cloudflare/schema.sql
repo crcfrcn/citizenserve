@@ -780,3 +780,16 @@ CREATE TRIGGER IF NOT EXISTS deletion_maintenance_locator BEFORE UPDATE OF progr
  BEGIN SELECT RAISE(ABORT,'account_deletion_pending'); END;
 
 CREATE TRIGGER IF NOT EXISTS deletion_notification_target BEFORE INSERT ON notification_deliveries WHEN EXISTS(SELECT 1 FROM account_deletions WHERE cid_number=NEW.cid_number AND state='pending') BEGIN SELECT RAISE(ABORT,'account_deletion_pending'); END;
+
+-- 会员门禁操作回执与新增指标。旧上传/浏览/存储账本不复制、不重置。
+CREATE TABLE IF NOT EXISTS membership_operations (
+ cid_number TEXT NOT NULL,operation_id TEXT NOT NULL,metric TEXT NOT NULL,resource_key TEXT NOT NULL,
+ amount INTEGER NOT NULL CHECK(amount>=0 AND amount<=9007199254740991),state TEXT NOT NULL CHECK(state IN ('reserved','committed')),
+ period_start INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(cid_number,operation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_membership_operations_period ON membership_operations(cid_number,metric,period_start);
+CREATE TABLE IF NOT EXISTS membership_usage (
+ cid_number TEXT NOT NULL,metric TEXT NOT NULL,period_start INTEGER NOT NULL,
+ amount INTEGER NOT NULL CHECK(amount>=0 AND amount<=9007199254740991),updated_at INTEGER NOT NULL,
+ PRIMARY KEY(cid_number,metric,period_start)
+);

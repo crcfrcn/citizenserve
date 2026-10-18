@@ -223,6 +223,9 @@ const ROWS: &[(&str, &str)] = &[
     ("square_sessions", "cid_number"),
     ("mls_authentication_challenges", "cid_number"),
     ("mls_devices", "cid_number"),
+    // 新计量属于CID云端业务数据；追加末尾保留旧任务的rows_phase含义。
+    ("membership_operations", "cid_number"),
+    ("membership_usage", "cid_number"),
 ];
 impl D1Deletion {
     async fn save(&self, job: &Job, token: &str, complete: bool) -> Result<()> {

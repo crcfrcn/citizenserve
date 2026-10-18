@@ -29,7 +29,7 @@ pub async fn current<R: super::ports::Repository>(
         super::Level::Democracy,
         super::Level::Spark,
     ];
-    let plans=levels.iter().zip(current.prices).map(|(l,p)|Ok(json!({"membership_level":l,"price_fen":subscription::safe_price(p)?,"plan":super::plan(*l),"limits":super::limits::limits(*l)}))).collect::<Result<Vec<_>>>()?;
+    let plans=levels.iter().zip(current.prices).map(|(l,p)|Ok(json!({"membership_level":l,"price_fen":subscription::safe_price(p)?,"plan":super::limits::plan(*l),"limits":super::limits::limits(*l)}))).collect::<Result<Vec<_>>>()?;
     Ok(
         json!({"ok":true,"membership":state.map(|s|s.wire()).transpose()?,"membership_active":state.is_some_and(|s|s.active(auth.now(),current.chain_time)),"plans":plans,"usage":usage,"storage_cleanup_notice":notice,"finalized_block_hash":current.anchor.hash}),
     )

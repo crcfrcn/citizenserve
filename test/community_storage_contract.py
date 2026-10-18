@@ -29,8 +29,6 @@ def auth():
 
 def execute(db, sql, command):
     with db:
-        if "day" in command:
-            command={"membership_checked":1000000,"membership_deadline":1060000,**command}
         raw = json.dumps(command, separators=(",", ":"), ensure_ascii=False)
         db.execute(AUTH, (raw,))
         counts = []
@@ -40,6 +38,11 @@ def execute(db, sql, command):
 
 
 def run(db, file, **fields):
+    if file == "meter.sql":
+        # 100是原有限计量并发夹具，不是非会员可访问权限；生产只交付有效会员许可及Unlimited。
+        fields={"membership_checked":1000000,"membership_deadline":1060000,"chain_time":1000000,
+                "metric":"browse","amount":fields.get("count",1),"resource_key":"square-list",
+                "period":0,"operation_id":f"fixture-{__import__('uuid').uuid4()}","browse_limit":100,**fields}
     return execute(db, (SQL / file).read_text(), {"auth": auth(), **fields})
 
 
@@ -93,7 +96,7 @@ class CommunityStorageContract(unittest.TestCase):
             db.execute(mutation)
             db.commit()
             with self.assertRaises(sqlite3.IntegrityError):
-                run(db, "charge_browse.sql", day="2026-10-07", count=1, paid_until=None)
+                run(db, "meter.sql", day="2026-10-07", count=1, paid_until=2000000)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM square_browse_days").fetchone()[0], 0)
             db.close()
 
@@ -103,7 +106,7 @@ class CommunityStorageContract(unittest.TestCase):
                 ctx = auth()
                 ctx[field] = value
                 with self.assertRaises(sqlite3.IntegrityError):
-                    execute(self.db, (SQL / "charge_browse.sql").read_text(), {"auth": ctx, "day": "2026-10-07", "count": 1, "paid_until": None})
+                    execute(self.db, (SQL / "meter.sql").read_text(), {"membership_checked":1000000,"membership_deadline":1060000,"auth": ctx, "day": "2026-10-07", "amount": 1, "paid_until": 2000000,"chain_time":1000000,"metric":"browse","operation_id":"scope-fixture","resource_key":"square-list","period":0})
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM square_browse_days").fetchone()[0], 0)
 
     def test_rebind_after_signature_cannot_write_but_existing_cid_data_survives(self):
@@ -129,25 +132,25 @@ class CommunityStorageContract(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT display_name,bio FROM user_profiles WHERE cid_number=?", (auth()["cid_number"],)).fetchone(), ("A", "B"))
 
     def test_browse_empty_results_do_not_charge_and_utc_day_is_independent(self):
-        run(self.db, "charge_browse.sql", day="2026-10-07", count=0, paid_until=None)
+        run(self.db, "meter.sql", day="2026-10-07", count=0, paid_until=2000000)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM square_browse_days").fetchone()[0], 0)
-        run(self.db, "charge_browse.sql", day="2026-10-07", count=99, paid_until=None)
-        run(self.db, "charge_browse.sql", day="2026-10-08", count=2, paid_until=None)
+        run(self.db, "meter.sql", day="2026-10-07", count=99, paid_until=2000000)
+        run(self.db, "meter.sql", day="2026-10-08", count=2, paid_until=2000000)
         self.assertEqual(self.db.execute("SELECT SUM(browse_count) FROM square_browse_days").fetchone()[0], 101)
 
-    def test_browse_overflow_rolls_back_and_paid_does_not_consume_free_counter(self):
-        run(self.db, "charge_browse.sql", day="2026-10-07", count=95, paid_until=None)
+    def test_finite_meter_fixture_rolls_back_overflow_and_other_metrics_do_not_consume_browse(self):
+        run(self.db, "meter.sql", day="2026-10-07", count=95, paid_until=2000000)
         with self.assertRaises(sqlite3.IntegrityError):
-            run(self.db, "charge_browse.sql", day="2026-10-07", count=6, paid_until=None)
-        run(self.db, "charge_browse.sql", day="2026-10-07", count=50, paid_until=2000000)
+            run(self.db, "meter.sql", day="2026-10-07", count=6, paid_until=2000000)
+        run(self.db, "meter.sql", day="2026-10-07", count=50, metric="delivery_bytes", paid_until=2000000)
         self.assertEqual(self.db.execute("SELECT browse_count FROM square_browse_days").fetchone()[0], 95)
         with self.assertRaises(sqlite3.IntegrityError):
-            run(self.db, "charge_browse.sql", day="2026-10-07", count=1, paid_until=1000003)
+            run(self.db, "meter.sql", day="2026-10-07", count=1, paid_until=1000003)
 
     def test_membership_confirmation_expiring_during_query_cannot_charge_or_return_posts(self):
         for checked, deadline in [(1000000, 1000003), (1000004, 1060004), (1000000, 1060001), (None, None)]:
             with self.assertRaises(sqlite3.IntegrityError):
-                run(self.db, "charge_browse.sql", day="2026-10-07", count=1, paid_until=2000000,
+                run(self.db, "meter.sql", day="2026-10-07", count=1, paid_until=2000000,
                     membership_checked=checked, membership_deadline=deadline)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM square_browse_days").fetchone()[0], 0)
 
@@ -353,7 +356,7 @@ class CommunityStorageContract(unittest.TestCase):
                     connection = sqlite3.connect(path, timeout=15)
                     try:
                         if mode == "browse":
-                            run(connection, "charge_browse.sql", day="2026-10-07", count=9, paid_until=None)
+                            run(connection, "meter.sql", day="2026-10-07", count=9, paid_until=2000000)
                         else:
                             reserve(connection, operation_id=f"{n:032x}")
                         return 1
@@ -370,3 +373,52 @@ class CommunityStorageContract(unittest.TestCase):
                 else:
                     self.assertEqual(db.execute("SELECT COUNT(*) FROM contact_mls_operations").fetchone()[0], 1)
                 db.close()
+
+
+class UnifiedMembershipMeterContract(unittest.TestCase):
+    def setUp(self):
+        self.db=sqlite3.connect(":memory:");ready(self.db)
+    def tearDown(self):
+        self.db.close()
+    def command(self, **changes):
+        return {"auth":auth(),"membership_checked":1000000,"membership_deadline":1060000,
+            "paid_until":2000000,"chain_time":1000000,"metric":"browse","amount":3,
+            "operation_id":"synthetic-meter-1","resource_key":"square-list","period":0,"day":"1970-01-01",**changes}
+    def test_paid_browse_is_counted_and_same_operation_is_idempotent(self):
+        sql=(SQL/"meter.sql").read_text();c=self.command();execute(self.db,sql,c);execute(self.db,sql,c)
+        self.assertEqual(self.db.execute("SELECT browse_count FROM square_browse_days").fetchone()[0],3)
+        self.assertEqual(self.db.execute("SELECT state FROM membership_operations").fetchone()[0],"committed")
+        with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,self.command(amount=4))
+        self.assertEqual(self.db.execute("SELECT browse_count FROM square_browse_days").fetchone()[0],3)
+    def test_expired_membership_and_revoked_identity_leave_no_meter_record(self):
+        sql=(SQL/"meter.sql").read_text()
+        with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,self.command(paid_until=auth()["now"]))
+        self.db.execute("UPDATE mls_devices SET active=0");self.db.commit()
+        with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,self.command())
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM membership_operations").fetchone()[0],0)
+
+    def test_missing_fields_invalid_amount_and_overflow_fail_without_partial_meter(self):
+        sql=(SQL/"meter.sql").read_text()
+        for field in ["metric","amount","operation_id","resource_key","period","membership_checked","paid_until","chain_time"]:
+            command=self.command();command.pop(field)
+            with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,command)
+        for amount in [-1,1.5,9007199254740992]:
+            with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,self.command(amount=amount))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM membership_operations").fetchone()[0],0)
+        execute(self.db,sql,self.command(metric="delivery_bytes",amount=9007199254740991))
+        with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,self.command(metric="delivery_bytes",amount=1,operation_id="second"))
+        self.assertEqual(self.db.execute("SELECT amount FROM membership_usage").fetchone()[0],9007199254740991)
+
+    def test_committed_publish_retries_keep_first_period_and_reject_mutated_payload(self):
+        sql=(SQL/"meter.sql").read_text()
+        first=self.command(metric="published",resource_key="post-1",amount=1,period=100)
+        execute(self.db,sql,first)
+        execute(self.db,sql,{**first,"period":200})
+        self.assertEqual(self.db.execute("SELECT period_start,amount FROM membership_operations").fetchall(),[(100,1)])
+        self.assertEqual(self.db.execute("SELECT period_start,amount FROM membership_usage").fetchall(),[(100,1)])
+        for changes in [{"amount":2},{"resource_key":"post-2"},{"metric":"detail"}]:
+            with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,{**first,"period":200,**changes})
+        browse=self.command(operation_id="browse-period")
+        execute(self.db,sql,browse)
+        with self.assertRaises(sqlite3.IntegrityError):execute(self.db,sql,{**browse,"period":200})
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM membership_operations").fetchone()[0],2)

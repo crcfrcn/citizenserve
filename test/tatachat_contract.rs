@@ -20,6 +20,17 @@ use std::{
 };
 const NOW: u64 = 4_000_000_000;
 const CID: &str = "CN220-CTZN2-198805201-2026";
+
+#[test]
+fn gate_classifies_client_frames_before_any_host_identity_io() {
+    use citizenserve::{server::gate,tatachat::protocol::{self,chat_frame,ChatFrame,Ping}};
+    let ping=protocol::encode_chat_frame(&ChatFrame {body:Some(chat_frame::Body::Ping(Ping {sent_at_millis:1}))});
+    assert!(gate::classify_chat(&ping,4096).is_ok());
+    let response=protocol::encode_chat_frame(&protocol::pong_frame(1,2));
+    assert!(gate::classify_chat(&response,4096).is_err());
+    assert!(gate::classify_chat(&[],4096).is_err());
+    assert!(gate::classify_chat(&vec![0;4097],4096).is_err());
+}
 fn run<F: Future>(f: F) -> F::Output {
     let mut f = std::pin::pin!(f);
     match f.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
@@ -176,13 +187,18 @@ impl Fixture {
         )?;
         Subject::verified(&a, &self.device, &self.session, &c, now)
     }
-    fn authorization(&self, now: u64) -> Result<chat::Authorization> {
-        chat::authorize(
-            &self.subject(now)?,
-            &Permissions::current(&self.member, &self.identity, now)?,
-            now,
-        )
+    fn authority(&self,now:u64)->Result<gate::identity::Authority> {
+        gate::identity::session_authority(&self.identity,&self.admission,&self.device,&self.session,&self.runtime.config(),now)
     }
+    fn authorization(&self,now:u64)->Result<chat::Authorization> {
+        chat::authorize(&self.subject(now)?,now)
+    }
+    fn attachment_permissions(&self,now:u64)->Result<Permissions> {
+        let authority=self.authority(now)?;
+        let permit=citizenserve::membership::gate::authorize(&authority,citizenserve::membership::policy::Operation::Attachment,Some(&self.member),now)?;
+        Permissions::from_permit(&permit,&self.identity,now)
+    }
+
     fn refresh(&mut self, now: u64) {
         self.runtime.now = now;
         let (i, m) = self.runtime.facts();
@@ -238,14 +254,14 @@ fn frozen_public_contract_and_limits_match_real_permits() {
         f.refresh(NOW);
         let a = f.authorization(NOW).unwrap();
         assert_eq!(
-            a.max_attachment_bytes(),
+            f.attachment_permissions(NOW).unwrap().max_attachment_bytes(),
             v["attachment_limits"][level as usize].as_u64().unwrap()
         );
         assert!(a.chat_enabled());
     }
 }
 #[test]
-fn active_and_cancelled_paid_members_can_chat_other_states_cannot() {
+fn paid_states_restrict_attachments_while_all_registered_citizens_keep_basic_chat() {
     let mut f = Fixture::new(NOW);
     for status in [Status::Active, Status::Cancelled] {
         f.member.state.as_mut().unwrap().status = status;
@@ -253,10 +269,12 @@ fn active_and_cancelled_paid_members_can_chat_other_states_cannot() {
     }
     for status in [Status::Terminated, Status::Suspended, Status::IssuerPaused] {
         f.member.state.as_mut().unwrap().status = status;
-        assert!(f.authorization(NOW).is_err());
+        assert!(f.attachment_permissions(NOW).is_err());
+        assert!(f.authorization(NOW).is_ok());
     }
     f.member.state = None;
-    assert!(f.authorization(NOW).is_err());
+    assert!(f.attachment_permissions(NOW).is_err());
+        assert!(f.authorization(NOW).is_ok());
 }
 #[test]
 fn no_human_admission_no_device_no_current_binding_no_access() {
@@ -280,7 +298,7 @@ fn identity_and_membership_must_share_hash_number_and_chain_time() {
             _ => f.member.chain_time += 1,
         };
         assert_eq!(
-            f.authorization(NOW).unwrap_err().code,
+            f.attachment_permissions(NOW).unwrap_err().code,
             "chat_authorization_anchor_changed"
         );
     }
@@ -297,16 +315,17 @@ fn current_fact_deadlines_and_clock_rollback_fail_closed() {
     assert!(a.require_unexpired(NOW + 900_000).is_err());
 }
 #[test]
-fn permission_is_clipped_by_both_session_and_paid_expiry() {
+fn attachment_deadline_is_clipped_by_member_and_session_but_basic_chat_is_not_member_clipped() {
     let mut f = Fixture::new(NOW);
     f.session.expires_at = NOW + 10_000;
     assert_eq!(f.authorization(NOW).unwrap().expires_at(), NOW + 10_000);
     f.member.state.as_mut().unwrap().paid_until = NOW + 5_000;
-    let a = f.authorization(NOW).unwrap();
-    assert_eq!(a.expires_at(), NOW + 5_000);
-    assert_eq!(a.recheck_at(), a.expires_at());
+    let a = f.attachment_permissions(NOW).unwrap();
+    assert_eq!(a.deadline(), NOW + 5_000);
+    assert_eq!(a.deadline(), a.deadline());
     f.member.state.as_mut().unwrap().paid_until = NOW;
-    assert!(f.authorization(NOW).is_err());
+    assert!(f.attachment_permissions(NOW).is_err());
+    assert_eq!(f.authorization(NOW).unwrap().expires_at(),NOW+10_000);
 }
 #[test]
 fn jwt_second_precision_never_returns_an_already_expired_credential() {
@@ -343,7 +362,6 @@ fn current_refresh_does_not_extend_original_fifteen_minutes() {
     let next = chat::recheck(
         &old,
         &f.subject(NOW + 60_000).unwrap(),
-        &Permissions::current(&f.member, &f.identity, NOW + 60_000).unwrap(),
         NOW + 60_000,
     )
     .unwrap();
@@ -354,7 +372,6 @@ fn current_refresh_does_not_extend_original_fifteen_minutes() {
     assert!(chat::recheck(
         &next,
         &f.subject(NOW + 900_000).unwrap(),
-        &Permissions::current(&f.member, &f.identity, NOW + 900_000).unwrap(),
         NOW + 900_000
     )
     .is_err());
@@ -371,9 +388,10 @@ fn renewal_is_stable_but_device_generation_session_and_privilege_changes_revoke(
     f.session.session_token_hash = "13".repeat(32);
     assert_ne!(old.revision(), f.authorization(NOW).unwrap().revision());
     f.session.session_token_hash = "12".repeat(32);
-    f.member.state.as_mut().unwrap().plan =
-        subscription::Plan::Platform(citizenserve::membership::Level::Spark);
-    assert_ne!(old.revision(), f.authorization(NOW).unwrap().revision());
+    let old_attachment=f.attachment_permissions(NOW).unwrap().max_attachment_bytes();
+    f.member.state.as_mut().unwrap().plan = subscription::Plan::Platform(citizenserve::membership::Level::Spark);
+    assert_ne!(old_attachment,f.attachment_permissions(NOW).unwrap().max_attachment_bytes());
+    assert_eq!(old.revision(),f.authorization(NOW).unwrap().revision());
 }
 #[test]
 fn valid_ed25519_token_is_bound_to_actual_origin_user_and_permission() {
@@ -405,7 +423,7 @@ fn signed_header_and_context_changes_do_not_gain_authority() {
         ("iss", json!("https://other.example.test")),
         ("aud", json!("other")),
         ("purpose", json!("request")),
-        ("version", json!(2)),
+        ("version", json!(3)),
         ("chat_enabled", json!(false)),
         ("max_attachment_bytes", json!(0)),
         ("sub", json!("invalid/cid")),
@@ -506,4 +524,28 @@ fn access_request_is_exact_object_and_route_rejects_aliases_queries() {
     ] {
         assert!(request::protected_target(method, path).is_err());
     }
+}
+
+#[test]
+fn unified_member_policy_uses_exact_levels_self_targets_and_scoped_metrics() {
+    use citizenserve::{membership::{gate as member,policy::Operation,Level},square::routes::{SquareRoute,FeedKind}};
+    let mut f=Fixture::new(NOW);
+    let authority=f.authority(NOW).unwrap();
+    assert!(member::authorize(&authority,Operation::Card(CID.into()),None,NOW).is_ok());
+    assert!(member::authorize(&authority,Operation::ProfileAsset{target:CID.into(),kind:"banner".into()},None,NOW).is_ok());
+    let other=Operation::Profile("CN220-CTZN2-198805202-2026".into());
+    for (level,size) in [(Level::Freedom,10*1024*1024u64),(Level::Democracy,100*1024*1024),(Level::Spark,5120*1024*1024)] {
+        f.member.state.as_mut().unwrap().plan=subscription::Plan::Platform(level);
+        let permit=member::authorize(&authority,Operation::Attachment,Some(&f.member),NOW).unwrap();
+        assert_eq!(permit.attachment_limit(NOW).unwrap(),size);
+        assert!(!permit.operation().meters("published"));
+        assert!(member::authorize(&authority,other.clone(),Some(&f.member),NOW).is_ok());
+    }
+    f.member.state=None;
+    assert_eq!(member::authorize(&authority,other,Some(&f.member),NOW).unwrap_err().code,"profile_membership_required");
+    assert_eq!(member::authorize(&authority,Operation::Attachment,Some(&f.member),NOW).unwrap_err().code,"attachment_membership_required");
+    for op in [Operation::Square(SquareRoute::Feed(FeedKind::Recommended)),Operation::Square(SquareRoute::Post),Operation::Media("square/media".into())] {
+        assert_eq!(member::authorize(&authority,op,Some(&f.member),NOW).unwrap_err().code,"square_membership_required");
+    }
+    assert!(member::authorize(&authority,Operation::Chat,None,NOW).is_ok());
 }

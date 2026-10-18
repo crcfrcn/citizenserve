@@ -12,17 +12,6 @@ pub enum UserRoute {
     DeletionStatusChallenge,
     DeletionStatus,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Access {
-    Context,
-    PageCapability,
-    RecoveryCapability,
-    FinalizedProjection,
-    ChallengePurpose,
-    WalletAndMls,
-    DeviceMls,
-    WalletDeletionStatus,
-}
 impl UserRoute {
     pub const ALL: [Self; 10] = [
         Self::Registration,
@@ -63,20 +52,10 @@ impl UserRoute {
             Self::Registration | Self::Page | Self::Verify | Self::Status
         )
     }
-    pub const fn access(self) -> Access {
-        match self {
-            Self::Registration => Access::Context,
-            Self::Page => Access::PageCapability,
-            Self::Verify | Self::Status => Access::RecoveryCapability,
-            Self::Identity => Access::FinalizedProjection,
-            Self::Challenges => Access::ChallengePurpose,
-            Self::Devices => Access::WalletAndMls,
-            Self::Sessions => Access::DeviceMls,
-            Self::DeletionStatusChallenge | Self::DeletionStatus => Access::WalletDeletionStatus,
-        }
-    }
+    /// 是否需要请求证明从统一门禁策略派生，不维护第二份权限分类。
     pub const fn requires_mls(self) -> bool {
-        matches!(self.access(), Access::WalletAndMls | Access::DeviceMls)
+        crate::server::gate::policy::requires_mls(crate::server::gate::policy::api(
+            crate::server::gate::request::Route::User(self)))
     }
     pub const fn body_limit(self) -> usize {
         if self.registration() {
@@ -90,9 +69,12 @@ impl UserRoute {
     }
 }
 
-/// 普通账户业务必须使用会话和一次性MLS请求证明，不能借预注册能力进入。
+/// 普通账户业务均须通过注册门禁并持有有效会话，不能借预注册能力进入。
+/// 仅 CardAvatar 使用既定受保护会话鉴权；其余业务及完整资料媒体仍须一次性 MLS 请求证明。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtectedUserRoute {
+    Card,
+    CardAvatar,
     Profile,
     UpdateProfile,
     Contacts,
@@ -105,6 +87,8 @@ pub enum ProtectedUserRoute {
 impl ProtectedUserRoute {
     pub fn resolve(method: &str, path: &str) -> Option<Self> {
         match (method, path) {
+            ("GET",p) if p.strip_prefix("/user/cards/").and_then(|s|s.strip_suffix("/avatar")).is_some_and(|c|crate::shared::ids::cid(c).is_ok())=>Some(Self::CardAvatar),
+            ("GET",p) if p.strip_prefix("/user/cards/").is_some_and(|c|crate::shared::ids::cid(c).is_ok())=>Some(Self::Card),
             ("POST", "/user/deletion/challenges") => Some(Self::DeletionChallenge),
             ("POST", "/user/deletion") => Some(Self::Delete),
             ("POST", "/user/profile/assets") => Some(Self::PrepareAsset),
@@ -136,14 +120,14 @@ impl ProtectedUserRoute {
     }
     pub const fn method(self) -> &'static str {
         match self {
-            Self::Profile | Self::Asset => "GET",
+            Self::Profile | Self::Asset | Self::Card | Self::CardAvatar => "GET",
             Self::UpdateProfile | Self::UploadAsset => "PUT",
             Self::Contacts | Self::PrepareAsset | Self::DeletionChallenge | Self::Delete => "POST",
         }
     }
     pub const fn body_limit(self) -> usize {
         match self {
-            Self::Profile | Self::Asset => 0,
+            Self::Profile | Self::Asset | Self::Card | Self::CardAvatar => 0,
             Self::UpdateProfile | Self::PrepareAsset | Self::DeletionChallenge | Self::Delete => {
                 16384
             }

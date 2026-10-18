@@ -2,6 +2,8 @@
 name = "citizenserve"
 main = "../../target/build/cloudflare/worker/index.js"
 compatibility_date = "2026-10-07"
+# Rust worker::Delay沿用Web数字计时器合同，不修改续租时长或放宽截止时间。
+compatibility_flags = ["no_nodejs_global_timers"]
 workers_dev = false
 preview_urls = false
 routes = [{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }, { pattern = "nrcrpc.crcfrcn.com", custom_domain = true }, { pattern = "media.crcfrcn.com/square/*", zone_name = "crcfrcn.com" }]

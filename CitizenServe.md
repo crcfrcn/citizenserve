@@ -53,9 +53,9 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 | /Users/rhett/citizenserve/notifications/ | 当前设备端点、持久任务、扇出与发送合同 | 未读、端点登记/代际、原子outbox、40端点分页、单端点APNs/FCM与Queue消费已本地验收。 |
 | /Users/rhett/citizenserve/chain/ | canonical finalized、metadata/SCALE、身份/会员/完整交易 | 身份/订阅/完整交易、两引导schema、同块宪法/清单、受控广播和26方法EVM代理已实现。 |
 | /Users/rhett/citizenserve/tatachat/ | 按auth/protocol/key/mailbox/attachment/push/realtime分目录维护的通用聊天 | 通用核心已接入根库；Cloudflare数据面源码已装配，当前Worker统一编译与运行态仍待验收。原chat已删除，公民授权归user/membership/server。 |
-| /Users/rhett/citizenserve/server/cloudflare/ | 10项用户授权/恢复、35账户、27工具API、RPC、D1/R2/Queue/Cron/WebCrypto | 完整ESM/WASM、本地fetch/queue/scheduled验收通过；生产兼容日期、线上资源/推送与正式发布未验收。 |
+| /Users/rhett/citizenserve/server/cloudflare/ | 10项用户授权/恢复、37账户、27工具API、RPC、D1/R2/Queue/Cron/WebCrypto | 完整ESM/WASM、本地fetch/queue/scheduled验收通过；生产兼容日期、线上资源/推送与正式发布未验收。 |
 
-主库规范DDL位于server/cloudflare/schema.sql，当前39张产品表；下载库独立1张，聊天库独立使用tatachat/schema.sql。数据库结构和授权围栏由真实SQL定义，不复制为宿主影子模型；源码结构不代表线上DDL已经执行。
+主库规范DDL位于server/cloudflare/schema.sql，当前41张产品表（含统一会员指标及幂等操作表）；下载库独立1张，聊天库独立使用tatachat/schema.sql。数据库结构和授权围栏由真实SQL定义，不复制为宿主影子模型；源码结构不代表线上DDL已经执行。
 
 ## 注册、设备与会话接口
 
@@ -236,7 +236,7 @@ Cloudflare原始token为300秒单次校验；idempotency_key用于同一次校�
 
 A提供的宿主权限语义为：来自合法当前会话的user_id与device_id、有效设备/准入状态、业务判断后的chat_enabled和max_attachment_bytes、服务器签发时间和到期时间、可检查的权限修订。账户、钱包修订和会员名称留在宿主适配内。只有通过资格的设备能输出有效权限，客户端请求中的ID不能直接成为模块身份。
 
-聊天权限最长15分钟，且不能晚于普通账户会话、已知会员或设备资格到期；聊天服务端必须执行连接到期，不能只靠SDK timer。撤销/换绑/资格变化传播上限锁定为60秒；超过期限仍无法重新确认状态时拒绝继续处理，禁止错误时沿用旧许可。宿主撤销状态与可恢复事件在提交后可查，通用Host端口负责可靠再核验。公开函数和类型由tatachat模块定义，不在宿主复制通用模型；调用合同必须满足上述身份、到期和撤销语义。
+基础聊天权限最长15分钟，且不能晚于普通账户会话或设备资格到期；附件的单次权限另裁剪到会员资格期限。聊天服务端必须执行连接到期，不能只靠SDK timer。撤销/换绑/资格变化传播上限锁定为60秒；超过期限仍无法重新确认状态时拒绝继续处理，禁止错误时沿用旧许可。宿主撤销状态与可恢复事件在提交后可查，通用Host端口负责可靠再核验。公开函数和类型由tatachat模块定义，不在宿主复制通用模型；调用合同必须满足上述身份、到期和撤销语义。
 
 注册完成不要求先建立聊天连接或先购买聊天会员。公民App所选账户不是默认账户时，身份适配必须明确解析冻结账户；不得把默认账户的MLS身份或签名误用于本登记。SDK通过公开接口取得所需账户输入，不复制服务端私有运行实现。
 
@@ -404,7 +404,7 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 | POST https://www.crcfrcn.com/api/user/challenges | /user/challenges | 既有准确六字段；purpose=request增加上述两个实际/api目标，不接受其他推送管理路径。 |
 | GET https://www.crcfrcn.com/api/membership | /membership | 既有空正文/Bearer/MLS接口，响应增加本人本周期storage_cleanup_notice；不新增清理管理API。 |
 
-路由及权限以server/routes.rs的真实声明为准。Queue/Cron是Cloudflare事件入口，没有公网HTTP任务执行、推送任意载荷或重试财务接口。推送HTTP地址固定在平台适配层；MLS证明仍覆盖实际方法、完整/api路径/查询和原始正文。
+请求识别以server/gate/request.rs的真实声明为准，开放/CID/拒绝及具体准入规则统一归server/gate/policy.rs。Queue/Cron是Cloudflare事件入口，没有公网HTTP任务执行、推送任意载荷或重试财务接口。推送HTTP地址固定在平台适配层；MLS证明仍覆盖实际方法、完整/api路径/查询和原始正文。
 
 ### 许可接口地址与规范路径
 
@@ -428,7 +428,7 @@ GitHub Runner只使用本产品声明的TataChatSDK固定提交及该提交的�
 产品Build在Runner编译现场直接准备并核验协议原件，回执位于当前`target/build/cloudflare/tatachat-protocol/receipt.json`；根build.rs只消费这份回执及准确文件列表。缺件或字节漂移直接失败。
 
 
-JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。server/cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及同块链权限后映射；recheck匹配原主体、会话、修订与额度并裁剪原期限，authorize_wake取得目标当前权限。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
+JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。server/cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及canonical CID后映射；recheck匹配原主体、会话、修订及中性附件状态并裁剪原期限，authorize_wake取得目标当前权限；attachment_limit单独消费统一会员门禁。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
 
 ## 公民客户端消费边界
 
@@ -629,6 +629,67 @@ GitHub接口使用普通参数和已授权令牌，返回本仓既有版本计�
 
 ## 统一注册门禁
 
-所有传入请求统一由server/gate识别并按开放、公民号校验、直接拒绝三路处理。mod.rs负责门禁编排；request.rs负责无I/O的精确请求识别及有界解析；policy.rs为唯一准入分类；open.rs绑定具体开放路径、能力与可信服务来源；identity.rs承接原CID、真人准入、设备、会话及MLS请求证明校验。原server/guard.rs和server/routes.rs迁入后移除，调用方及既有测试使用新模块，无兼容转发。注册前真人验证不要求CID或MLS，设备激活/会话阶段按对应CID规则处理。发布接口重复成功自动化的拒绝文案明确为“不唯一”，原拒绝逻辑与断言保持。
+所有传入请求统一由server/gate识别并按开放、公民号校验、直接拒绝三路处理。mod.rs负责门禁编排；request.rs负责无I/O的精确请求识别及有界解析；policy.rs为唯一准入分类；open.rs绑定具体开放路径、能力与可信服务来源；identity.rs承接原CID、真人准入、设备、会话及MLS请求证明校验。原鉴权和通用路由已迁入门禁目录，调用方及既有测试使用新模块，无兼容转发。注册前真人验证不要求CID或MLS，设备激活/会话阶段按对应CID规则处理。发布接口重复成功自动化的拒绝文案明确为“不唯一”，原拒绝逻辑与断言保持。
 
-当前为统一门禁实施候选；实际接线、测试与线上边界的完成情况仅以原任务卡验收记录为准。所有未知请求必须在数据库、RPC及对象存储访问前拒绝；开放凭据不能取得账户Authority。原签名、一次性挑战及事务授权断言继续保留。
+统一门禁源码迁移、平台接线与本地回归已完成；尚未进行生产Worker编译与线上部署。具体测试证据归原任务卡，线上边界仍须部署验收。所有未知请求必须在数据库、RPC及对象存储访问前拒绝；开放凭据不能取得账户Authority。原签名、一次性挑战及事务授权断言继续保留。
+
+统一门禁适配覆盖HTTP、OPTIONS、公共网络、充值、聊天WSS/附件、设备DO、Queue和Cron。开放路径通过受限Scope进入现有注册状态机、支付HMAC或服务令牌校验器；不能转换成账户Authority。业务请求先复用服务器刚取得的会话做纯计算持钥检查，在会员/链RPC前拒绝无效签名；原最终CID/设备/真人准入和原子挑战消费仍执行，避免重复数据库查询及挑战消费。CID链事实的原最大核验期限保持，不因缓存或门禁收口延长。
+
+媒体域仅/square/*接入同一Worker门禁，GET/HEAD、Range/条件请求均要求有效CID与当前普通会话，交付前从原authorized_business_sessions再次核对身份/设备/会话；数据仅来自已发布帖子及合法媒体键。正文由R2运行时流式交付，不整段读入Rust内存；响应private, no-store，鉴权先于内容交付。客户端只向准确正式媒体域传递当前会话头，不把头像的一次性MLS证明复用于媒体，不向外域/非HTTPS/查询能力地址泄露凭据。原其它账户API的一次性MLS请求证明要求保持。
+
+媒体路由的源码声明不证明云端已闭合；部署验收必须核实媒体域Worker路由生效、缓存不能绕过门禁、R2公开开发域及其它直接回源未形成旁路。本轮不操作线上资源或部署。
+
+设备DO的alarm回调先按统一门禁ChatAlarm内部类型核验平台来源，再执行原会话恢复、当前权限复核和定时安排。HTTP预检必须显式声明目标方法，缺失/未知方法及未批准请求头在业务I/O前拒绝；现有公共RPC测试夹具明确声明POST，正常204及错误方法405断言保持。
+
+Worker运行时回归可显式交付CITIZENSERVE_TEST_WORKER_DIR，仅允许本次测试源码根内target/test/worker准确规范目录及真实index.js/index_bg.wasm文件，拒绝链接和外部产物。该输入只供临时测试宿主，不形成生产编译、部署或资源回执；未交付时既有正式产物测试入口保持。
+
+WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级形状；非升级类型显式交付空升级字段；无效升级及伪造内部头保持原400，合法升级缺凭据保持403，不改变后续CID/会话/设备复核。Worker固定使用no_nodejs_global_timers保持worker0.8.5的Web数字计时器合同，生产声明、运行时回归及发布精确校验同步；兼容日期、30秒续租、45秒租约与全部安全断言不变。闭合静态上游夹具的Access ID与其合成binding一致，不读取真实配置。
+
+## 统一会员门禁
+
+所有需要公民号的外部业务先完整通过`server/gate`的注册、真人准入、有效CID、当前绑定、设备、会话及实际请求证明校验，再进入`membership/gate.rs`。开放注册/链工具及可信平台回调继续由原注册门禁的精确Scope管理，不能转换成用户业务权限；未知类型直接拒绝。
+
+`membership/policy.rs`是唯一业务会员策略；操作从实际方法、规范路径、目标CID或内部真实命令选择，不接受客户端的会员等级、isSelf、已用量或放行声明。Permit私有构造且不可反序列化，绑定操作、CID、账户、修订、设备及期限。未知会员状态失败关闭。
+
+| 操作 | 注册鉴权后的规则 |
+|---|---|
+| 本人完整主页、本人资料修改及头像/背景 | 已核验CID相同即可，不要求会员；原资料大小/哈希/归属安全界限保留。 |
+| 他人完整主页及完整资料媒体 | 必须当前有效会员，否则profile_membership_required。 |
+| 基础聊天、通讯录、普通账户/通知、会员办理入口 | 所有有效公民一致；不以附件额度或购买会员作为聊天身份。 |
+| 最小聊天名片与名片头像 | 所有有效公民一致，仅准确cards路径及最小显示字段。 |
+| 聊天附件创建、完成与HTTPS分块上传/下载 | 必须有效会员并执行原档位及部署上限，缺资格为attachment_membership_required；ACK/中止保留原属主清理与幂等规则。 |
+| 广场全部云端操作、作者内容、详情和媒体直读 | 必须有效会员，否则square_membership_required；本人离线副本不产生服务端云权限。 |
+
+### 事实及期限
+
+`chain/subscription.rs::for_authority`只在完整注册Authority之后读取会员，并核对身份同一canonical finalized哈希、块号及链时间。普通业务不读取价格；会员页面/交易所需原u128价格另由Current提供。会员许可取身份确认、普通会话、最长60秒会员核验及paid_until中的最早期限，保留时钟回退拒绝。
+
+聊天入口和Host每次通过既有head/metadata/by_cid取得真实canonical CID并执行原D1单调投影，不占用15秒投影刷新租约；链故障仍拒绝凭证/关闭连接，多设备不相互占锁。普通聊天不读取会员。中性聊天JWT唯一版本为2，附件状态明确Disabled；只有附件操作经统一门禁取得含非零额度及会员期限的AttachmentGrant，派生单次Access不延长基础凭证。原Ed25519、Origin、设备代际、请求签名、15分钟凭证、60秒复核和交付前D1围栏保留。
+
+### 额度与计量
+
+所有档位数值唯一归`membership/limits.rs`，预留及分页计算归`membership/usage.rs`；原原子存储、周期起止、取消释放与确认幂等校验保持。
+
+| 项目 | 自由 | 民主 | 薪火 |
+|---|---:|---:|---:|
+| 聊天单附件 | 10MiB | 100MiB | 5GiB |
+| 图片字节 / 最长边 | 1,000,000 / 1280 | 2,000,000 / 1920 | 4,000,000 / 2560 |
+| 单视频字节 / 秒 | 16,000,000 / 180 | 300,000,000 / 1800 | 3,000,000,000 / 10800 |
+| 文章图片 / 视频 | 50 / 1 | 100 / 3 | 100 / 10 |
+| 周期图片 / 视频秒 | 300 / 18,000 | 1500 / 60,000 | 5000 / 600,000 |
+| 同时上传 | 1 | 2 | 3 |
+| 广场存储字节 | 100,000,000,000 | 1,000,000,000,000 | 10,000,000,000,000 |
+
+会员浏览继续不限额，每页安全顶50；没有新增浏览/下载收费额度，也没有非会员免费广场分支。原图片/视频/存储账本按last_charged_at至paid_until的链上周期原子预留和扣减，聊天只限制原单附件大小，不增加普通聊天配额。
+
+统一`server/cloudflare/sql/meter.sql`在原AUTH_ASSERT事务中保存指标和幂等操作。浏览按实际返回条数计量，详情/他人资料按获准成功返回次数，发布按首次成功确认事件，媒体按GET获准正文范围字节计量；HEAD/304为零正文，重复GET是新的获准读取，不冒充客户端实际接收字节。首次发布操作、资源和数量稳定；已提交同发布跨周期重试保留首次周期并且不重复计数，其它指标仍严格匹配周期。缺字段、非整数、安全整数溢出、冲突、过期和撤销均失败并回滚。
+
+主库新增membership_operations及membership_usage，原资源账本不重置；两表在原注销清理名单末尾按CID、原100行上限清理，旧阶段编号及永久财务证据保留；本轮未执行生产DDL迁移或部署。媒体直读先通过会员再访问R2，交付前再验证原授权view、对象版本和许可期限，保留Range/条件请求及私有no-store响应。
+
+### 最小名片与接口同步
+
+新增准确`GET /api/user/cards/{cid}`和`GET /api/user/cards/{cid}/avatar`。名片文本仍需要原MLS请求证明；仅新头像GET以普通Bearer会话核验有效CID、准入和设备，在R2读取后再次执行原AUTH_ASSERT。旧完整资料及其媒体的MLS要求保持，匿名或撤销状态不可读取。头像仍须资料引用、最新completed上传、R2摘要与完整WebP校验一致。
+
+名片只读CID、当前账户、昵称、头像、更新时间及原认证/会员显示徽标，不查询bio、背景、关注计数或帖子。完整profiles路由仍受他人主页会员规则约束，不能通过名片访问背景或完整资料。App的聊天、通讯录和关注列表消费名片，完整主页缓存独立。
+
+对外只使用HTTPS及WSS，既有域名、来源、证书、主机名、有效安全端口、准确路径、查询、重定向及内部来源校验不降级。源码接线已实现，全部正常/失败/边界及回归状态以既有任务卡为准；本轮不进入生产编译、安装或部署。

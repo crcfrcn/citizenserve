@@ -76,7 +76,7 @@ class ChatAccessStorageContract(unittest.TestCase):
 
     def test_no_chat_shadow_tables_or_raw_key_storage(self):
         tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertEqual(len(tables), 39)
+        self.assertEqual(len(tables), 41)
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset(tables))
         self.assertFalse(any(name.startswith('tatachat_') for name in tables))
         self.assertNotIn("TATACHAT_AUTH_KEY", auth.SCHEMA)

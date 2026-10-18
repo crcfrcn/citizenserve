@@ -13,7 +13,7 @@ fn gate_input<'a>(method:&'a str,url:&'a str)->citizenserve::server::gate::reque
     citizenserve::server::gate::request::Incoming {
         method,url,service_origin:Some("https://registration.example.test"),
         media_origin:Some("https://media.example.test"),browser_origin:None,
-        preflight_method:None,content_length:Some("0"),authorization:None,mls_proof:None,internal_header:false,
+        preflight_method:None,preflight_headers:None,content_length:Some("0"),authorization:None,mls_proof:None,internal_header:false,upgrade:None,websocket_protocol:None,
     }
 }
 
@@ -33,7 +33,9 @@ fn unified_gate_has_exact_open_cid_and_reject_paths_before_business_io() {
     let mut business_io=0;
     for url in ["https://registration.example.test/api/unknown","https://registration.example.test/api/api/user/devices",
         "https://other.example.test/api/health","https://registration.example.test/api/user/../user/devices"] {
-        match gate::classify(gate_input("GET",url)) {
+        let mut input=gate_input("GET",url);
+        input.authorization=Some("Bearer sqs_12121212121212121212121212121212");input.mls_proof=Some("synthetic-shape-only");
+        match gate::classify(input) {
             Classification::Reject(_)=>{},
             _=>{business_io+=1;},
         }
@@ -62,8 +64,27 @@ fn network_and_chat_no_longer_bypass_gate_classification() {
     assert!(matches!(gate::classify(gate_input("GET","https://registration.example.test/api/tatachat/realtime")),Classification::Reject(_)));
     let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
     input.authorization=Some("Bearer synthetic-chat-credential");
+    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachat");
     let Classification::Cid(entry)=gate::classify(input) else {panic!("聊天必须走CID分支")};
     entry.require_cid(gate::policy::CidRule::Chat).unwrap();
+}
+
+#[test]
+fn chat_upgrade_shape_keeps_original_bad_request_and_forbidden_boundaries() {
+    use citizenserve::server::gate::{self,Classification};
+    let status=|input| match gate::classify(input) {
+        Classification::Reject(error)=>error.status,
+        _=>panic!("无效升级不得接入业务"),
+    };
+    assert_eq!(status(gate_input("GET","https://registration.example.test/api/tatachat/realtime")),400);
+    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
+    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachatserver");
+    assert_eq!(status(input),400);
+    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
+    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachat");
+    assert_eq!(status(input),403);
+    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");input.internal_header=true;
+    assert_eq!(status(input),400);
 }
 
 #[test]
@@ -91,8 +112,16 @@ fn preflight_is_open_only_for_a_real_registered_target() {
     let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
     input.preflight_method=Some("POST");
     let Classification::Open(entry)=gate::classify(input) else {panic!("预检不执行账户业务")};
-    assert!(entry.preflight());assert_eq!(entry.method(),"POST");entry.open().unwrap();
+    assert!(entry.preflight());assert_eq!(entry.method(),"POST");
+    assert!(entry.open().unwrap().require_api(Route::ProtectedUser(citizenserve::user::routes::ProtectedUserRoute::Contacts)).is_err());
+    let input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
+    assert!(matches!(gate::classify(input),Classification::Reject(_)),"预检缺少目标方法必须拒绝");
+    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");input.preflight_method=Some("TRACE");
+    assert!(matches!(gate::classify(input),Classification::Reject(_)),"未登记方法不能通过预检");
     let mut input=gate_input("OPTIONS","https://registration.example.test/api/unknown");input.preflight_method=Some("POST");
+    assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
+    input.preflight_method=Some("POST");input.preflight_headers=Some("x-tatachat-internal");
     assert!(matches!(gate::classify(input),Classification::Reject(_)));
 }
 
@@ -103,6 +132,9 @@ fn internal_open_rules_cannot_be_selected_by_client_headers_or_wrong_queue() {
     assert!(matches!(gate::classify(input),Classification::Reject(_)));
     assert!(open::system(SystemOperation::Notifications,"other","citizenserve").is_err());
     assert!(open::system(SystemOperation::ChatQueue,"citizenserve-tatachat","citizenserve-tatachat").is_ok());
+    assert!(open::system(SystemOperation::ChatAlarm,"cloudflare.tatachat.alarm","cloudflare.tatachat.alarm").is_ok());
+    assert!(open::system(SystemOperation::ChatAlarm,"client-header","cloudflare.tatachat.alarm").is_err());
+    assert!(open::system(SystemOperation::ChatAlarm,"","").is_err());
 }
 #[test]
 fn registration_auth_and_wallet_recovery_routes_remain_exact() {
@@ -405,4 +437,22 @@ fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority(
     }
     assert!(route("POST", "/api/square/account/delete/challenge").is_err());
     assert!(route("POST", "/api/square/account/delete").is_err());
+}
+
+#[test]
+fn card_avatar_is_exact_authenticated_media_and_never_anonymous_or_a_full_profile_alias() {
+    use citizenserve::server::gate::{self,Classification,policy::CidRule};
+    let url="https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/avatar";
+    assert!(matches!(gate::classify(gate_input("GET",url)),Classification::Reject(_)));
+    let mut input=gate_input("GET",url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
+    let Classification::Cid(entry)=gate::classify(input) else {panic!("名片头像须为当前会话媒体")};
+    entry.require_cid(CidRule::Avatar).unwrap();assert!(entry.require_cid(CidRule::Business).is_err());assert!(entry.open().is_err());
+    assert!(entry.api().unwrap().protected());
+    assert!(!gate::policy::requires_mls(entry.rule()));
+    let old="https://registration.example.test/api/user/profiles/CN220-CTZN2-100000002-2026/assets/avatar";
+    let mut input=gate_input("GET",old);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
+    assert!(matches!(gate::classify(input),Classification::Reject(e) if e.code=="invalid_mls_proof"));
+    for (method,url) in [("GET","https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/banner"),("POST",url)] {
+        let mut input=gate_input(method,url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    }
 }

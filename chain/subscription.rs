@@ -1,4 +1,4 @@
-//! 信息流只读取当前 finalized 平台权益；RPC/metadata 异常不得降级为免费用户。
+//! 链上订阅事实读取与严格解码；业务授权只能由membership统一门禁生成。
 use super::{
     finalized, identity,
     ports::Rpc,
@@ -368,14 +368,26 @@ pub async fn price<R: Rpc>(
     scale::u128_value(&m.decode(&raw, ty)?)
 }
 /// 本对象只能通过当前 finalized 读取构造，历史投影不能伪造当前付费许可。
-pub struct Current {
+#[derive(Clone, Debug)]
+pub struct Facts {
     pub anchor: finalized::Anchor,
     pub state: Option<State>,
-    pub prices: [u128; 3],
     checked: u64,
     pub chain_time: u64,
 }
-impl Current {
+/// 价格仅在会员页面/交易等确实需要时取得，普通业务只消费同块Facts。
+pub struct Current {
+    facts: Facts,
+    pub prices: [u128; 3],
+}
+impl std::ops::Deref for Current {
+    type Target = Facts;
+    fn deref(&self) -> &Facts { &self.facts }
+}
+impl std::ops::DerefMut for Current {
+    fn deref_mut(&mut self) -> &mut Facts { &mut self.facts }
+}
+impl Facts {
     pub fn checked_at(&self) -> u64 {
         self.checked
     }
@@ -424,11 +436,27 @@ pub async fn platform<R: Rpc>(
         price(rpc, &m, &anchor, "Democracy").await?,
         price(rpc, &m, &anchor, "Spark").await?,
     ];
-    Ok(Current {
-        anchor,
-        state,
-        prices,
-        checked,
-        chain_time,
-    })
+    Ok(Current { facts: Facts { anchor, state, checked, chain_time }, prices })
+}
+
+/// 仅在注册门禁完整通过后读取会员；绑定身份已经核验的同一canonical finalized块。
+pub async fn for_authority<R: Rpc>(rpc:&R, authority:&crate::server::gate::identity::Authority, now:u64)->Result<Facts> {
+    authority.require_current(now)?;
+    let i=authority.identity();
+    let head=finalized::head(rpc,&i.chain_scope).await?;
+    let anchor=finalized::canonical(rpc,&i.finalized_block_hash,&head).await?;
+    if anchor.number!=i.finalized_block_number {return Err(Error::new(409,"membership_identity_anchor_changed"));}
+    let m=identity::metadata(rpc,&anchor).await?;
+    let chain_time=identity::storage(rpc,&m,&anchor,"Timestamp","Now",None).await?
+        .as_ref().map(scale::integer).transpose()?.ok_or_else(scale::invalid)?;
+    if chain_time!=i.finalized_timestamp_millis {return Err(Error::new(409,"membership_identity_anchor_changed"));}
+    let state=at(rpc,&m,&anchor,&i.cid_number,None).await?;
+    Ok(Facts {anchor,state,checked:now,chain_time})
+}
+/// 会员查询保留真实三档价格，身份和会员仍使用同一个已核验锚点。
+pub async fn current_for_authority<R: Rpc>(rpc:&R,authority:&crate::server::gate::identity::Authority,now:u64)->Result<Current> {
+    let facts=for_authority(rpc,authority,now).await?;
+    let m=identity::metadata(rpc,&facts.anchor).await?;
+    let prices=[price(rpc,&m,&facts.anchor,"Freedom").await?,price(rpc,&m,&facts.anchor,"Democracy").await?,price(rpc,&m,&facts.anchor,"Spark").await?];
+    Ok(Current {facts,prices})
 }

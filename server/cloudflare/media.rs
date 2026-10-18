@@ -102,6 +102,9 @@ pub(crate) async fn serve(
     let admission = auth.admission(&identity.cid_number).await?.ok_or(Error::new(403,"registration_required"))?;
     let authority = gate::identity::session_authority(&identity,&admission,&device,&current,&config,js_sys::Date::now() as u64)?;
     let authorization = profile_service::Authorization::new(&authority,&config,&token,js_sys::Date::now() as u64)?;
+    let facts=citizenserve::chain::subscription::for_authority(&rpc,&authority,js_sys::Date::now() as u64).await?;
+    let operation=citizenserve::membership::policy::Operation::Media(key.into());
+    let permit=citizenserve::membership::gate::authorize(&authority,operation.clone(),Some(&facts),js_sys::Date::now() as u64)?;
     let parts:Vec<_>=key.split('/').collect();
     #[derive(serde::Deserialize)] struct Published { post_id:String }
     let post:Option<Published> = crate::repositories::first(&db,
@@ -141,6 +144,11 @@ pub(crate) async fn serve(
         JsValue::from_str(&config.registration_scope),JsValue::from_str(&config.service_origin),JsValue::from_str(&config.chain_scope),
         JsValue::from_str(institution.as_str().ok_or_else(fail)?),JsValue::from_f64(now as f64)]).await?;
     if live.is_none_or(|v|v.session_token_hash!=hash) {return Err(Error::new(401,"invalid_session"));}
+    permit.require(&authorization,&operation,js_sys::Date::now() as u64)?;
+    if !unchanged && request.method()!=Method::Head {
+        let id=crypto::hex(&crate::runtime::random::<16>()?);
+        crate::repositories::membership::D1Membership{db:env.d1("DB").map_err(|_|fail())?}.meter(&authorization,&permit,"delivery_bytes",range.length,key,&id).await?;
+    }
     if partial&&!unchanged {response=response.with_status(206);}
     for (name,value) in [("content-type",content_type),("etag",etag),("accept-ranges","bytes".into()),("cache-control","private, no-store".into())] {
         response.headers_mut().set(name,&value).map_err(|_|fail())?;

@@ -234,6 +234,11 @@ impl DurableObject for TataChatDevice {
                 return Ok(());
             }
         };
+        if citizenserve::server::gate::classify_chat(&bytes,config::LIMITS.max_frame_bytes).is_err() {
+            // 保留原协议失败帧，不读取/延长会话，也不因未知类型重排既有到期闹钟。
+            ws.send_with_bytes(protocol::encode_chat_frame(&protocol::failure_frame(ChatError::InvalidRequest)))?;
+            return Ok(());
+        }
         let mut session = match self.restore(&ws).await {
             Ok(session) => session,
             Err(_) => {
@@ -293,6 +298,11 @@ impl DurableObject for TataChatDevice {
         self.arm().await
     }
     async fn alarm(&self) -> worker::Result<Response> {
+        // 只有平台闹钟回调可选此内部类型；统一门禁之后仍逐个执行原会话恢复与权限复核。
+        citizenserve::server::gate::open::system(
+            citizenserve::server::gate::open::SystemOperation::ChatAlarm,
+            "cloudflare.tatachat.alarm", "cloudflare.tatachat.alarm",
+        ).map_err(|_| Self::failure())?;
         let _gate = self.gate.lock().await;
         for ws in self.state.get_websockets() {
             match self.restore(&ws).await {

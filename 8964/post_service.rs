@@ -5,7 +5,7 @@ use super::{
     uploads::{self, Upload},
 };
 use crate::{
-    chain::{ports::Rpc, subscription::Current, transaction::Confirm},
+    chain::{ports::Rpc, subscription::Facts, transaction::Confirm},
     shared::{Error, Result},
     user::profile_service::Authorization,
 };
@@ -41,7 +41,7 @@ pub trait Repository {
         u: &Upload,
         fact: &crate::chain::post::Fact,
         m: &super::manifest::Manifest,
-        current: &Current,
+        current: &Facts,
     ) -> impl Future<Output = Result<()>> + Send;
 }
 pub fn anchors(p: &Post, u: &Upload) -> Result<()> {
@@ -82,7 +82,7 @@ pub async fn confirm<R: Repository, S: Storage, C: Rpc>(
     genesis: &str,
     auth: &Authorization,
     input: ConfirmPost,
-    current: &Current,
+    current: &Facts,
 ) -> Result<Value> {
     if !super::routes::identifier(&input.post_id) {
         return Err(Error::new(400, "invalid_post_id"));

@@ -4,7 +4,7 @@ use super::{
     string, uploads,
 };
 use citizenserve::{
-    chain::{post::Fact, subscription::Current},
+    chain::{post::Fact, subscription::Facts},
     shared::{Error, Result},
     square::{
         local_copy::Query, manifest::Manifest, post_service::Repository, posts::Post,
@@ -81,7 +81,7 @@ impl Repository for D1Posts {
         u: &Upload,
         fact: &Fact,
         m: &Manifest,
-        current: &Current,
+        current: &Facts,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         SendFuture::new(async move {
             // confirm_post.sql同事务持久outbox；Queue失败由调度补派，不影响已确认发布。

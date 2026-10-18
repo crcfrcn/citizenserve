@@ -565,3 +565,44 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
     *c.repo.session.lock().unwrap() = None;
     assert_eq!(authenticate().unwrap_err().code, "invalid_session");
 }
+
+#[test]
+fn gate_precheck_reuses_server_session_and_rejects_bad_signatures_without_consuming_challenge() {
+    let c=Case::new();c.activate().unwrap();
+    let token=format!("sqs_{}","09".repeat(16));
+    let session=Session {session_token_hash:session::hash(&token).unwrap(),cid_number:c.identity.cid_number.clone(),
+        binding_revision:1,account_id:c.identity.account_id.clone(),device_id:c.proof.device_id.clone(),
+        created_at:1_000_000,expires_at:2_000_000};
+    let mut proof=c.proof.clone();proof.method="GET".into();
+    proof.request_target=format!("/api/user/profiles/{}",c.identity.cid_number);
+    proof.body_sha256=format!("0x{}",crypto::sha256_hex(b""));
+    proof.signature=format!("0x{}",crypto::hex(&c.key.sign(&proof.message().unwrap()).to_bytes()));
+    c.repo.consumed.store(false,Ordering::SeqCst);
+    let check=|session:&Session,proof:&Proof| gate::identity::preauthenticate(session,&c.config,proof,"GET",
+        &format!("/api/user/profiles/{}",c.identity.cid_number),b"",1_000_001);
+    assert!(check(&session,&proof).is_ok());
+    assert!(!c.repo.consumed.load(Ordering::SeqCst));
+    let mut wrong=proof.clone();wrong.signature=format!("0x{}","00".repeat(64));
+    assert_eq!(check(&session,&wrong).unwrap_err().code,"invalid_mls_signature");
+    let mut changed=session.clone();changed.binding_revision+=1;
+    assert_eq!(check(&changed,&proof).unwrap_err().code,"invalid_mls_proof");
+    changed=session.clone();changed.expires_at=1_000_001;
+    assert_eq!(check(&changed,&proof).unwrap_err().code,"session_expired");
+    assert!(!c.repo.consumed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn unified_membership_gate_keeps_self_and_basic_chat_free_but_closes_other_profile_square_and_attachments() {
+    use citizenserve::{membership::{gate as member,policy::Operation},square::routes::{SquareRoute,FeedKind}};
+    let c=Case::new();c.activate().unwrap();
+    let a=c.repo.admission.lock().unwrap().clone().unwrap();let d=c.repo.device.lock().unwrap().clone().unwrap();
+    let s=Session {session_token_hash:"00".repeat(32),cid_number:c.identity.cid_number.clone(),binding_revision:1,
+        account_id:c.identity.account_id.clone(),device_id:d.device_id.clone(),created_at:1_000_000,expires_at:2_000_000};
+    let authority=gate::identity::session_authority(&c.identity,&a,&d,&s,&c.config,1_000_001).unwrap();
+    assert!(member::authorize(&authority,Operation::Profile(c.identity.cid_number.clone()),None,1_000_001).is_ok());
+    assert!(member::authorize(&authority,Operation::Chat,None,1_000_001).is_ok());
+    assert!(member::authorize(&authority,Operation::Attachment,None,1_000_001).is_err());
+    assert!(member::authorize(&authority,Operation::Profile("CID_OTHER".into()),None,1_000_001).is_err());
+    assert!(member::authorize(&authority,Operation::Square(SquareRoute::Feed(FeedKind::Recommended)),None,1_000_001).is_err());
+    assert!(member::authorize(&authority,Operation::Chat,None,1_060_000).is_err());
+}

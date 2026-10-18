@@ -16,18 +16,35 @@ pub enum Classification {
     Reject(Error),
 }
 /// 记录识别结果，不冒充已完成真人、设备或会话验证的Authority。
-#[derive(Debug)]
 pub struct Entry {
     recognized: Recognized,
     rule: Rule,
 }
+impl std::fmt::Debug for Entry {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        // 页面能力可能位于查询参数；诊断只输出固定分类和方法，不能输出请求目标或凭据。
+        f.debug_struct("Entry").field("rule",&self.rule).field("method",&self.recognized.method).finish_non_exhaustive()
+    }
+}
 impl Entry {
-    pub fn endpoint(&self) -> &Endpoint { &self.recognized.endpoint }
-    pub fn rule(&self) -> Rule { self.rule }
-    pub fn preflight(&self) -> bool { self.recognized.preflight }
-    pub fn method(&self) -> &str { &self.recognized.method }
-    pub fn target(&self) -> &str { &self.recognized.target }
-    pub fn open(&self) -> Result<open::Scope<'_>> { open::validate(self) }
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.recognized.endpoint
+    }
+    pub fn rule(&self) -> Rule {
+        self.rule
+    }
+    pub fn preflight(&self) -> bool {
+        self.recognized.preflight
+    }
+    pub fn method(&self) -> &str {
+        &self.recognized.method
+    }
+    pub fn target(&self) -> &str {
+        &self.recognized.target
+    }
+    pub fn open(&self) -> Result<open::Scope<'_>> {
+        open::validate(self)
+    }
     pub fn require_cid(&self, expected: CidRule) -> Result<()> {
         if self.rule != Rule::Cid(expected) {
             return Err(Error::new(403, "gate_scope_mismatch"));
@@ -35,7 +52,9 @@ impl Entry {
         Ok(())
     }
     pub fn api(&self) -> Result<request::Route> {
-        if let Endpoint::Api(route) = self.endpoint() { return Ok(*route); }
+        if let Endpoint::Api(route) = self.endpoint() {
+            return Ok(*route);
+        }
         Err(Error::new(403, "gate_scope_mismatch"))
     }
 }
@@ -56,4 +75,12 @@ pub fn classify(input: Incoming<'_>) -> Classification {
         Rule::Cid(_) => Classification::Cid(entry),
         Rule::Reject => Classification::Reject(Error::new(404, "route_not_found")),
     }
+}
+
+/// 已建连消息仍先做有界类型识别；未知消息不触发宿主恢复、数据库或链复核。
+pub fn classify_chat(bytes:&[u8],maximum:usize)->Result<()> {
+    let frame=crate::tatachat::protocol::decode_chat_frame(bytes,maximum)
+        .map_err(|_|Error::new(400,"invalid_chat_request"))?;
+    if policy::chat(&frame)!=Rule::Cid(CidRule::Chat) {return Err(Error::new(400,"invalid_chat_request"));}
+    Ok(())
 }

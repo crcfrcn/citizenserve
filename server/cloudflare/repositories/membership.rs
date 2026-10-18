@@ -118,3 +118,20 @@ impl Repository for D1Membership {
         })
     }
 }
+
+pub async fn meter(db:&D1Database,auth:&Authorization,permit:&citizenserve::membership::gate::Permit,metric:&str,amount:u64,resource:&str,id:&str)->Result<()> {
+        permit.require(auth,permit.operation(),js_sys::Date::now() as u64)?;
+        if !permit.operation().meters(metric) {return Err(Error::new(403,"membership_scope_mismatch"));}
+        let mut cmd=permit.evidence(js_sys::Date::now() as u64)?;
+        cmd["auth"]=json!(auth);cmd["metric"]=json!(metric);cmd["amount"]=json!(amount);
+        cmd["resource_key"]=json!(resource);cmd["operation_id"]=json!(id);
+        cmd["period"]=json!(if metric=="published" {cmd["period_start"].as_u64().ok_or_else(fail)?}else{auth.now()/86_400_000*86_400_000});
+        cmd["day"]=json!(citizenserve::square::feed::utc_day(auth.now()));
+        batch(db,cmd,include_str!("../sql/meter.sql"),Error::new(409,"membership_meter_conflict")).await?;Ok(())
+    }
+
+impl D1Membership {
+    pub async fn meter(&self,auth:&Authorization,permit:&citizenserve::membership::gate::Permit,metric:&str,amount:u64,resource:&str,id:&str)->Result<()> {
+        meter(&self.db,auth,permit,metric,amount,resource,id).await
+    }
+}

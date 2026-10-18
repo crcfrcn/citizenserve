@@ -1,3 +1,4 @@
+//! 统一会员计量：已用、预留和本次申请以检查加法计算，事务端口负责原子提交。
 use crate::{
     membership::Plan,
     shared::{Error, Result},
@@ -35,4 +36,24 @@ pub fn reserve(current: Usage, reserved: Usage, request: Usage, plan: Plan) -> R
         return Err(Error::new(403, "upload_quota_exceeded"));
     }
     Ok(result)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Limit {
+    Bounded(u32),
+    Unlimited,
+}
+/// 分页安全顶与额度剩余取较严值；不限额仍按实际返回量记账。
+pub fn page_budget(requested: u32, used: u32, limit: Limit) -> Result<u32> {
+    if !(1..=50).contains(&requested) {
+        return Err(Error::new(400, "invalid_api_target"));
+    }
+    let left = match limit {
+        Limit::Bounded(max) => max.saturating_sub(used),
+        Limit::Unlimited => requested,
+    };
+    if left == 0 {
+        return Err(Error::new(429, "browse_limit_reached"));
+    }
+    Ok(requested.min(left))
 }

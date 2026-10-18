@@ -1,55 +1,46 @@
-//! 会员名称与档位只在宿主计算；通用聊天只接收可用性、字节额度与期限。
+//! 附件权限消费统一会员门禁许可；基础聊天不查询或持有会员资格。
 use crate::{
-    chain::subscription::Current,
     shared::{Error, Result},
     user::identity::Identity,
 };
-
 #[derive(Clone, Debug)]
 pub struct Permissions {
     max_attachment_bytes: u64,
-    paid_until: u64,
-    checked_at: u64,
     deadline: u64,
+    cid: String,
     anchor_hash: String,
 }
 impl Permissions {
-    /// 必须是同一个canonical finalized块的身份与平台会员，不能拿历史投影签发许可。
-    pub fn current(current: &Current, identity: &Identity, now: u64) -> Result<Self> {
+    pub fn from_permit(
+        permit: &super::gate::Permit,
+        identity: &Identity,
+        now: u64,
+    ) -> Result<Self> {
         identity.require_current(now)?;
-        if current.anchor.hash != identity.finalized_block_hash
-            || current.anchor.number != identity.finalized_block_number
-            || current.chain_time != identity.finalized_timestamp_millis
-        {
-            return Err(Error::new(409, "chat_authorization_anchor_changed"));
+        if permit.cid() != identity.cid_number {
+            return Err(Error::new(403, "membership_scope_mismatch"));
         }
-        let state = current.require(now)?;
-        let level = current.level(now)?;
         Ok(Self {
-            max_attachment_bytes: super::plan(level).chat_file_max_bytes,
-            paid_until: state.paid_until,
-            checked_at: current.checked_at(),
-            deadline: current.deadline(),
-            anchor_hash: current.anchor.hash.clone(),
+            max_attachment_bytes: permit.attachment_limit(now)?,
+            deadline: permit.deadline(),
+            cid: identity.cid_number.clone(),
+            anchor_hash: identity.finalized_block_hash.clone(),
         })
     }
     pub fn require_current(&self, now: u64) -> Result<()> {
-        if now < self.checked_at || now >= self.deadline {
-            return Err(Error::new(503, "membership_verification_expired"));
-        }
-        if now >= self.paid_until {
-            return Err(Error::new(403, "membership_required"));
+        if now >= self.deadline {
+            return Err(Error::new(403, "attachment_membership_required"));
         }
         Ok(())
     }
     pub fn max_attachment_bytes(&self) -> u64 {
         self.max_attachment_bytes
     }
-    pub fn paid_until(&self) -> u64 {
-        self.paid_until
-    }
     pub fn deadline(&self) -> u64 {
         self.deadline
+    }
+    pub fn cid(&self) -> &str {
+        &self.cid
     }
     pub fn anchor_hash(&self) -> &str {
         &self.anchor_hash

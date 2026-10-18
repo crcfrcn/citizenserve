@@ -571,8 +571,8 @@ fn membership_is_independent_from_identity_and_chat_deadline_is_clipped() {
 }
 #[test]
 fn quota_includes_reservations_and_prevents_overflow() {
-    use citizenserve::square::quota::{reserve, Usage};
-    let plan = citizenserve::membership::plan(citizenserve::membership::Level::Freedom);
+    use citizenserve::membership::usage::{reserve, Usage};
+    let plan = citizenserve::membership::limits::plan(citizenserve::membership::Level::Freedom);
     assert!(reserve(
         Usage {
             images: 299,

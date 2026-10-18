@@ -42,7 +42,7 @@ pub fn snapshot(device: Device) -> HostAccess {
     HostAccess {
         actor: device,
         chat_enabled: true,
-        max_attachment_bytes: 10 * 1024 * 1024,
+        attachments: crate::tatachat::auth::AttachmentPermission::Allowed{max_bytes:10 * 1024 * 1024},
         authorization_revision: "revision-1".into(),
         session_id_digest: "a".repeat(64),
         issued_at_millis: NOW,
@@ -87,6 +87,7 @@ impl auth::ports::Host for FakeHost {
         }
         Ok(fresh)
     }
+    async fn attachment_limit(&self,subject:&HostAccess)->Result<crate::tatachat::auth::AttachmentGrant> {Ok(crate::tatachat::auth::AttachmentGrant{max_bytes:subject.attachments.limit()?,deadline_millis:subject.recheck_at_millis})}
     async fn authorize_wake(&self, registered: &HostAccess) -> Result<HostAccess> {
         self.recheck(registered).await
     }
@@ -802,7 +803,7 @@ fn twelve_commands_execute_through_the_unique_service() {
         objects: &objects,
         push_config: &config,
         limits: Limits {
-            max_attachment_bytes: 10 * 1024 * 1024,
+            max_attachment_bytes:10 * 1024 * 1024,
             max_frame_bytes: 4 * 1024 * 1024,
         },
     };
@@ -937,7 +938,7 @@ fn failed_commit_produces_no_success_or_notifications() {
         objects: &objects,
         push_config: &config,
         limits: Limits {
-            max_attachment_bytes: 1024,
+            max_attachment_bytes:1024,
             max_frame_bytes: 1024,
         },
     };

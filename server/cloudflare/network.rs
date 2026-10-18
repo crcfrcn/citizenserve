@@ -173,18 +173,7 @@ async fn rpc(request: &mut worker::Request, env: &Env, scope: &citizenserve::ser
     {
         return Err(Error::new(404, "rpc_route_not_found"));
     }
-    let mut r = if request.method() == worker::Method::Options {
-        let mut r = worker::Response::empty()
-            .map_err(|_| Error::new(503, "ethereum_rpc_unavailable"))?
-            .with_status(204);
-        r.headers_mut()
-            .set("access-control-allow-methods", "POST,OPTIONS")
-            .map_err(|_| Error::new(503, "ethereum_rpc_unavailable"))?;
-        r.headers_mut()
-            .set("access-control-allow-headers", "content-type")
-            .map_err(|_| Error::new(503, "ethereum_rpc_unavailable"))?;
-        r
-    } else {
+    let mut r = {
         if request.method() != worker::Method::Post {
             return Err(Error::new(405, "rpc_method_not_allowed"));
         }

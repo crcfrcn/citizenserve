@@ -19,9 +19,9 @@ fn self_copy_cursor_is_canonical_composite_and_max_five() {
     };
     assert_ne!(a.encode().unwrap(), b.encode().unwrap());
     assert_eq!(Cursor::read(&a.encode().unwrap()).unwrap(), a);
-    let q = routes::query(Some("limit=5")).unwrap();
+    let q = request::query(Some("limit=5")).unwrap();
     assert_eq!(Query::read(&q).unwrap().limit, 5);
-    assert!(Query::read(&routes::query(Some("limit=6")).unwrap()).is_err());
+    assert!(Query::read(&request::query(Some("limit=6")).unwrap()).is_err());
     let ambiguous = crypto::base64url(br#"{"post_id":"sqp_a","created_at":1000000}"#);
     assert!(Cursor::read(&ambiguous).is_err());
 }
@@ -43,12 +43,12 @@ fn publishing_accepts_only_post_and_transaction_anchors() {
 fn self_and_confirm_are_not_dynamic_post_ids_and_aliases_are_rejected() {
     use citizenserve::square::routes::SquareRoute;
     assert_eq!(
-        routes::protected_target("GET", "/api/8964/posts/self?limit=5").unwrap(),
-        routes::Route::Square(SquareRoute::SelfPosts)
+        request::protected_target("GET", "/api/8964/posts/self?limit=5").unwrap(),
+        request::Route::Square(SquareRoute::SelfPosts)
     );
     assert_eq!(
-        routes::protected_target("POST", "/api/8964/posts/confirm").unwrap(),
-        routes::Route::Square(SquareRoute::ConfirmPost)
+        request::protected_target("POST", "/api/8964/posts/confirm").unwrap(),
+        request::Route::Square(SquareRoute::ConfirmPost)
     );
     for (method, path) in [
         ("GET", "/api/8964/posts/confirm"),
@@ -56,6 +56,6 @@ fn self_and_confirm_are_not_dynamic_post_ids_and_aliases_are_rejected() {
         ("GET", "/api/square/posts/sqp_1"),
         ("GET", "/api/8964/posts/sqp_1?cid_number=CID1"),
     ] {
-        assert!(routes::protected_target(method, path).is_err());
+        assert!(request::protected_target(method, path).is_err());
     }
 }

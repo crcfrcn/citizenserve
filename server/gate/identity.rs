@@ -16,6 +16,12 @@ pub struct Authority {
     session_deadline: u64,
 }
 impl Authority {
+    /// 异步会员/对象访问前后复核原身份与会话期限，不再次消费一次性挑战。
+    pub fn require_current(&self, now:u64)->Result<()> {
+        self.identity.require_current(now)?;
+        if self.session_deadline<=now {return Err(Error::new(401,"session_expired"));}
+        Ok(())
+    }
     pub fn identity(&self) -> &Identity {
         &self.identity
     }
@@ -112,27 +118,26 @@ pub async fn authenticate<A: crate::user::ports::AuthRepository>(
     Ok(authority)
 }
 
-/// 在会员/对象等昂贵I/O之前检查请求绑定、会话、设备及签名；此阶段不消费挑战，
-/// 也不把缓存身份当作最终放行依据。最终authenticate仍核对当前身份并消费一次。
-#[allow(clippy::too_many_arguments)]
-pub async fn preauthenticate<A: crate::user::ports::AuthRepository>(
-    auth: &A, identity: &Identity, config: &Config, token: &str,
-    proof: &crate::user::auth::mls_authentication::Proof, method: &str,
-    target: &str, body: &[u8], now: u64,
+/// 在会员/对象等昂贵I/O之前，以已经取得的服务器会话检查请求绑定和签名。
+/// 此函数没有数据库/RPC端口，不重复读取会话、不消费挑战，也不产生最终Authority。
+/// authenticate仍独立核对当前CID、真人准入、设备与会话并原子消费一次。
+pub fn preauthenticate(
+    session: &Session,
+    config: &Config,
+    proof: &crate::user::auth::mls_authentication::Proof,
+    method: &str,
+    target: &str,
+    body: &[u8],
+    now: u64,
 ) -> Result<()> {
-    let session = auth.session(&crate::user::auth::session::hash(token)?).await?
-        .ok_or(Error::new(401, "invalid_session"))?;
-    let device = auth.device(&session.cid_number, &session.device_id).await?
-        .ok_or(Error::new(401, "device_not_registered"))?;
-    let admission = auth.admission(&session.cid_number).await?
-        .ok_or(Error::new(403, "registration_required"))?;
-    // 这里只读取已知主体的绑定与本次签名；到期链事实留给后续强制刷新，不能延长期限。
-    identity.matches(&session.cid_number, &session.account_id, session.binding_revision)?;
-    admission.require(identity, config)?;
-    device.require(identity, &proof.public_key)?;
-    if session.created_at > now || session.expires_at <= now
-        || session.device_id != proof.device_id || device.public_key != proof.public_key {
-        return Err(Error::new(401, "invalid_session"));
-    }
-    proof.verify_request(identity, &config.service_origin, method, target, body, now)
+    proof.verify_session_request(session, &config.service_origin, method, target, body, now)
+}
+
+/// 初次激活/建会话尚无普通会话；先核对本次请求持钥及绑定，再读取当前CID。
+pub fn prevalidate(
+    config:&Config,proof:&crate::user::auth::mls_authentication::Proof,
+    method:&str,target:&str,body:&[u8],now:u64,
+)->Result<()> {
+    proof.verify_fields(&config.service_origin,method,target,body,now)?;
+    proof.verify_signature()
 }

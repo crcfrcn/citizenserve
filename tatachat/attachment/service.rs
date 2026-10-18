@@ -42,7 +42,7 @@ pub async fn begin<S: Store>(
     access.ensure_current(now)?;
     metadata.validate_stored()?;
     if metadata.cipher_byte_size
-        > super::mls_attachment_wire_limit(access.snapshot().max_attachment_bytes)?
+        > super::mls_attachment_wire_limit(access.snapshot().attachments.limit()?)?
     {
         return Err(Error::ResourceLimit);
     }
@@ -57,6 +57,7 @@ pub async fn begin<S: Store>(
 
 pub async fn complete<S: Store>(store: &S, access: &Access, id: &str, now: u64) -> Result<()> {
     access.ensure_current(now)?;
+    access.snapshot().attachments.limit()?;
     if store
         .completed(access, id, Operation::Complete, now)
         .await?
@@ -82,6 +83,7 @@ pub async fn upload<S: Store, O: Objects>(
     now: u64,
 ) -> Result<()> {
     access.ensure_current(now)?;
+    access.snapshot().attachments.limit()?;
     let stored = store.attachment(access, id, now).await?;
     check_stored(&stored, id, now)?;
     owner(access, &stored)?;
@@ -135,6 +137,7 @@ pub async fn download<S: Store, O: Objects>(
     now: u64,
 ) -> Result<O::DownloadBody> {
     access.ensure_current(now)?;
+    access.snapshot().attachments.limit()?;
     let stored = store.attachment(access, id, now).await?;
     check_stored(&stored, id, now)?;
     if stored.metadata.sender_user_id != access.actor().user_id

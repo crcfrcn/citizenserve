@@ -31,8 +31,8 @@ test('Worker WebCrypto Ed25519 signs actual origin and neutral subject within de
  const r=await access('{}',{'x-current-user':'forged','x-current-device':'forged'});assert.equal(r.status,200,await r.clone().text());
  const result=await r.json();const c=claims(result.access_token);
  assert.equal(c.sub,fixture.cid);assert.equal(c.device_id,device);assert.equal(c.session_hash,tokenHash);
- assert.equal(c.iss,registration.service_origin);assert.equal(c.aud,'citizenserve.tatachat');assert.equal(c.purpose,'tatachat_access');assert.equal(c.version,1);
- assert.equal(c.max_attachment_bytes,10*1024*1024);assert.equal(c.chat_enabled,true);
+ assert.equal(c.iss,registration.service_origin);assert.equal(c.aud,'citizenserve.tatachat');assert.equal(c.purpose,'tatachat_access');assert.equal(c.version,2);
+ assert.deepEqual(c.attachments,{mode:"disabled"});assert.equal(c.chat_enabled,true);
  assert.ok(c.expires_at_millis-c.issued_at_millis<=900000);assert.ok(c.recheck_at_millis-c.issued_at_millis<=60000);
  assert.equal(result.expires_at,c.expires_at_millis);assert.equal(result.recheck_at,c.recheck_at_millis);
  assert.equal(result.realtime_url,registration.service_origin.replace('https://','wss://')+'/api/tatachat/realtime');
@@ -49,8 +49,8 @@ test('device reactivation changes opaque revision; revoked device cannot get acc
  r=await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,401,await r.text());
  await sql('UPDATE mls_devices SET active=1 WHERE device_id=?',device);
 });
-test('expired membership and unknown chain cannot issue credentials',async()=>{
- setMembership(0,0,Date.now()-1000);let r=await access();assert.equal(r.status,403,await r.text());setMembership();
+test('expired membership keeps basic chat while unknown identity facts reject credentials',async()=>{
+ setMembership(0,0,Date.now()-1000);let r=await access();assert.equal(r.status,200,await r.clone().text());assert.deepEqual(claims((await r.json()).access_token).attachments,{mode:"disabled"});setMembership();
  const p=await proof('POST',path,'{}');setUnknownChain(true);
  r=await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,503,await r.text());setUnknownChain(false);
 });

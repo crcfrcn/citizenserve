@@ -505,7 +505,7 @@ impl citizenserve::square::uploads::Repository for Deletion {
         &self,
         _a: &Authorization,
         _u: &citizenserve::square::uploads::Upload,
-        _c: &citizenserve::chain::subscription::Current,
+        _c: &citizenserve::chain::subscription::Facts,
     ) -> Result<()> {
         panic!("unused")
     }
@@ -527,7 +527,7 @@ impl citizenserve::square::uploads::Repository for Deletion {
         &self,
         _a: &Authorization,
         _u: &citizenserve::square::uploads::Upload,
-        _c: &citizenserve::chain::subscription::Current,
+        _c: &citizenserve::chain::subscription::Facts,
     ) -> Result<()> {
         panic!("unused")
     }

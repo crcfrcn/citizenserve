@@ -61,13 +61,30 @@ impl Device {
     }
 }
 
+/// 附件能力独立于基础聊天；允许分支的大小必须非零，禁用不是一个伪造的正额度。
+#[derive(Clone,Debug,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(tag="mode",rename_all="snake_case",deny_unknown_fields)]
+pub enum AttachmentPermission { Disabled, Allowed { max_bytes:u64 } }
+impl AttachmentPermission {
+    fn validate(&self)->Result<()> {
+        if matches!(self,Self::Allowed{max_bytes:0}) {return Err(Error::Forbidden);}Ok(())
+    }
+    pub fn limit(&self)->Result<u64> {
+        self.validate()?;match self {Self::Allowed{max_bytes}=>Ok(*max_bytes),Self::Disabled=>Err(Error::Forbidden)}
+    }
+}
+
+/// 单次附件许可必须同时传递原会员核验期限，不能只传大小后沿用基础聊天期限。
+#[derive(Clone,Copy,Debug)]
+pub struct AttachmentGrant {pub max_bytes:u64,pub deadline_millis:u64}
+
 /// 仅供验真的宿主返回或可信休眠状态使用；反序列化这个快照不产生处理权限。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostAccess {
     pub actor: Device,
     pub chat_enabled: bool,
-    pub max_attachment_bytes: u64,
+    pub attachments: AttachmentPermission,
     pub authorization_revision: String,
     pub session_id_digest: String,
     pub issued_at_millis: u64,
@@ -77,8 +94,8 @@ pub struct HostAccess {
 impl HostAccess {
     pub(crate) fn validate(&self, now: u64, require_fresh: bool) -> Result<()> {
         self.actor.validate().map_err(|_| Error::Forbidden)?;
+        self.attachments.validate()?;
         if !self.chat_enabled
-            || self.max_attachment_bytes == 0
             || !valid_identity(&self.authorization_revision)
             || self.session_id_digest.len() != 64
             || !self
@@ -150,7 +167,14 @@ impl Access {
         if deployment_limit == 0 {
             return Err(Error::ResourceLimit);
         }
-        Ok(deployment_limit.min(self.snapshot.max_attachment_bytes))
+        Ok(deployment_limit.min(self.snapshot.attachments.limit()?))
+    }
+    /// 仅在宿主单独完成附件门禁后派生本次操作权限，不改变基础连接的快照/期限。
+    pub fn for_attachments(&self,grant:AttachmentGrant,now:u64)->Result<Self> {
+        self.ensure_current(now)?;
+        if grant.max_bytes==0 || grant.deadline_millis<=now {return Err(Error::Forbidden);}
+        let mut snapshot=self.snapshot.clone();snapshot.attachments=AttachmentPermission::Allowed{max_bytes:grant.max_bytes};
+        let mut next=Self::from_host(snapshot,now)?;next.cap_deadline(self.credential_deadline.min(grant.deadline_millis));Ok(next)
     }
     /// 定时器和命令共用此入口；失败后调用方必须关闭连接，不能继续沿用旧许可。
     pub async fn recheck<H: ports::Host>(&mut self, host: &H, force: bool) -> Result<()> {
@@ -171,7 +195,7 @@ impl Access {
             if fresh.actor != self.snapshot.actor
                 || fresh.authorization_revision != self.snapshot.authorization_revision
                 || fresh.session_id_digest != self.snapshot.session_id_digest
-                || fresh.max_attachment_bytes != self.snapshot.max_attachment_bytes
+                || fresh.attachments != self.snapshot.attachments
                 || fresh.recheck_at_millis <= completed
                 || completed < now
                 || completed >= self.credential_deadline
@@ -199,7 +223,7 @@ pub struct Claims {
     pub authorization_revision: String,
     pub session_hash: String,
     pub chat_enabled: bool,
-    pub max_attachment_bytes: u64,
+    pub attachments: AttachmentPermission,
     pub iat: u64,
     pub nbf: u64,
     pub exp: u64,
@@ -230,7 +254,7 @@ impl Claims {
     }
 
     fn validate(&self, now: u64) -> Result<()> {
-        if self.version != 1
+        if self.version != 2
             || self.iat != self.issued_at_millis / 1000
             || self.nbf != self.iat
             || self.exp != self.expires_at_millis / 1000
@@ -254,7 +278,7 @@ impl Claims {
                 device_id: self.device_id.clone(),
             },
             chat_enabled: self.chat_enabled,
-            max_attachment_bytes: self.max_attachment_bytes,
+            attachments: self.attachments.clone(),
             authorization_revision: self.authorization_revision.clone(),
             session_id_digest: self.session_hash.clone(),
             issued_at_millis: self.issued_at_millis,
@@ -287,7 +311,7 @@ impl VerifiedCredential {
         if fresh.actor != previous.actor
             || fresh.authorization_revision != previous.authorization_revision
             || fresh.session_id_digest != previous.session_id_digest
-            || fresh.max_attachment_bytes != previous.max_attachment_bytes
+            || fresh.attachments != previous.attachments
         {
             return Err(Error::Forbidden);
         }

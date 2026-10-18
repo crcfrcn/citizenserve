@@ -100,6 +100,24 @@ impl Proof {
         body: &[u8],
         now: u64,
     ) -> Result<()> {
+        self.verify_fields(origin,method,request_target,body,now)?;
+        identity.matches(&self.user_id, &self.account_id, self.binding_revision)?;
+        self.verify_signature()
+    }
+    /// 门禁可先以服务器已有会话绑定验证请求持钥；不据此替代当前CID/设备/准入核验。
+    pub fn verify_session_request(
+        &self, session:&super::session::Session, origin:&str, method:&str,
+        request_target:&str, body:&[u8], now:u64,
+    )->Result<()> {
+        self.verify_fields(origin,method,request_target,body,now)?;
+        if session.created_at>now || session.expires_at<=now {return Err(Error::new(401,"session_expired"));}
+        if self.user_id!=session.cid_number || self.account_id!=session.account_id
+            || self.binding_revision!=session.binding_revision || self.device_id!=session.device_id {
+            return Err(Error::new(401,"invalid_mls_proof"));
+        }
+        self.verify_signature()
+    }
+    pub(crate) fn verify_fields(&self,origin:&str,method:&str,request_target:&str,body:&[u8],now:u64)->Result<()> {
         self.validate()?;
         if self.expires_at_millis <= now || self.expires_at_millis > now.saturating_add(300_000) {
             return Err(Error::new(401, "invalid_mls_challenge"));
@@ -112,8 +130,7 @@ impl Proof {
         {
             return Err(invalid());
         }
-        identity.matches(&self.user_id, &self.account_id, self.binding_revision)?;
-        self.verify_signature()
+        Ok(())
     }
 }
 pub fn read(encoded: &str) -> Result<Proof> {

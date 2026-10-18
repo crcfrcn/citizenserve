@@ -161,34 +161,12 @@ impl Repository for D1Square {
             self.indexed(&format!("{POST_SELECT} AND p.cid_number=?2 AND (?3='all' OR p.post_category=?3) AND (?4='all' OR p.post_type=?4) AND (?5 IS NULL OR p.created_at<?5) ORDER BY p.created_at DESC,p.post_id DESC LIMIT ?6"),&[JsValue::from_f64(auth.now() as f64),string(&q.cid_number),string(&q.category),string(&q.post_type),q.cursor.map(|n|JsValue::from_f64(n as f64)).unwrap_or(JsValue::NULL),JsValue::from_f64(limit as f64)]).await
         })
     }
-    fn charge(
-        &self,
-        auth: &Authorization,
-        day: &str,
-        count: u32,
-        entitlement: &citizenserve::chain::subscription::Entitlement,
-    ) -> impl std::future::Future<Output = Result<u32>> + Send {
+    fn charge(&self,auth:&Authorization,_day:&str,count:u32,permit:&citizenserve::membership::gate::Permit)->impl std::future::Future<Output=Result<u32>>+Send {
         SendFuture::new(async move {
-            if count > 50 {
-                return Err(fail());
-            }
-            let paid_until = entitlement.paid_until(auth.now())?;
-            batch(
-                &self.db,
-                json!({"auth":auth,"day":day,"count":count,"paid_until":paid_until,"membership_checked":entitlement.checked_at(),"membership_deadline":entitlement.verification_deadline()}),
-                include_str!("../sql/charge_browse.sql"),
-                if paid_until.is_some() {
-                    Error::new(503, "membership_verification_expired")
-                } else {
-                    Error::new(429, "browse_limit_reached")
-                },
-            )
-            .await?;
-            if paid_until.is_some() {
-                Ok(0)
-            } else {
-                self.browse_count(auth.cid(), day).await
-            }
+            if count>50 {return Err(fail());}
+            let id=citizenserve::shared::crypto::hex(&crate::runtime::random::<16>()?);
+            super::membership::meter(&self.db,auth,permit,"browse",count as u64,"square-list",&id).await?;
+            self.browse_count(auth.cid(),&citizenserve::square::feed::utc_day(auth.now())).await
         })
     }
     fn follows(

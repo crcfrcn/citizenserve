@@ -21,7 +21,7 @@ use citizenserve::{
     shared::{error::Health, Error as BusinessError},
     user::{
         auth::{challenge, device, mls_authentication, session},
-        ports::{AuthRepository, IdentityRepository},
+        ports::AuthRepository,
         projection,
         registration::protocol::Config,
         routes::UserRoute,
@@ -65,17 +65,19 @@ fn runtime_error(registration: bool) -> BusinessError {
         unavailable()
     }
 }
-fn preflight(method: &str) -> citizenserve::shared::Result<Response> {
+fn preflight(entry: &gate::Entry) -> citizenserve::shared::Result<Response> {
+    entry.open()?;
+    if !entry.preflight() {return Err(BusinessError::new(403,"gate_scope_mismatch"));}
     let mut r = Response::empty()
         .map_err(|_| unavailable())?
         .with_status(204);
     r.headers_mut()
-        .set("access-control-allow-methods", &format!("{method},OPTIONS"))
+        .set("access-control-allow-methods", &format!("{},OPTIONS",entry.method()))
         .map_err(|_| unavailable())?;
     r.headers_mut()
         .set(
             "access-control-allow-headers",
-            "content-type,authorization,x-mls-proof,range,if-none-match,if-range,x-citizenserve-request-time,x-citizenserve-request-nonce,x-citizenserve-request-signature",
+            &gate::policy::headers(entry.endpoint()).join(","),
         )
         .map_err(|_| unavailable())?;
     r.headers_mut()
@@ -184,14 +186,18 @@ fn gate_entry(request: &Request, env: &Env) -> citizenserve::shared::Result<gate
     let header = |name| request.headers().get(name).map_err(|_| unavailable());
     let browser = header("origin")?;
     let declared = header("access-control-request-method")?;
+    let declared_headers = header("access-control-request-headers")?;
     let length = header("content-length")?;
     let token = header("authorization")?;
     let proof = header("x-mls-proof")?;
+    let upgrade = header("upgrade")?;
+    let protocol = header("sec-websocket-protocol")?;
     let input = request::Incoming {
         method: &method, url: url.as_ref(), service_origin: service.as_deref(),
         media_origin: media.as_deref(), browser_origin: browser.as_deref(),
-        preflight_method: declared.as_deref(), content_length: length.as_deref(),
+        preflight_method: declared.as_deref(), preflight_headers: declared_headers.as_deref(), content_length: length.as_deref(),
         authorization: token.as_deref(), mls_proof: proof.as_deref(),
+        upgrade: upgrade.as_deref(), websocket_protocol: protocol.as_deref(),
         internal_header: request.headers().has("x-tatachat-internal").map_err(|_| unavailable())?,
     };
     match gate::classify(input) {
@@ -204,7 +210,7 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
     let entry = gate_entry(request, env)?;
     if entry.preflight() {
         entry.open()?;
-        return preflight(entry.method());
+        return preflight(&entry);
     }
     let method = request.method().to_string();
     let path = request.path();
@@ -316,7 +322,8 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
             .map_err(|_| configuration_error(route.registration()))?,
     };
     if route.protected() {
-        entry.require_cid(gate::policy::CidRule::Business)?;
+        let gate::policy::Rule::Cid(kind)=route.rule() else {return Err(BusinessError::new(403,"gate_scope_mismatch"));};
+        entry.require_cid(kind)?;
         return protected(request, env, &config, route, &url).await;
     }
     match route.rule() {
@@ -385,6 +392,9 @@ async fn handle(request: &mut Request, env: &Env) -> citizenserve::shared::Resul
     } else {
         None
     };
+    if let Some(value)=proof.as_ref() {
+        gate::identity::prevalidate(&config,value,&method,&path,&bytes,js_sys::Date::now() as u64)?;
+    }
     let result = if route.registration() {
         let secret = env
             .secret("TURNSTILE_SECRET")
@@ -729,13 +739,11 @@ async fn protected(
         .session(&session::hash(&token)?)
         .await?
         .ok_or(BusinessError::new(401, "invalid_session"))?;
-    let proof = mls_authentication::read(
-        &request
-            .headers()
-            .get("x-mls-proof")
-            .map_err(|_| unavailable())?
-            .ok_or(BusinessError::new(401, "invalid_mls_proof"))?,
-    )?;
+    // 仅新名片头像按受保护媒体会话读取；原所有业务及完整资料媒体仍需新鲜MLS证明。
+    let card_avatar=route==Route::ProtectedUser(ProtectedUserRoute::CardAvatar);
+    let proof=if card_avatar {None}else{Some(mls_authentication::read(
+        &request.headers().get("x-mls-proof").map_err(|_|unavailable())?.ok_or(BusinessError::new(401,"invalid_mls_proof"))?,
+    )?)};
     let bytes = if route.body_limit() == 0 {
         if request
             .headers()
@@ -767,102 +775,39 @@ async fn protected(
     let identities = repositories::identity::D1Identities {
         db: env.d1("DB").map_err(|_| unavailable())?,
     };
-    // 已知主体先完成低成本签名/设备/会话检查，拒绝伪造请求后才读取会员或链事实。
-    // 此步骤不消费挑战；最终统一鉴权仍使用随后取得的当前身份并消费一次。
-    if let Some(known) = identities.by_account(&session.account_id).await? {
-        gate::identity::preauthenticate(&auth,&known,config,&token,&proof,route.method(),&target,&bytes,js_sys::Date::now() as u64).await?;
-    } else {
-        proof.verify_signature()?;
-    }
+    // 使用刚取得的服务器会话进行纯计算持钥检查，无效签名在会员/链RPC之前拒绝。
+    // 原最终鉴权继续核对当前CID、设备与真人准入并消费挑战，不重复增加数据库读取。
+    if let Some(proof)=proof.as_ref() {gate::identity::preauthenticate(&session,config,proof,route.method(),&target,&bytes,js_sys::Date::now() as u64)?;}
     let rpc = chain::Chain::configured(env)?;
-    // 先完成可能耗时的权益RPC，再核验当前身份与会话，避免旧核验时间支撑业务。
-    let entitlement = if matches!(
-        route,
-        Route::Square(SquareRoute::Feed(_) | SquareRoute::Posts)
-    ) {
-        Some(
-            citizenserve::chain::subscription::current(
-                &rpc,
-                &config.chain_scope,
-                &session.cid_number,
-                js_sys::Date::now() as u64,
-            )
-            .await?,
-        )
-    } else {
-        None
+    // 聊天凭证必须保留原链故障拒绝边界；刷新CID事实不读取会员。
+    let i=if matches!(route,Route::TataChat(_)) {
+        use citizenserve::user::ports::IdentityRepository;
+        let fresh=tatachat::fresh_identity(&rpc,&session.cid_number,&config.chain_scope,js_sys::Date::now() as u64).await?;
+        identities.project(std::slice::from_ref(&fresh),None,None).await?;
+        fresh
+    }else{projection::current(&rpc,&identities,&session.account_id,&config.chain_scope,js_sys::Date::now() as u64,false).await?};
+    let authority=if let Some(proof)=proof.as_ref() {
+        gate::identity::authenticate(&auth,&i,config,&token,proof,route.method(),&target,&bytes,js_sys::Date::now() as u64).await?
+    }else{
+        let device=auth.device(&i.cid_number,&session.device_id).await?.ok_or(BusinessError::new(401,"device_not_registered"))?;
+        let admission=auth.admission(&i.cid_number).await?.ok_or(BusinessError::new(403,"registration_required"))?;
+        gate::identity::session_authority(&i,&admission,&device,&session,config,js_sys::Date::now() as u64)?
     };
-    let membership = if matches!(
-        route,
-        Route::TataChat(_)
-            | Route::Membership(_)
-            | Route::Square(
-                SquareRoute::PrepareUpload
-                    | SquareRoute::Manifest
-                    | SquareRoute::CompleteUpload
-                    | SquareRoute::ConfirmPost
-            )
-    ) {
-        Some(
-            citizenserve::chain::subscription::platform(
-                &rpc,
-                &config.chain_scope,
-                &session.cid_number,
-                &session.account_id,
-                js_sys::Date::now() as u64,
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    let i = if matches!(route, Route::TataChat(_)) {
-        // 许可必须使用会员读取冻结的同一块身份，不把另一个头/缓存身份拼成同块证明。
-        let current = membership.as_ref().ok_or_else(unavailable)?;
-        let m = citizenserve::chain::identity::metadata(&rpc, &current.anchor).await?;
-        let identity = citizenserve::chain::identity::by_cid(
-            &rpc,
-            &m,
-            &current.anchor,
-            &session.cid_number,
-            &config.chain_scope,
-            js_sys::Date::now() as u64,
-        )
-        .await?
-        .ok_or(BusinessError::new(403, "cid_not_active"))?;
-        identities
-            .project(std::slice::from_ref(&identity), None, None)
-            .await?;
-        identity
-    } else {
-        projection::current(
-            &rpc,
-            &identities,
-            &session.account_id,
-            &config.chain_scope,
-            js_sys::Date::now() as u64,
-            false,
-        )
-        .await?
-    };
-    let authority = gate::identity::authenticate(
-        &auth,
-        &i,
-        config,
-        &token,
-        &proof,
-        route.method(),
-        &target,
-        &bytes,
-        js_sys::Date::now() as u64,
-    )
-    .await?;
     let authorization = profile_service::Authorization::new(
         &authority,
         config,
         &token,
         js_sys::Date::now() as u64,
     )?;
+    // 会员门禁只能消费注册门禁完整鉴权后的Authority；同块读取不提前消费业务资源。
+    let operation=citizenserve::membership::policy::api(route,url.path())?;
+    let pricing=if matches!(operation,citizenserve::membership::policy::Operation::Membership) {
+        Some(citizenserve::chain::subscription::current_for_authority(&rpc,&authority,js_sys::Date::now() as u64).await?)
+    }else{None};
+    let membership=if operation.requirement(&i.cid_number)==citizenserve::membership::policy::Requirement::Member {
+        Some(citizenserve::chain::subscription::for_authority(&rpc,&authority,js_sys::Date::now() as u64).await?)
+    }else{None};
+    let permit=citizenserve::membership::gate::authorize(&authority,operation.clone(),membership.as_ref(),js_sys::Date::now() as u64)?;
     let db = || env.d1("DB").map_err(|_| unavailable());
     let objects = || media::R2Storage::configured(env);
     let member = || membership.as_ref().ok_or_else(unavailable);
@@ -880,12 +825,12 @@ async fn protected(
     };
     let result = match route {
         Route::TataChat(_) => {
-            tatachat::access(env, config, &authority, &token, member()?, &bytes).await?
+            tatachat::access(env, config, &authority, &token, &bytes).await?
         }
         Route::Membership(r) => {
             use citizenserve::membership::{self, ports::Repository, routes::MembershipRoute};
             let repo = repositories::membership::D1Membership { db: db()? };
-            let current = member()?;
+            let current = pricing.as_ref().ok_or_else(unavailable)?;
             match r {
                 MembershipRoute::Current => {
                     membership::service::current(&repo, &authorization, current).await?
@@ -989,13 +934,13 @@ async fn protected(
                     )
                     .await?
                 }
-                ProtectedUserRoute::Asset => {
+                ProtectedUserRoute::Asset | ProtectedUserRoute::CardAvatar => {
                     use citizenserve::user::profile_assets::{self, Kind};
-                    let (cid, kind) = url
-                        .path()
-                        .strip_prefix("/api/user/profiles/")
-                        .and_then(|s| s.split_once("/assets/"))
-                        .ok_or_else(unavailable)?;
+                    let (cid,kind)=if r==ProtectedUserRoute::CardAvatar {
+                        (url.path().strip_prefix("/api/user/cards/").and_then(|s|s.strip_suffix("/avatar")).ok_or_else(unavailable)?,"avatar")
+                    }else{
+                        url.path().strip_prefix("/api/user/profiles/").and_then(|s|s.split_once("/assets/")).ok_or_else(unavailable)?
+                    };
                     let h = |name| request.headers().get(name).map_err(|_| unavailable());
                     let data = profile_assets::read(
                         &repositories::media::D1Assets { db: db()? },
@@ -1032,6 +977,11 @@ async fn protected(
                             .set("content-range", &range)
                             .map_err(|_| unavailable())?;
                     }
+                    if card_avatar {
+                        // R2读取后使用原AUTH_ASSERT和真实提交时钟重查准入/设备/会话/绑定及注销围栏。
+                        repositories::batch(&db()?,serde_json::json!({"auth":authorization}),"",BusinessError::new(401,"invalid_session")).await?;
+                    }
+                    permit.require(&authorization,&operation,js_sys::Date::now() as u64)?;
                     authority
                         .identity()
                         .require_current(js_sys::Date::now() as u64)?;
@@ -1039,6 +989,9 @@ async fn protected(
                         return Err(BusinessError::new(401, "session_expired"));
                     }
                     return Ok(response);
+                }
+                ProtectedUserRoute::Card => {
+                    profile_service::card(&repo,&authorization,url.path().strip_prefix("/api/user/cards/").ok_or_else(unavailable)?).await?
                 }
                 ProtectedUserRoute::Profile => {
                     profile_service::read(
@@ -1235,7 +1188,7 @@ async fn protected(
                         &authorization,
                         kind,
                         square::routes::limit(&query)?,
-                        entitlement.as_ref().ok_or_else(unavailable)?,
+                        &permit,
                     )
                     .await?
                 }
@@ -1244,7 +1197,7 @@ async fn protected(
                         &repo,
                         &authorization,
                         &square::posts::Query::read(&query)?,
-                        entitlement.as_ref().ok_or_else(unavailable)?,
+                        &permit,
                     )
                     .await?
                 }
@@ -1325,6 +1278,17 @@ async fn protected(
         .is_some_and(|m| delivery_now >= m.deadline())
     {
         return Err(BusinessError::new(503, "membership_verification_expired"));
+    }
+    permit.require(&authorization,&operation,js_sys::Date::now() as u64)?;
+    let metric=match &operation {
+        citizenserve::membership::policy::Operation::Profile(target) if target!=authorization.cid()=>Some(("profile",target.clone())),
+        citizenserve::membership::policy::Operation::Square(SquareRoute::Post)=>Some(("detail",url.path().into())),
+        citizenserve::membership::policy::Operation::Square(SquareRoute::ConfirmPost)=>Some(("published",result["post_id"].as_str().ok_or_else(unavailable)?.into())),
+        _=>None,
+    };
+    if let Some((metric,key))=metric {
+        let id=if metric=="published" {format!("publish:{key}")}else{citizenserve::shared::crypto::hex(&runtime::random::<16>()?)};
+        repositories::membership::D1Membership{db:db()?}.meter(&authorization,&permit,metric,1,&key,&id).await?;
     }
     let mut r = Response::from_json(&result).map_err(|_| unavailable())?;
     r.headers_mut()

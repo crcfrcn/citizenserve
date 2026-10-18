@@ -50,7 +50,9 @@ pub(crate) async fn http(
     id: &str,
     index: u32,
 ) -> Result<worker::Response> {
-    let access = super::routes::authorize(request, env, host).await?;
+    let base = super::routes::authorize(request, env, host).await?;
+    let limit=citizenserve::tatachat::auth::ports::Host::attachment_limit(host,base.snapshot()).await?;
+    let access=base.for_attachments(limit,super::config::now())?;
     let store = super::D1Store::new(env)?;
     let objects = R2Objects::new(env, store.clone())?;
     match request.method() {

@@ -43,7 +43,7 @@ pub fn content(
     items: &[Item],
     level: Level,
 ) -> Result<()> {
-    let p = membership::plan(level);
+    let p = membership::limits::plan(level);
     if items.len() > 110 {
         return Err(invalid());
     }
@@ -73,7 +73,7 @@ pub fn content(
 impl Item {
     pub fn validate(&self, level: Level) -> Result<()> {
         let l = membership::limits::limits(level);
-        let p = membership::plan(level);
+        let p = membership::limits::plan(level);
         if self.byte_size == 0
             || self.derivative_byte_size == 0
             || self.width == 0

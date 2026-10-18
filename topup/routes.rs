@@ -48,10 +48,8 @@ impl TopupRoute {
         }
     }
     pub const fn settlement(self) -> bool {
-        matches!(
-            self,
-            Self::Pending | Self::History | Self::Claim | Self::Settled | Self::Exception
-        )
+        matches!(crate::server::gate::policy::api(crate::server::gate::request::Route::Topup(self)),
+            crate::server::gate::policy::Rule::Open(crate::server::gate::policy::OpenRule::Settlement))
     }
     pub const fn body_limit(self) -> usize {
         match self {

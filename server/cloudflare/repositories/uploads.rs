@@ -1,6 +1,6 @@
 use super::{all, batch, fail, first, string};
 use citizenserve::{
-    chain::subscription::Current,
+    chain::subscription::Facts,
     shared::{Error, Result},
     square::{
         media,
@@ -25,17 +25,17 @@ pub(crate) async fn load(db: &D1Database, sql: &str, id: &str) -> Result<Option<
     row["media_items"] = json!(items);
     serde_json::from_value(row).map(Some).map_err(|_| fail())
 }
-pub(crate) fn membership(current: &Current, now: u64) -> Result<Value> {
+pub(crate) fn membership(current: &Facts, now: u64) -> Result<Value> {
     let s = current.require(now)?;
     let level = current.level(now)?;
     let mut limits =
-        serde_json::to_value(citizenserve::membership::plan(level)).map_err(|_| fail())?;
+        serde_json::to_value(citizenserve::membership::limits::plan(level)).map_err(|_| fail())?;
     limits["storage_bytes"] = json!(citizenserve::membership::limits::limits(level).storage_bytes);
     Ok(
         json!({"membership_checked":current.checked_at(),"membership_deadline":current.deadline(),"paid_until":s.paid_until,"period_start":s.last_charged_at,"chain_time":current.chain_time,"limits":limits}),
     )
 }
-pub(crate) fn command(auth: &Authorization, u: &Upload, current: &Current) -> Result<Value> {
+pub(crate) fn command(auth: &Authorization, u: &Upload, current: &Facts) -> Result<Value> {
     let mut cmd = membership(current, auth.now())?;
     cmd["auth"] = json!(auth);
     cmd["upload"] = json!(u);
@@ -60,7 +60,7 @@ impl Repository for D1Uploads {
         &self,
         auth: &Authorization,
         u: &Upload,
-        current: &Current,
+        current: &Facts,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         SendFuture::new(async move {
             let mut cmd = command(auth, u, current)?;
@@ -154,7 +154,7 @@ impl Repository for D1Uploads {
         &self,
         auth: &Authorization,
         u: &Upload,
-        current: &Current,
+        current: &Facts,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         SendFuture::new(async move {
             batch(

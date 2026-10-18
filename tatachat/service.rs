@@ -39,19 +39,26 @@ where
     pub async fn execute(&self, session: &mut Session, bytes: &[u8]) -> Result<Executed> {
         self.limits.validate()?;
         session.check(self.host).await?;
-        let now = self.host.now_millis();
         let actor = session.access().actor().clone();
-        let maximum = session
-            .access()
-            .effective_max_attachment_bytes(self.limits.max_attachment_bytes)?;
+        let frame=protocol::decode_chat_frame(bytes,self.limits.max_frame_bytes)?;
+        let attachment=matches!(frame.body.as_ref(),Some(protocol::chat_frame::Body::BeginAttachment(_)|protocol::chat_frame::Body::CompleteAttachment(_)));
+        let scoped=if attachment {
+            let maximum=self.host.attachment_limit(session.access().snapshot()).await?;
+            Some(session.access().for_attachments(maximum,self.host.now_millis())?)
+        }else{None};
+        // 独立持有权限快照，解析限速器时不借用整个可变会话。
+        let base=session.access().clone();
+        let access=scoped.as_ref().unwrap_or(&base);
+        let maximum=if attachment {access.effective_max_attachment_bytes(self.limits.max_attachment_bytes)?}else{self.limits.max_attachment_bytes};
+        // 会员I/O之后读取执行时钟；不把旧的请求开始时间传入新派生许可。
+        let now = self.host.now_millis();
         let command = parse_control_command(
-            protocol::decode_chat_frame(bytes, self.limits.max_frame_bytes)?,
+            frame,
             &actor,
             now,
             maximum,
             &mut session.limits,
         )?;
-        let access = session.access();
         let mut notifications = Vec::new();
         let frame = match command {
             Command::Ping { sent_at_millis } => protocol::pong_frame(sent_at_millis, now),

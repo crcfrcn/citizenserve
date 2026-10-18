@@ -24,7 +24,7 @@ pub trait Repository {
         auth: &Authorization,
         day: &str,
         count: u32,
-        entitlement: &crate::chain::subscription::Entitlement,
+        permit: &crate::membership::gate::Permit,
     ) -> impl Future<Output = Result<u32>> + Send;
     fn follows(
         &self,

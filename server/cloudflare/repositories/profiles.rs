@@ -41,6 +41,13 @@ WHERE json_extract(?1,'$.after.cid_number')=json_extract(?1,'$.auth.cid_number')
 ON CONFLICT(cid_number) DO UPDATE SET display_name=excluded.display_name,bio=excluded.bio,avatar_object_key=excluded.avatar_object_key,avatar_content_hash=excluded.avatar_content_hash,banner_object_key=excluded.banner_object_key,banner_content_hash=excluded.banner_content_hash,updated_at=excluded.updated_at;
 "#;
 impl Repository for D1Profiles {
+    // 最小聊天名片仅携带原昵称、头像及显示徽标，不查询社交计数或背景。
+    fn card(&self,target:&str,now:u64)->impl std::future::Future<Output=Result<Option<citizenserve::user::profile_service::Card>>>+Send {
+        SendFuture::new(async move {
+            let row:Option<Value>=first(&self.db,"SELECT u.cid_number,u.account_id,u.identity_level,CASE WHEN u.identity_level IN ('voting','candidate') THEN 1 ELSE 0 END is_certified,COALESCE(p.display_name,'') display_name,p.avatar_object_key,COALESCE(p.updated_at,0) updated_at,m.membership_level,CASE WHEN m.subscription_status IN ('active','cancelled') AND m.paid_until>?2 THEN 1 ELSE 0 END membership_active FROM users u LEFT JOIN user_profiles p ON p.cid_number=u.cid_number LEFT JOIN square_memberships m ON m.cid_number=u.cid_number WHERE u.cid_number=?1 AND u.cid_status='active'",&[string(target),JsValue::from_f64(now as f64)]).await?;
+            row.map(|mut row|{for key in ["is_certified","membership_active"]{row[key]=json!(row[key].as_u64()==Some(1));}serde_json::from_value(row).map_err(|_|fail())}).transpose()
+        })
+    }
     fn doc(&self, cid: &str) -> impl std::future::Future<Output = Result<Option<Doc>>> + Send {
         SendFuture::new(async move {
             first(

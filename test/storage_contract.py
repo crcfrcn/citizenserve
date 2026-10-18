@@ -45,7 +45,8 @@ class StorageContract(unittest.TestCase):
     def test_schema_is_repeatable_and_preserves_business_data_model(self):
         self.db.executescript(SCHEMA)
         tables = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        self.assertEqual(len(tables), 39)  # 包含账户注销的挑战、任务和断言。
+        self.assertTrue({'membership_usage', 'membership_operations'}.issubset({row[0] for row in tables}))
+        self.assertEqual(len(tables), 41)  # 原账户注销表保留，另含统一会员计量及幂等操作两表。
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset({row[0] for row in tables}))
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
 
@@ -136,4 +137,4 @@ class ExternalSchemaContract(unittest.TestCase):
         indexes={r[1] for r in db.execute('PRAGMA index_list(topup_orders)')}
         self.assertIn('idx_topup_paid_gmb',indexes)
         self.assertIn('active_claim',{r[1] for r in db.execute('PRAGMA table_info(chain_extrinsic_relays)')})
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0],39);db.close()
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0],41);db.close()

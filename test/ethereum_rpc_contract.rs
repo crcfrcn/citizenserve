@@ -36,6 +36,20 @@ fn all_twenty_six_methods_pass_independent_contract() {
         assert!(b.items[0].is_ok());
     }
 }
+
+#[test]
+fn gate_rejects_all_invalid_rpc_items_without_requiring_a_node() {
+    use citizenserve::server::gate::{self,request::Incoming,Classification};
+    let input=Incoming {method:"POST",url:"https://nrcrpc.crcfrcn.com/",service_origin:None,
+        media_origin:None,browser_origin:None,preflight_method:None,preflight_headers:None,
+        content_length:None,authorization:None,mls_proof:None,internal_header:false,upgrade:None,websocket_protocol:None};
+    let Classification::Open(entry)=gate::classify(input) else {panic!("必须识别准确RPC入口")};
+    let scope=entry.open().unwrap();
+    let error=gate::open::network_rpc(&scope,br#"[{"jsonrpc":"2.0","id":1,"method":"author_submitExtrinsic","params":[]},{"jsonrpc":"2.0","id":2,"method":"unregistered","params":[]}]"#).err().unwrap();
+    assert_eq!(error[0]["error"]["code"],-32601);
+    assert_eq!(error[1]["error"]["code"],-32601);
+    assert!(gate::open::network_rpc(&scope,br#"{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}"#).is_ok());
+}
 #[test]
 fn invalid_items_never_reach_node_and_mixed_batch_has_per_item_errors() {
     let b=rpc::parse(br#"[{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]},{"jsonrpc":"2.0","id":2,"method":"author_submitExtrinsic","params":[]},{"jsonrpc":"2.0","id":3,"method":"eth_getBalance","params":[]}]"#).unwrap();
