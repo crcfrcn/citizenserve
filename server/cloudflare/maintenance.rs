@@ -53,9 +53,15 @@ pub(crate) struct BudgetRpc {
     initial: BTreeMap<String, Value>,
 }
 impl BudgetRpc {
-    pub fn configured(env: &Env, budget: Budget, cap: Option<Anchor>) -> Result<Self> {
+    pub async fn configured(
+        env: &Env,
+        budget: Budget,
+        cap: Option<Anchor>,
+        purpose: crate::chain::Purpose,
+    ) -> Result<Self> {
+        budget.business(1)?; // 本动作的全局RPC预扣也占一次D1 I/O。
         Ok(Self {
-            inner: crate::chain::Chain::configured(env)?,
+            inner: crate::chain::Chain::configured(env, purpose).await?,
             budget,
             cap,
             started: now(),
@@ -208,7 +214,7 @@ impl Repository for Membership {
     fn overview(
         &self,
         a: &citizenserve::user::profile_service::Authorization,
-        c: &subscription::Current,
+        c: &citizenserve::membership::Record,
     ) -> impl std::future::Future<Output = Result<citizenserve::membership::creator::Overview>> + Send
     {
         SendFuture::new(async move {
@@ -253,6 +259,8 @@ struct Progress {
     findings: Vec<Value>,
     #[serde(default)]
     projection_cursor: Option<Anchor>,
+    #[serde(default)]
+    prices_written: bool,
     #[serde(default)]
     error: Option<String>,
 }
@@ -488,7 +496,13 @@ async fn qualification(
         used: u64,
     }
     let Some(owner):Option<Owner>=repo.first("SELECT u.account_id,COALESCE(t.byte_size,0) used FROM users u LEFT JOIN resource_totals t ON t.cid_number=u.cid_number AND t.resource_key='square_storage' WHERE u.cid_number=?1 AND u.cid_status='active'",&[string(cid)]).await? else{return Ok((None,None));};
-    let rpc = BudgetRpc::configured(env, repo.budget.clone(), None)?;
+    let rpc = BudgetRpc::configured(
+        env,
+        repo.budget.clone(),
+        None,
+        crate::chain::Purpose::StorageCleanup,
+    )
+    .await?;
     let genesis = env
         .var("CHAIN_GENESIS_HASH")
         .map_err(|_| bad())?
@@ -649,8 +663,10 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
     let result: Result<bool> = async {
         match task.work_kind {
             Work::Authentication => {
-                repo.authentication().await?;
-                Ok(true)
+                let (changed, more) = repo.authentication().await?;
+                // 真正删行也是持久进度；满批续跑不能被误判无进度而阻断。
+                p.examined = p.examined.checked_add(changed).ok_or_else(bad)?;
+                Ok(!more)
             }
             Work::Uploads => uploads(env, &repo, &lease, &mut p).await,
             Work::Storage => {
@@ -681,24 +697,45 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
                     budget: budget.clone(),
                 };
                 let cache = repo.cache(&m.id).await?;
-                let mut rpc = BudgetRpc::configured(env, budget.clone(), None)?.restored(cache);
-                let projection = if task.work_kind == Work::Identity {
+                let mut rpc = BudgetRpc::configured(
+                    env,
+                    budget.clone(),
+                    None,
+                    crate::chain::Purpose::Maintenance,
+                )
+                .await?
+                .restored(cache);
+                let projection: Result<bool> = if task.work_kind == Work::Identity {
                     citizenserve::user::projection::catch_up(&rpc, &ids, &genesis, now()).await
                 } else {
-                    let cap = ids.cursor().await?.ok_or_else(bad)?;
+                    // 会员追平身份任务实际观察并完成的高度，不能把部分身份游标当成健康。
+                    let health: Value = repo
+                        .first(
+                            "SELECT last_slot,updated_at FROM scheduler_leases WHERE lease_key=?1",
+                            &[string(&format!("sync:identity:{genesis}"))],
+                        )
+                        .await?
+                        .ok_or_else(bad)?;
+                    citizenserve::user::ports::sync_deadline(
+                        health["updated_at"].as_u64().ok_or_else(bad)?,
+                        now(),
+                    )?;
+                    let height = health["last_slot"].as_u64().ok_or_else(bad)?;
                     let head = finalized::head(&rpc, &genesis).await?;
-                    let verified = finalized::canonical(&rpc, &cap.hash, &head).await?;
-                    if verified.number != cap.number {
+                    let hash = rpc.call("chain_getBlockHash", json!([height])).await?;
+                    let cap =
+                        finalized::canonical(&rpc, hash.as_str().ok_or_else(bad)?, &head).await?;
+                    if cap.number != height {
                         return Err(bad());
                     }
-                    rpc.cap = Some(verified);
+                    rpc.cap = Some(cap.clone());
                     let members = Membership {
                         inner: D1Membership {
                             db: env.d1("DB").map_err(|_| bad())?,
                         },
                         budget: budget.clone(),
                     };
-                    citizenserve::membership::projection::catch_up(
+                    match citizenserve::membership::projection::catch_up(
                         &rpc,
                         &members,
                         &genesis,
@@ -706,7 +743,13 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
                         10,
                     )
                     .await
-                    .map(|_| ())
+                    {
+                        Ok(_) => Ok(members
+                            .cursor()
+                            .await?
+                            .is_some_and(|c| c.number >= cap.number)),
+                        Err(e) => Err(e),
+                    }
                 };
                 let delta = rpc.delta()?;
                 repo.append_cache(&lease, task.work_kind, task.scheduled_at, &delta)
@@ -728,8 +771,48 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
                     .await?
                 };
                 match projection {
-                    Ok(()) => Ok(true),
-                    Err(e) if e.code == "maintenance_budget_exhausted" => Ok(false),
+                    Ok(true) => {
+                        let cursor = p.projection_cursor.as_ref().ok_or_else(bad)?;
+                        let kind = if task.work_kind == Work::Identity {
+                            "identity"
+                        } else {
+                            "membership"
+                        };
+                        repo.healthy(&lease, kind, &genesis, cursor.number, now())
+                            .await?;
+                        if task.work_kind == Work::Membership {
+                            // 同轮共享RPC/metadata；KV价格失效不触发用户请求补查。
+                            let cap = rpc.cap.clone().ok_or_else(bad)?;
+                            let cache = crate::cache::DisplayCache::configured(env);
+                            use citizenserve::chain::network_ports::Cache;
+                            let key = format!("membership:prices:{genesis}");
+                            if !p.prices_written {
+                                let metadata = identity::metadata(&rpc, &cap).await?;
+                                let prices = [
+                                    subscription::price(&rpc, &metadata, &cap, "Freedom").await?,
+                                    subscription::price(&rpc, &metadata, &cap, "Democracy").await?,
+                                    subscription::price(&rpc, &metadata, &cap, "Spark").await?,
+                                ];
+                                let values = prices
+                                    .into_iter()
+                                    .map(subscription::safe_price)
+                                    .collect::<Result<Vec<_>>>()?;
+                                budget.business(1)?;
+                                cache.put(&key, &json!(values), now(), 600).await?;
+                                p.prices_written = true;
+                            }
+                            rpc.cap = None;
+                            return refresh_member(&repo, &rpc, &genesis, &mut p.cursor).await;
+                        }
+                        Ok(true)
+                    }
+                    Ok(false) => Ok(false),
+                    Err(e)
+                        if e.code == "maintenance_budget_exhausted"
+                            || e.code == "chain_rpc_budget_exceeded" =>
+                    {
+                        Ok(false)
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -740,7 +823,15 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
     let progressed = before != value;
     let (state, delay) = match result {
         Ok(true) => (State::Done, 1),
-        Ok(false) => (State::Pending, 1),
+        Ok(false) if progressed => (State::Pending, 1),
+        Ok(false) => (
+            if lease.attempts() >= 4 {
+                State::Blocked
+            } else {
+                State::Pending
+            },
+            60,
+        ),
         Err(e) => {
             value["error"] = json!(e.code);
             (
@@ -763,3 +854,84 @@ pub async fn consume(env: &Env, m: &Message, budget: Budget, nonce: &str) -> Res
         Disposition::Retry(delay)
     })
 }
+
+/// 每个维护批次最多领取一个CID；完成的到期版本保留回执，不被TTL清理重查。
+async fn refresh_member(
+    repo: &D1Maintenance,
+    rpc: &BudgetRpc,
+    genesis: &str,
+    cursor: &mut String,
+) -> Result<bool> {
+    if repo.budget.remaining() < 20 {
+        return Ok(false);
+    }
+    let checked = now();
+    let candidate: Option<Value> = repo
+        .first(
+            REFRESH_CANDIDATE,
+            &[
+                string(genesis),
+                JsValue::from_f64(checked as f64),
+                string(cursor),
+            ],
+        )
+        .await?;
+    let Some(row) = candidate else {
+        return Ok(true);
+    };
+    let cid = row["cid_number"].as_str().ok_or_else(bad)?;
+    let account = row["account_id"].as_str().ok_or_else(bad)?;
+    let revision = row["binding_revision"].as_u64().ok_or_else(bad)?;
+    let paid = row["paid_until"].as_u64().ok_or_else(bad)?;
+    let key = format!("member-refresh:{genesis}:{cid}:{revision}:{paid}");
+    let token = citizenserve::shared::crypto::hex(&crate::runtime::random::<32>()?);
+    let claimed = repo
+        .execute(
+            REFRESH_CLAIM,
+            &[
+                string(&key),
+                string(&token),
+                JsValue::from_f64(checked as f64),
+                JsValue::from_bool(row["authorized_price_fen"].is_null()),
+            ],
+        )
+        .await?;
+    if claimed != 1 {
+        return Ok(false);
+    }
+    let result=async {
+        let target=row["creator_cid_number"].as_str();
+        let projection=citizenserve::membership::projection::refresh(rpc,genesis,cid,account,revision,target,checked).await?;
+        repo.budget.business(1)?;
+        let command=json!({"auth":{"now":now()},"projection":projection,"refresh":{
+            "cid":cid,"account":account,"revision":revision,"paid_until":paid,"block":row["finalized_block_number"],"target":target,"key":key,"token":token}});
+        let raw=string(&command.to_string());
+        let statements=include_str!("sql/project_subscription.sql").split("-- statement").skip(1).map(|s|repo.db.prepare(s).bind(std::slice::from_ref(&raw))).collect::<worker::Result<Vec<_>>>().map_err(|_|bad())?;
+        let results=repo.db.batch(statements).await.map_err(|_|bad())?;
+        if results.iter().any(|r|!r.success()){return Err(bad())}Ok(())
+    }.await;
+    if result.is_err() {
+        repo.execute("UPDATE scheduler_leases SET lease_token=NULL,lease_expires_at=0,updated_at=?3 WHERE lease_key=?1 AND lease_token=?2",&[string(&key),string(&token),JsValue::from_f64(now() as f64)]).await?;
+    }
+    result?;
+    *cursor = cid.into();
+    Ok(false)
+}
+const REFRESH_CANDIDATE: &str = r#"
+WITH candidates AS (
+ SELECT m.cid_number,NULL creator_cid_number,m.paid_until,m.finalized_block_number,m.authorized_price_fen,u.account_id,u.binding_revision
+ FROM square_memberships m JOIN users u USING(cid_number) WHERE u.cid_status='active' AND (m.authorized_price_fen IS NULL OR (m.subscription_status IN ('active','cancelled') AND m.paid_until<=?2))
+ UNION ALL
+ SELECT m.subscriber_cid_number,m.creator_cid_number,m.paid_until,m.finalized_block_number,m.authorized_price_fen,u.account_id,u.binding_revision
+ FROM square_creator_subscriptions m JOIN users u ON u.cid_number=m.subscriber_cid_number WHERE u.cid_status='active' AND m.authorized_price_fen IS NULL
+)
+SELECT c.* FROM candidates c LEFT JOIN scheduler_leases l ON l.lease_key='member-refresh:'||?1||':'||c.cid_number||':'||c.binding_revision||':'||c.paid_until
+WHERE c.cid_number>=?3 AND NOT EXISTS(SELECT 1 FROM account_deletions d WHERE d.cid_number=c.cid_number AND d.state='pending')
+AND (l.lease_key IS NULL OR ((l.last_slot=0 OR c.authorized_price_fen IS NULL) AND l.lease_expires_at<=?2 AND (l.last_slot=1 OR (l.revision<4 AND l.updated_at<=?2-60000))))
+ORDER BY c.cid_number,c.creator_cid_number LIMIT 1
+"#;
+const REFRESH_CLAIM: &str = r#"
+INSERT INTO scheduler_leases(lease_key,last_slot,revision,lease_token,lease_expires_at,updated_at) VALUES(?1,0,1,?2,?3+45000,?3)
+ON CONFLICT(lease_key) DO UPDATE SET last_slot=0,revision=CASE WHEN scheduler_leases.last_slot=1 THEN 1 ELSE scheduler_leases.revision+1 END,lease_token=excluded.lease_token,lease_expires_at=excluded.lease_expires_at,updated_at=excluded.updated_at
+WHERE (scheduler_leases.last_slot=0 OR ?4=1) AND scheduler_leases.lease_expires_at<=?3 AND (scheduler_leases.last_slot=1 OR (scheduler_leases.revision<4 AND scheduler_leases.updated_at<=?3-60000))
+"#;

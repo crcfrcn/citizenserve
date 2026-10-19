@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionLimits {
+    // 此处仅保留原单连接解析防御；全设备帧窗及跨设备CID日预算由宿主统一执行。
     started_at: Option<u64>,
     resolve_count: u32,
 }

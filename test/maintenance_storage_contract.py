@@ -17,7 +17,7 @@ class MaintenanceStorageContract(unittest.TestCase):
     def finish(self,l,loc,proof=None):system(self.db,'finish_background_delete.sql',lease=l,locator=loc,proof=proof,now=l['acquired_at']+1)
     def test_repeated_schedule_active_kind_slot_not_skipped(self):
         l=task(self.db);task(self.db,slot=600000)
-        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM maintenance_jobs').fetchone()[0],1);self.assertEqual(self.db.execute('SELECT last_slot FROM scheduler_leases').fetchone()[0],300000)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM maintenance_jobs').fetchone()[0],1);self.assertEqual(self.db.execute('SELECT last_slot FROM scheduler_leases WHERE lease_key="cron:uploads"').fetchone()[0],300000)
     def test_progress_lease_cas_and_unknown_failure_four_attempts(self):
         l=task(self.db);bad={**l,'token':'ee'*16}
         with self.assertRaises(sqlite3.IntegrityError):system(self.db,'progress_maintenance_job.sql',lease=bad,progress='{}',state='done',progressed=False,delay=1,now=l['acquired_at'])
@@ -68,3 +68,150 @@ class MaintenanceStorageContract(unittest.TestCase):
         c=self.complete();l=task(self.db);loc=locator(c);self.begin(l,loc);loc.update(private_done=True,public_done=True,purge_done=True)
         self.db.execute("UPDATE maintenance_jobs SET progress_json='{}'");self.db.commit()
         with self.assertRaises(sqlite3.IntegrityError):self.finish(l,loc)
+
+# 直接执行现有实现中的正式预算与租约SQL，不复制一份宽松的测试实现。
+class ServiceGateMaintenanceContract(unittest.TestCase):
+    def setUp(self):
+        from community_storage_contract import constant,ROOT
+        import re
+        self.db=sqlite3.connect(':memory:');ready(self.db)
+        self.reserve_sql=constant('maintenance.rs','RPC_RESERVE');self.assert_sql=constant('maintenance.rs','RPC_ASSERT')
+        source=(ROOT/'server/cloudflare/maintenance.rs').read_text()
+        self.claim_sql=re.search(r'const REFRESH_CLAIM:\s*&str\s*=\s*r#"([\s\S]*?)"#;',source)[1]
+        self.candidate_sql=re.search(r'const REFRESH_CANDIDATE:\s*&str\s*=\s*r#"([\s\S]*?)"#;',source)[1]
+    def tearDown(self):self.db.close()
+    def budget(self,db,pool,n,minute=100,day=1000,now=1000000):
+        with db:
+            for name,span,limit in [('minute',60000,minute),('day',86400000,day)]:
+                window=now//span
+                db.execute(self.reserve_sql,(f'rpc:{pool}:{name}:{window}',n,(window+1)*span,limit));db.execute(self.assert_sql)
+    def test_minute_and_day_are_atomic_isolated_and_never_refunded(self):
+        self.budget(self.db,'public',64,day=70)
+        with self.assertRaises(sqlite3.IntegrityError):self.budget(self.db,'public',40,day=70)
+        self.assertEqual([r[0] for r in self.db.execute('SELECT request_count FROM rate_windows')],[64,64])
+        self.budget(self.db,'background',45)
+        self.budget(self.db,'public',6,day=70,now=1060000)
+        with self.assertRaises(sqlite3.IntegrityError):self.budget(self.db,'public',1,day=70,now=1120000)
+        self.assertEqual(self.db.execute("SELECT request_count FROM rate_windows WHERE rate_key='rpc:public:day:0'").fetchone()[0],70)
+    def test_parallel_budget_only_one_last_slot(self):
+        import concurrent.futures,tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'db';db=sqlite3.connect(path);ready(db);self.budget(db,'public',99);db.close()
+            def attempt(_):
+                db=sqlite3.connect(path,timeout=10)
+                try:self.budget(db,'public',1);return True
+                except sqlite3.IntegrityError:return False
+                finally:db.close()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(attempt,range(24)))
+            self.assertEqual(sum(results),1)
+    def test_refresh_lease_crash_backoff_four_attempts_and_completion(self):
+        key='member-refresh:genesis:cid:1:2000000';now=3000000
+        self.assertEqual(self.db.execute(self.claim_sql,(key,'token',now,False)).rowcount,1)
+        self.assertEqual(self.db.execute(self.claim_sql,(key,'other',now+45000,False)).rowcount,0)
+        for attempt in range(2,5):
+            now+=60000
+            self.assertEqual(self.db.execute(self.claim_sql,(key,'token',now,False)).rowcount,1)
+            self.assertEqual(self.db.execute('SELECT revision FROM scheduler_leases WHERE lease_key=?',(key,)).fetchone()[0],attempt)
+        self.assertEqual(self.db.execute(self.claim_sql,(key,'token',now+60000,False)).rowcount,0)
+        self.db.execute('UPDATE scheduler_leases SET last_slot=1,lease_token=NULL,lease_expires_at=0 WHERE lease_key=?',(key,))
+        self.assertEqual(self.db.execute(self.claim_sql,(key,'token',now+86400000,False)).rowcount,0)
+        self.assertEqual(self.db.execute(self.claim_sql,(key+':new-version','token',now+60000,False)).rowcount,1)
+    def test_parallel_refresh_only_one_claim(self):
+        import concurrent.futures,tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'db';db=sqlite3.connect(path);ready(db);db.close()
+            def claim(n):
+                db=sqlite3.connect(path,timeout=10)
+                try:
+                    with db:return db.execute(self.claim_sql,('member-refresh:key',str(n),3000000,False)).rowcount
+                finally:db.close()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(claim,range(24)))
+            self.assertEqual(sum(results),1)
+    def test_refresh_cas_preserves_renewal_and_real_authorized_price(self):
+        a=auth();key=f"member-refresh:{a['chain_scope']}:{a['cid_number']}:1:2000000"
+        self.db.execute(self.claim_sql,(key,'token',a['now'],False));self.db.commit()
+        c=projection();c['refresh']={'cid':a['cid_number'],'account':a['account_id'],'revision':1,'paid_until':2000000,'block':0,'target':None,'key':key,'token':'token'}
+        self.db.execute('UPDATE square_memberships SET paid_until=3000000');self.db.commit()
+        with self.assertRaises(sqlite3.IntegrityError):content_run(self.db,'project_subscription.sql',c)
+        self.assertEqual(self.db.execute('SELECT paid_until FROM square_memberships').fetchone()[0],3000000)
+        self.db.execute('UPDATE square_memberships SET paid_until=2000000,authorized_price_fen=NULL');self.db.commit()
+        content_run(self.db,'project_subscription.sql',c)
+        self.assertEqual(self.db.execute('SELECT authorized_price_fen FROM square_memberships').fetchone()[0],199900)
+        self.assertEqual(self.db.execute('SELECT last_slot FROM scheduler_leases WHERE lease_key=?',(key,)).fetchone()[0],1)
+        self.assertIsNone(self.db.execute(self.candidate_sql,(a['chain_scope'],a['now']+86400000,'')).fetchone())
+
+
+class ResourceHistoryContract(unittest.TestCase):
+    def setUp(self):
+        from community_storage_contract import constant
+        self.db=sqlite3.connect(':memory:');ready(self.db)
+        self.operations=constant('maintenance.rs','HISTORY_OPERATIONS')
+        self.usage=constant('maintenance.rs','HISTORY_USAGE')
+        self.browse=constant('maintenance.rs','HISTORY_BROWSE')
+        self.reserve=constant('maintenance.rs','CLEANUP_RESERVE');self.assertion=constant('maintenance.rs','CLEANUP_ASSERT')
+    def tearDown(self):self.db.close()
+    def pool(self,db,n=50,day=1):
+        with db:
+            db.execute(self.reserve,(f'cleanup:day:{day}',n,(day+1)*86400000,1000000));db.execute(self.assertion)
+    def test_history_is_bounded_and_preserves_reserved_publish_and_boundary(self):
+        cid=auth()['cid_number'];cutoff=10000000
+        self.db.executemany("INSERT INTO membership_operations VALUES(?,?,'detail','',1,'committed',0,?)",[(cid,str(n),cutoff) for n in range(1001)])
+        for name,metric,state,created in [('publish','published','committed',1),('reserved','detail','reserved',1),('recent','detail','committed',cutoff+1)]:
+            self.db.execute('INSERT INTO membership_operations VALUES(?,?,?,?,1,?,0,?)',(cid,name,metric,'',state,created))
+        self.db.commit()
+        with self.db:self.assertEqual(self.db.execute(self.operations,(cutoff,1000)).rowcount,1000)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM membership_operations').fetchone()[0],4)
+        with self.db:self.assertEqual(self.db.execute(self.operations,(cutoff,1000)).rowcount,1)
+        self.assertEqual({r[0] for r in self.db.execute('SELECT operation_id FROM membership_operations')},{'publish','reserved','recent'})
+        plan=' '.join(str(r) for r in self.db.execute('EXPLAIN QUERY PLAN '+self.operations,(cutoff,1000)))
+        self.assertIn('idx_membership_operations_cleanup',plan)
+    def test_current_and_six_previous_days_remain_and_other_periods_are_not_ttl(self):
+        from datetime import datetime,timezone
+        cid=auth()['cid_number'];day=20*86400000;oldest=day-6*86400000
+        for metric in ['detail','delivery_bytes','chat_commands','upload_bytes','profile_requests','profile_read_bytes','published']:
+            for period in [oldest-1,oldest,day]:self.db.execute('INSERT INTO membership_usage VALUES(?,?,?,1,?)',(cid,metric,period,day))
+        for period in [oldest-86400000,oldest,day]:self.db.execute('INSERT INTO square_browse_days VALUES(?,?,1,?)',(cid,datetime.fromtimestamp(period/1000,timezone.utc).strftime('%Y-%m-%d'),day))
+        self.db.commit()
+        with self.db:
+            self.assertEqual(self.db.execute(self.usage,(oldest,1000)).rowcount,6)
+            self.assertEqual(self.db.execute(self.browse,(datetime.fromtimestamp(oldest/1000,timezone.utc).strftime('%Y-%m-%d'),1000)).rowcount,1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM membership_usage WHERE metric='published'").fetchone()[0],3)
+        self.assertEqual(self.db.execute("SELECT MIN(period_start) FROM membership_usage WHERE metric<>'published'").fetchone()[0],oldest)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM square_browse_days').fetchone()[0],2)
+    def test_cleanup_daily_pool_exact_boundary_does_not_touch_rpc_or_user_quota(self):
+        self.pool(self.db,999950);self.pool(self.db)
+        before=self.db.total_changes
+        with self.assertRaises(sqlite3.IntegrityError):self.pool(self.db)
+        self.assertEqual(self.db.total_changes,before)
+        self.assertEqual(self.db.execute("SELECT request_count FROM rate_windows WHERE rate_key='cleanup:day:1'").fetchone()[0],1000000)
+        self.pool(self.db,day=2)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM membership_usage').fetchone()[0],0)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM rate_windows WHERE rate_key LIKE 'rpc:%'").fetchone()[0],0)
+    def test_two_writers_can_only_reserve_last_round_once(self):
+        import tempfile,concurrent.futures
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'history.sqlite';db=sqlite3.connect(path);ready(db);self.pool(db,999950);db.close()
+            def attempt(_):
+                db=sqlite3.connect(path,timeout=10)
+                try:self.pool(db);return True
+                except sqlite3.IntegrityError:return False
+                finally:db.close()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:result=list(pool.map(attempt,range(2)))
+            self.assertEqual(sum(result),1)
+
+
+    def test_profile_history_1000_and_1001_keeps_current_day(self):
+        cid=auth()['cid_number'];day=20*86400000;oldest=day-6*86400000
+        for metric in ['profile_requests','profile_read_bytes']:
+            self.db.executemany('INSERT INTO membership_usage VALUES(?,?,?,1,?)',[(f'history{n}',metric,oldest-1,day) for n in range(1001)])
+            self.db.execute('INSERT INTO membership_usage VALUES(?,?,?,1,?)',(cid,metric,day,day))
+        self.db.commit()
+        with self.db:self.assertEqual(self.db.execute(self.usage,(oldest,1000)).rowcount,1000)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM membership_usage WHERE period_start<?',(oldest,)).fetchone()[0],1002)
+        with self.db:self.assertEqual(self.db.execute(self.usage,(oldest,1000)).rowcount,1000)
+        with self.db:self.assertEqual(self.db.execute(self.usage,(oldest,1000)).rowcount,2)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM membership_usage').fetchone()[0],2)
+        self.assertEqual(self.db.execute('SELECT MIN(period_start) FROM membership_usage').fetchone()[0],day)

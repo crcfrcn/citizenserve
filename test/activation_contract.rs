@@ -78,6 +78,13 @@ impl Repository for Memory {
     }
 }
 impl AuthRepository for Memory {
+    async fn context(
+        &self,
+        _: citizenserve::user::ports::ContextKey<'_>,
+        _: &Config,
+    ) -> Result<Option<citizenserve::user::ports::AuthContext>> {
+        panic!("fixture supplies one service snapshot directly")
+    }
     async fn device(&self, c: &str, d: &str) -> Result<Option<Device>> {
         Ok(self
             .device
@@ -251,14 +258,34 @@ impl Case {
             crypto::hex(&self.key.sign(&self.proof.message().unwrap()).to_bytes())
         );
     }
+    fn context(&self) -> citizenserve::user::ports::AuthContext {
+        citizenserve::user::ports::AuthContext {
+            loaded_at: 1_000_000,
+            identity: self.identity.clone(),
+            device: self.repo.device.lock().unwrap().clone(),
+            admission: self.repo.admission.lock().unwrap().clone(),
+            session: self.repo.session.lock().unwrap().clone(),
+            membership: None,
+            identity_synced_at: 1_000_000,
+            membership_synced_at: Some(1_000_000),
+        }
+    }
     fn activate(&self) -> Result<device::Registered> {
+        let checked = gate::identity::prevalidate(
+            &self.config,
+            &self.proof,
+            "POST",
+            "/api/user/devices",
+            &self.body,
+            1_000_001,
+        )?;
         run(device::register(
             &self.repo,
             &self.repo,
             &self.config,
             &self.identity,
             &self.input,
-            &self.proof,
+            &checked,
             &self.body,
             "/api/user/devices",
             1_000_001,
@@ -284,10 +311,27 @@ fn all_four_facts_activate_and_normal_session_needs_no_cloudflare_or_wallet() {
         crypto::hex(&c.key.sign(&proof.message().unwrap()).to_bytes())
     );
     c.repo.consumed.store(false, Ordering::SeqCst);
+    let consumes = c.repo.consumes.load(Ordering::SeqCst);
+    let spaced = [b" ".as_slice(), body.as_slice()].concat();
+    assert!(run(session::create(
+        &c.repo,
+        &c.config,
+        &c.context(),
+        &session::Request {
+            account_id: c.identity.account_id.clone()
+        },
+        &proof,
+        &spaced,
+        "/api/user/sessions",
+        [9; 16],
+        1_000_002,
+    ))
+    .is_err());
+    assert_eq!(c.repo.consumes.load(Ordering::SeqCst), consumes);
     let response = run(session::create(
         &c.repo,
         &c.config,
-        &c.identity,
+        &c.context(),
         &session::Request {
             account_id: c.identity.account_id.clone(),
         },
@@ -426,7 +470,7 @@ fn stale_device_authorization_does_not_overwrite() {
     assert_eq!(c.activate().unwrap_err().code, "stale_device_binding");
 }
 #[test]
-fn complete_session_guard_denies_revoke_rebind_and_expired_chain_confirmation() {
+fn complete_service_guard_denies_revoke_rebind_and_expired_sync_health() {
     let c = Case::new();
     c.activate().unwrap();
     let a = c.repo.admission.lock().unwrap().clone().unwrap();
@@ -440,14 +484,31 @@ fn complete_session_guard_denies_revoke_rebind_and_expired_chain_confirmation() 
         created_at: 1_000_000,
         expires_at: 2_000_000,
     };
-    assert!(gate::identity::session_authority(&c.identity, &a, &d, &s, &c.config, 1_000_001).is_ok());
-    assert!(gate::identity::session_authority(&c.identity, &a, &d, &s, &c.config, 1_060_000).is_err());
+    let check = |identity: &Identity, device: &Device, now: u64| {
+        gate::identity::service_authority(
+            &citizenserve::user::ports::AuthContext {
+                loaded_at: now,
+                identity: identity.clone(),
+                admission: Some(a.clone()),
+                device: Some(device.clone()),
+                session: Some(s.clone()),
+                membership: None,
+                identity_synced_at: 1_000_000,
+                membership_synced_at: Some(1_000_000),
+            },
+            &c.config,
+            now,
+        )
+    };
+    assert!(check(&c.identity, &d, 1_000_001).is_ok());
+    assert!(check(&c.identity, &d, 1_060_000).is_ok());
+    assert!(check(&c.identity, &d, 1_600_000).is_err());
     let mut i = c.identity.clone();
     i.binding_revision = 2;
-    assert!(gate::identity::session_authority(&i, &a, &d, &s, &c.config, 1_000_001).is_err());
+    assert!(check(&i, &d, 1_000_001).is_err());
     let mut revoked = d;
     revoked.active = false;
-    assert!(gate::identity::session_authority(&c.identity, &a, &revoked, &s, &c.config, 1_000_001).is_err());
+    assert!(check(&c.identity, &revoked, 1_000_001).is_err());
 }
 #[test]
 fn exact_six_fields_reject_old_token_unknown_and_missing_null() {
@@ -535,7 +596,7 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
     let authenticate = || {
         run(gate::identity::authenticate(
             &c.repo,
-            &c.identity,
+            &c.context(),
             &c.config,
             &token,
             &proof,
@@ -551,7 +612,7 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
     c.repo.consumed.store(false, Ordering::SeqCst);
     assert!(run(gate::identity::authenticate(
         &c.repo,
-        &c.identity,
+        &c.context(),
         &c.config,
         &token,
         &proof,
@@ -567,42 +628,149 @@ fn request_guard_requires_live_session_bound_proof_and_consumes_once() {
 }
 
 #[test]
-fn gate_precheck_reuses_server_session_and_rejects_bad_signatures_without_consuming_challenge() {
-    let c=Case::new();c.activate().unwrap();
-    let token=format!("sqs_{}","09".repeat(16));
-    let session=Session {session_token_hash:session::hash(&token).unwrap(),cid_number:c.identity.cid_number.clone(),
-        binding_revision:1,account_id:c.identity.account_id.clone(),device_id:c.proof.device_id.clone(),
-        created_at:1_000_000,expires_at:2_000_000};
-    let mut proof=c.proof.clone();proof.method="GET".into();
-    proof.request_target=format!("/api/user/profiles/{}",c.identity.cid_number);
-    proof.body_sha256=format!("0x{}",crypto::sha256_hex(b""));
-    proof.signature=format!("0x{}",crypto::hex(&c.key.sign(&proof.message().unwrap()).to_bytes()));
-    c.repo.consumed.store(false,Ordering::SeqCst);
-    let check=|session:&Session,proof:&Proof| gate::identity::preauthenticate(session,&c.config,proof,"GET",
-        &format!("/api/user/profiles/{}",c.identity.cid_number),b"",1_000_001);
-    assert!(check(&session,&proof).is_ok());
+fn first_activation_precheck_verifies_once_before_rpc_and_cannot_consume_challenge() {
+    let c = Case::new();
+    let checked = gate::identity::prevalidate(
+        &c.config,
+        &c.proof,
+        "POST",
+        "/api/user/devices",
+        &c.body,
+        1_000_001,
+    )
+    .unwrap();
+    checked
+        .require(
+            &c.identity,
+            &c.config,
+            "POST",
+            "/api/user/devices",
+            &c.body,
+            1_000_001,
+        )
+        .unwrap();
     assert!(!c.repo.consumed.load(Ordering::SeqCst));
-    let mut wrong=proof.clone();wrong.signature=format!("0x{}","00".repeat(64));
-    assert_eq!(check(&session,&wrong).unwrap_err().code,"invalid_mls_signature");
-    let mut changed=session.clone();changed.binding_revision+=1;
-    assert_eq!(check(&changed,&proof).unwrap_err().code,"invalid_mls_proof");
-    changed=session.clone();changed.expires_at=1_000_001;
-    assert_eq!(check(&changed,&proof).unwrap_err().code,"session_expired");
-    assert!(!c.repo.consumed.load(Ordering::SeqCst));
+    assert_eq!(c.repo.consumes.load(Ordering::SeqCst), 0);
+    assert!(checked
+        .require(
+            &c.identity,
+            &c.config,
+            "POST",
+            "/api/user/devices",
+            b"changed",
+            1_000_001
+        )
+        .is_err());
+    let mut rebound = c.identity.clone();
+    rebound.binding_revision += 1;
+    assert!(checked
+        .require(
+            &rebound,
+            &c.config,
+            "POST",
+            "/api/user/devices",
+            &c.body,
+            1_000_001
+        )
+        .is_err());
+    let mut bad = c.proof.clone();
+    bad.signature = format!("0x{}", "00".repeat(64));
+    assert!(gate::identity::prevalidate(
+        &c.config,
+        &bad,
+        "POST",
+        "/api/user/devices",
+        &c.body,
+        1_000_001
+    )
+    .is_err());
+    assert!(checked
+        .require(
+            &c.identity,
+            &c.config,
+            "POST",
+            "/api/user/devices",
+            &c.body,
+            c.proof.expires_at_millis
+        )
+        .is_err());
 }
 
 #[test]
-fn unified_membership_gate_keeps_self_and_basic_chat_free_but_closes_other_profile_square_and_attachments() {
-    use citizenserve::{membership::{gate as member,policy::Operation},square::routes::{SquareRoute,FeedKind}};
-    let c=Case::new();c.activate().unwrap();
-    let a=c.repo.admission.lock().unwrap().clone().unwrap();let d=c.repo.device.lock().unwrap().clone().unwrap();
-    let s=Session {session_token_hash:"00".repeat(32),cid_number:c.identity.cid_number.clone(),binding_revision:1,
-        account_id:c.identity.account_id.clone(),device_id:d.device_id.clone(),created_at:1_000_000,expires_at:2_000_000};
-    let authority=gate::identity::session_authority(&c.identity,&a,&d,&s,&c.config,1_000_001).unwrap();
-    assert!(member::authorize(&authority,Operation::Profile(c.identity.cid_number.clone()),None,1_000_001).is_ok());
-    assert!(member::authorize(&authority,Operation::Chat,None,1_000_001).is_ok());
-    assert!(member::authorize(&authority,Operation::Attachment,None,1_000_001).is_err());
-    assert!(member::authorize(&authority,Operation::Profile("CID_OTHER".into()),None,1_000_001).is_err());
-    assert!(member::authorize(&authority,Operation::Square(SquareRoute::Feed(FeedKind::Recommended)),None,1_000_001).is_err());
-    assert!(member::authorize(&authority,Operation::Chat,None,1_060_000).is_err());
+fn unified_membership_gate_keeps_self_and_basic_chat_free_but_closes_other_profile_square_and_attachments(
+) {
+    use citizenserve::{
+        membership::{gate as member, policy::Operation},
+        square::routes::{FeedKind, SquareRoute},
+    };
+    let c = Case::new();
+    c.activate().unwrap();
+    let d = c.repo.device.lock().unwrap().clone().unwrap();
+    let s = Session {
+        session_token_hash: "00".repeat(32),
+        cid_number: c.identity.cid_number.clone(),
+        binding_revision: 1,
+        account_id: c.identity.account_id.clone(),
+        device_id: d.device_id.clone(),
+        created_at: 1_000_000,
+        expires_at: 2_000_000,
+    };
+    *c.repo.session.lock().unwrap() = Some(s);
+    let authority = gate::identity::service_authority(&c.context(), &c.config, 1_000_001).unwrap();
+    assert!(member::authorize(
+        &authority,
+        Operation::Profile(c.identity.cid_number.clone()),
+        None,
+        1_000_001
+    )
+    .is_ok());
+    assert!(member::authorize(&authority, Operation::Chat, None, 1_000_001).is_ok());
+    assert!(member::authorize(&authority, Operation::Attachment, None, 1_000_001).is_err());
+    assert!(member::authorize(
+        &authority,
+        Operation::Profile("CID_OTHER".into()),
+        None,
+        1_000_001
+    )
+    .is_err());
+    assert!(member::authorize(
+        &authority,
+        Operation::Square(SquareRoute::Feed(FeedKind::Recommended)),
+        None,
+        1_000_001
+    )
+    .is_err());
+    assert!(member::authorize(&authority, Operation::Chat, None, 1_060_000).is_err());
+}
+
+#[test]
+fn session_challenge_accepts_only_exact_account_body_without_changing_signature_bytes() {
+    use citizenserve::user::auth::{challenge, mls_authentication::ChallengeRequest};
+    let account = format!("0x{}", "ab".repeat(32));
+    let body = serde_json::to_vec(&serde_json::json!({"account_id":account})).unwrap();
+    let mut request = ChallengeRequest {
+        account_id: account.clone(),
+        public_key: format!("0x{}", "cd".repeat(32)),
+        purpose: Purpose::Session,
+        method: "POST".into(),
+        request_target: "/api/user/sessions".into(),
+        body_sha256: format!("0x{}", crypto::sha256_hex(&body)),
+    };
+    assert!(challenge::target(&request).is_ok());
+    for bad in [
+        format!("0x{}", "aa".repeat(32)),
+        format!(
+            "0x{}",
+            crypto::sha256_hex(format!("{{ \"account_id\":\"{account}\" }}").as_bytes())
+        ),
+    ] {
+        request.body_sha256 = bad;
+        assert_eq!(
+            challenge::target(&request).unwrap_err().code,
+            "invalid_mls_target"
+        );
+    }
+    request.body_sha256 = format!("0x{}", crypto::sha256_hex(&body));
+    request.account_id = format!("0x{}", "ef".repeat(32));
+    assert!(challenge::target(&request).is_err());
 }

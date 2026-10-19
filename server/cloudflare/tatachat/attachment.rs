@@ -50,40 +50,94 @@ pub(crate) async fn http(
     id: &str,
     index: u32,
 ) -> Result<worker::Response> {
-    let base = super::routes::authorize(request, env, host).await?;
-    let limit=citizenserve::tatachat::auth::ports::Host::attachment_limit(host,base.snapshot()).await?;
-    let access=base.for_attachments(limit,super::config::now())?;
-    let store = super::D1Store::new(env)?;
+    let base = match super::routes::authorize(request, env, host).await {
+        Ok(access) => access,
+        Err(Error::ResourceLimit) => {
+            return crate::error(
+                citizenserve::shared::Error::new(429, "resource_limit"),
+                false,
+            )
+            .map_err(|_| Error::StorageUnavailable)
+        }
+        Err(error) => return Err(error),
+    };
+    let limit =
+        citizenserve::tatachat::auth::ports::Host::attachment_limit(host, base.snapshot()).await?;
+    let access = base.for_attachments(limit, super::config::now())?;
+    let store = super::D1Store::new(env)?.with_attachment_resources(host.attachment_resources());
     let objects = R2Objects::new(env, store.clone())?;
+    // 仅本次请求保存错误类别，区分HTTP日预算429与原通用资源上限，不增加权限缓存。
+    let limited = std::cell::Cell::new(false);
+    let budget = |cost| {
+        let base = &base;
+        let limited = &limited;
+        async move {
+            let result =
+                citizenserve::tatachat::auth::ports::Host::consume(host, base.snapshot(), cost)
+                    .await;
+            if matches!(&result, Err(Error::ResourceLimit)) {
+                limited.set(true);
+            }
+            result
+        }
+    };
     match request.method() {
         worker::Method::Put => {
-            let body = crate::body(request, super::config::MAX_CHUNK_BYTES)
-                .await
-                .map_err(|_| Error::InvalidRequest)?;
-            citizenserve::tatachat::attachment::service::upload(
+            let read_body = |expected: u64| async move {
+                let maximum = usize::try_from(expected)
+                    .map_err(|_| Error::ResourceLimit)?
+                    .min(super::config::MAX_CHUNK_BYTES);
+                crate::body(request, maximum)
+                    .await
+                    .map_err(|_| Error::InvalidRequest)
+            };
+            let result = citizenserve::tatachat::attachment::service::upload(
                 &store,
                 &objects,
                 &access,
                 id,
                 index,
-                body,
+                (budget, read_body),
                 super::config::now(),
             )
-            .await?;
+            .await;
+            if limited.get() {
+                return crate::error(
+                    citizenserve::shared::Error::new(429, "resource_limit"),
+                    false,
+                )
+                .map_err(|_| Error::StorageUnavailable);
+            }
+            result?;
             worker::Response::empty()
                 .map(|r| r.with_status(204))
                 .map_err(|_| Error::StorageUnavailable)
         }
         worker::Method::Get => {
-            let bytes = citizenserve::tatachat::attachment::service::download(
+            let result = citizenserve::tatachat::attachment::service::download(
                 &store,
                 &objects,
                 &access,
                 id,
                 index,
+                |bytes| {
+                    budget(
+                        citizenserve::tatachat::auth::ports::ResourceCost::AttachmentDownload {
+                            bytes,
+                        },
+                    )
+                },
                 super::config::now(),
             )
-            .await?;
+            .await;
+            if limited.get() {
+                return crate::error(
+                    citizenserve::shared::Error::new(429, "resource_limit"),
+                    false,
+                )
+                .map_err(|_| Error::StorageUnavailable);
+            }
+            let bytes = result?;
             let mut response =
                 worker::Response::from_bytes(bytes).map_err(|_| Error::StorageUnavailable)?;
             response

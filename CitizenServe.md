@@ -1,13 +1,20 @@
 # CitizenServe 技术文档
 
+## 当前构建合同
+
+本产品唯一构建实现为 scripts/build.mjs，平台 GitHub 任务只使用 .github/workflows 下的既有工作流文件。实际流程为cloudflare.yml；ci-test、ci-build、ci-release；LinuxARM展示入口保持未实现。完整构建只在本产品塔塔自动化中运行，由控制台通过公开接口发起并记录；产品自行准备工具依赖、运行测试、编译、验收、处理版本和产物。控制台不提供产品资源库存或构建实现。
+
+增量及依赖缓存可用就复用，缺少的工具和依赖按原始锁从官方来源获取，缺少的中间物由官方编译器重建。缓存解析、恢复、复制、保存、上传或旧缓存清理失败只提示，不覆盖真实测试、编译和产物验收结果。不用旧缓存、旧产物或其它产品、其它平台的任务状态作为本平台新构建门禁。
+
+保留本平台最近一条成功、一条失败的记录，活动任务独立；只有真实自动化成功才推进成功版本，失败和取消不消耗版本。任务显示名为“产品·流程·平台”，Run、Job及产物显示名归产品唯一命名实现。签名材料不进入缓存、普通日志或测试资源。
+
+产品功能、接口、UI、交互与协议保持。现有控制台编译按钮保持原有显示和身份，安装另行接入；本机完整构建执行链已退出。塔塔控制台自身的本机编译不属于本产品改造，完整保留。
+
 > 当前塔塔鹿鹿：每仓 `.github/tatalulu.yml` 只登记仓库身份；控制台 `.github/tatalulu.mjs` 保存并推送后，以 GitHub `main` 回查结果收口。本文早期推送触发检查记录仅供历史追溯。
 
 ## 平台编译现场
 
-公民服务端的软件流程只有自动化与发布。自动化在GitHub Ubuntu24.04 Runner调用本仓`scripts/build.mjs`，使用`target/build/cloudflare`临时编译现场；GitHub三件正式资产由`.github/workflows/cloudflare.yml`交付。控制台没有本机编译或测试按钮。
-
-`scripts/build.mjs`仅声明Cloudflare Worker真实编译输出和锁定资源，公开`contract`、`fixedWork`、`executeBuild`、`buildOutputDigest`供Workflow调用。编译根由本仓独占，Runner在消费两件输出后清空；不提供本机测试、控制台编译供给或本机安装入口。
-
+`scripts/build.mjs`仅声明Cloudflare Worker真实编译输出和锁定资源，公开`contract`、`fixedWork`、`executeBuild`、`buildOutputDigest`供Workflow调用。编译根由本仓独占，Runner在消费两件输出后清空；不提供本机产品Build或安装入口。独立测试使用同文件公开prepareTests、executeTests、cleanupTests及固定target/test临时现场，不注册控制台测试动作。
 
 ## 工具与依赖的声明和供给职责
 
@@ -25,13 +32,13 @@
 
 ### 自动化与发布边界
 
-`scripts/build.mjs`只负责GitHub Runner上的Cloudflare Worker编译与资源准备；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产和部署配置，生成Cloudflare部署候选；不以前置资源回执阻塞部署，部署请求由Cloudflare据实接受或拒绝。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
+`scripts/build.mjs`负责正式GitHub Linux Build；另有隔离的macOS arm64测试入口，版本复用原产品声明/锁，不调用部署；`.github/workflows/cloudflare.yml`调用该公开编译接口并创建GitHub Tag、正式Release和三件资产。`scripts/publish.mjs`只读验真这些资产和部署配置，生成Cloudflare部署候选；不以前置资源回执阻塞部署，部署请求由Cloudflare据实接受或拒绝。控制台仅登记自动化和发布两个软件流程；`scripts/tatachat.mjs`仍独立管理聊天云资源，`scripts/config.mjs`独立声明配置需求。
 
 正式 Worker 归档成员由 `Cargo.toml` 的 `release_members` 闭集定义，当前为九件；旧公民链下载 D1 schema 已退出正式包。`cloudflare.yml` 按同一数量和闭集验真，单件缺失或重复均阻止 Release。
 
 `.github/workflows/cloudflare.yml`定义GitHub手动触发、Runner、产品Build调用、十件成员组包、Tag/Release与三件资产回读；产品`build.mjs`仅拥有资源准备、固定工作根和Worker编译。`linuxarm.yml`仍为空占位，不代表LinuxARM已实现；`publish.mjs`保持正式资产只读候选验真，并在单独发布授权后从正式包准备临时部署现场，从控制台工具库取得已登记Node25.2.1及其npm，按正式包原锁临时安装Wrangler4.149.0，完整部署软件和Wrangler配置；密钥由控制台安全层装配，不写入仓库或任务文件。塔塔门禁是独立流程，不作为本产品自动化的前置步骤。
 
-根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求当前链身份、真人准入、设备、会话与新鲜MLS证明。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
+根库入口为lib.rs，业务模块直接位于产品根；平台实现为Cloudflare Worker，Linux ARM仅预留。账户服务要求服务端当前身份、真人准入、设备、会话与新鲜MLS证明；明确链确认仍单独查链。health保持account_services_ready:false，完整Worker、真实云资源、支付、推送及客户端真机验收尚未完成；历史阶段结果不作为当前源码通过证据，执行事实归所属任务卡。
 
 ## 根目录职责
 
@@ -84,9 +91,9 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 身份投影返回finalized_block_number/finalized_block_hash/identity_event_count/projected_user_count/revoked_user_count。单块目标确认不前跳全局游标；Cron一次最多10块顺序补齐，投影/凭证撤销/游标在同一batch提交。同块账户释放先于绑定写入，CID排序不会改变结果。历史事实不能冒充当前授权。
 
-当前身份确认期限最长60秒，15秒刷新租约合并竞争，缓存读取不延长期限。激活强制读取当前链；普通调用到期重新核验，RPC未知/失败即拒绝。Cron五分钟不承担60秒撤销时限。
+链事实确认仍最多60秒，保留15秒目标刷新租约。首次设备激活先验MLS签名再查链，激活复用不可伪造的验签凭据并核对请求/绑定/钱包签名与挑战；不重复MLS验签。日常挑战、会话、业务和聊天只读服务端一次完整上下文，不按链事实60秒期限刷新或写投影。服务端单次许可从读取开始最多60秒，裁剪到会话与同步健康截止时间；会员另裁剪到paid_until。实际D1撤销由原事务/交付围栏拒绝；链上变化传播受独立5分钟同步及积压影响，不能再宣称链上撤销必在60秒传播。
 
-挑战5分钟、每CID每用途最多64条；registration只绑定POST /api/user/devices，session只绑定POST /api/user/sessions。purpose=request仅面向实际在册的受保护业务目标，并绑定同一有效会话摘要。证明始终绑定实际方法、含/api的完整路径/查询、原始正文摘要、当前CID/修订/同一公钥。钱包GMB0x1C/Sr25519与MLS RFC9420 SignWithLabel/Ed25519都先验签，再原子消费挑战；消费后的业务失败不恢复nonce。
+挑战5分钟；registration/request仍每CID每用途最多64条。session只绑定POST /api/user/sessions和单字段account_id的UTF-8紧凑JSON准确SHA-256，每当前已登记设备、CID/账户/修订/源/准确请求复用一个活动nonce及原期限，不替换或续期；消费或到期才生成下一枚。任意摘要/空白变体在D1前拒绝，旧非规范或重复行不抢占新规则，沿原过期维护回收。插入与选回在同一batch，选回仍复查当前设备、绑定、准入及同步健康；不减少原始字节验签或DELETE一次性消费。registration只绑定POST /api/user/devices。purpose=request仅面向实际在册的受保护业务目标，并绑定同一有效会话摘要。证明始终绑定实际方法、含/api的完整路径/查询、原始正文摘要、当前CID/修订/同一公钥。钱包GMB0x1C/Sr25519与MLS RFC9420 SignWithLabel/Ed25519都先验签，再原子消费挑战；消费后的业务失败不恢复nonce。 Session重复领取仍执行一次完整授权上下文及一个INSERT/SELECT两条SQL的batch；复用节省新增挑战行与后续回收写入，不代表D1读取为零。
 
 激活提交原子包含设备、cid_admissions与登记activated。数据库断言失败令整个batch回滚，普通CAS零行不能误报激活成功；提交后复查三个事实。登记只能固定到同一CID/账户/修订/设备；同结果用新挑战幂等返回。enrollment_id/recovery_token显式null只能复用服务器已存在的真实CID准入，再验当前钱包与新设备持钥；仅有链上投影不豁免。旧issued_at/修订、已撤销旧授权和跨环境复用拒绝。准入source仅turnstile，没有旧设备自动导入。
 
@@ -102,7 +109,7 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 ## GitHub构建
 
-Cargo.lock与rust-toolchain.toml锁定本产品工具和依赖。当前没有产品测试入口；GitHub Workflow只调用产品编译接口并交付正式资产。门禁仍独立，不进入自动化的先后步骤。
+Cargo.lock与rust-toolchain.toml锁定本产品工具和依赖。现有scripts/build.mjs的prepareTests/executeTests在macOS arm64的target/test供给原件、离线依赖并运行Rust及实际Worker；正式GitHub Workflow仍只调用原编译接口并交付正式资产。门禁仍独立，不进入自动化的先后步骤。
 
 GitHub Runner的Cargo在当前`target/build/cloudflare/cargo-target`生成WASM；锁定worker-build把本轮Worker输出写为`worker/index.js`与`worker/index_bg.wasm`。Workflow只在消费并核对这两件输出后组包，不把历史本机测试结果当作本轮证明。
 
@@ -236,7 +243,7 @@ Cloudflare原始token为300秒单次校验；idempotency_key用于同一次校�
 
 A提供的宿主权限语义为：来自合法当前会话的user_id与device_id、有效设备/准入状态、业务判断后的chat_enabled和max_attachment_bytes、服务器签发时间和到期时间、可检查的权限修订。账户、钱包修订和会员名称留在宿主适配内。只有通过资格的设备能输出有效权限，客户端请求中的ID不能直接成为模块身份。
 
-基础聊天权限最长15分钟，且不能晚于普通账户会话或设备资格到期；附件的单次权限另裁剪到会员资格期限。聊天服务端必须执行连接到期，不能只靠SDK timer。撤销/换绑/资格变化传播上限锁定为60秒；超过期限仍无法重新确认状态时拒绝继续处理，禁止错误时沿用旧许可。宿主撤销状态与可恢复事件在提交后可查，通用Host端口负责可靠再核验。公开函数和类型由tatachat模块定义，不在宿主复制通用模型；调用合同必须满足上述身份、到期和撤销语义。
+基础聊天权限最长15分钟，且不能晚于普通账户会话或设备资格到期；附件的单次权限另裁剪到会员资格期限。聊天服务端必须执行连接到期，不能只靠SDK timer。宿主最迟60秒重查服务端，恢复强制核验。链上撤销/换绑通过后台同步传播，身份同步超过600秒或缺失/未来时间即拒绝；会员同步单独失效时基础聊天仍可用，附件拒绝。禁止错误时沿用旧许可。宿主撤销状态与可恢复事件在提交后可查，通用Host端口负责可靠再核验。公开函数和类型由tatachat模块定义，不在宿主复制通用模型；调用合同必须满足上述身份、到期和撤销语义。
 
 注册完成不要求先建立聊天连接或先购买聊天会员。公民App所选账户不是默认账户时，身份适配必须明确解析冻结账户；不得把默认账户的MLS身份或签名误用于本登记。SDK通过公开接口取得所需账户输入，不复制服务端私有运行实现。
 
@@ -283,7 +290,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 
 1. **先固定路由和端口。** 将下表17项控制面入口纳入统一守卫和purpose=request挑战。证明继续签实际/api路径、原始查询和原始正文SHA-256；GET/DELETE为空正文，拒绝重复/未知参数、错误方法和旧/square别名。资产PUT是受预算限制的二进制，不先解析JSON。原MLS总正文上限1MiB无法接纳旧banner的1536KiB，本产品明确将服务端总上限提高到2MiB，仅banner允许1536KiB，其他路由预算不扩大；SignWithLabel/GMB载荷和密钥算法不变。
 2. **先核对链，再确认订阅。** 只在固定CHAIN_URL增加chain_getBlock；完整读取canonical finalized块，按metadata解析完整extrinsic/扩展/调用，计算整个extrinsic的BLAKE2-256 tx_hash，检查实际签名账户、指定phase的成功结果、真实业务动作与同一区块storage。不靠事件字节扫描、客户端申报action/价格/会员或历史投影授权。平台、创作者计划/名称、订阅和价格由同锚点解码；Platform/Creator及未知枚举不得互用。价格完整u128解码，对既有HTTP/D1安全整数出口严格检查，越界拒绝，不截断或用浮点近似。
-3. **会员投影和服务。** 以永久CID为属主，保持Active/Cancelled且paid_until晚于服务器/链时间的权益判断，Expired/Terminated/Suspended/IssuerPaused不能取得写权限；身份档位与会员档位独立。确认记录、会员/档位/关系投影及事务证据在一次D1事务中写入；同tx同规范结果幂等、同tx不同业务结果拒绝，较旧块不能覆盖新事实。当前资格最长核验60秒，事务内再检查期限；RPC未知不降级为无会员。恢复创作者最多10档、名称20 Unicode标量、月/季/年三种真实公历价格、当前订阅与概览。投影catch-up核心使用独立已有membership_projection_cursor、整块提交、限定工作量；Cron任务调度及过期内容清理归现有调度与维护模块。
+3. **会员投影和服务。** 以永久CID为属主，保持Active/Cancelled且paid_until晚于服务器/链时间的权益判断，Expired/Terminated/Suspended/IssuerPaused不能取得写权限；身份档位与会员档位独立。确认记录、会员/档位/关系投影及事务证据在一次D1事务中写入；同tx同规范结果幂等、同tx不同业务结果拒绝，较旧块不能覆盖新事实。服务端许可最长60秒，事务内复核最新会员行及同步健康；普通使用不查RPC，服务端不可用不降级为无会员。恢复创作者最多10档、名称20 Unicode标量、月/季/年三种真实公历价格、当前订阅与概览。投影catch-up核心使用独立已有membership_projection_cursor、整块提交、限定工作量；Cron任务调度及过期内容清理归现有调度与维护模块。
 4. **按会员原子预留，再发上传计划。** 恢复三种post_type：document无标题、文字≤300 Unicode标量、≤9张图且内容非空；video无标题、配文≤300标量且恰好1个视频；article标题10至50标量、正文1至30000标量、首项必须为图片，图片含封面共50/100/100张、视频最多1/3/10个，规范content_sections与媒体引用逐项验证；manifest≤256KiB、最多110媒体；保持Freedom/Democracy/Spark的原图像1/2/4MB与1280/1920/2560边界、视频16MB/300MB/3GB及180/1800/10800秒、缩略图256000B/封面512000B、月图片300/1500/5000、月视频18000/60000/600000秒、活跃上传1/2/3、存储100GB/1TB/10TB（十进制）。服务端计算估算量；月额度周期沿用链上last_charged_at至paid_until，不按主机时区或自然月另建重置时钟；已用+未过期预留+本次须在同事务核对；prepare先持久预留再返回15分钟计划，不信客户端余额/用量。发布仍须有效会员。
 5. **R2校验后才能complete和publish。** 主媒体/衍生图直传R2，SigV4限定PUT、唯一对象键、Content-Type/长度、完整SHA-256与upload_id/media_index/object_role；大视频字节不经Worker代理或装入内存。manifest进私有桶，媒体进公开桶。complete核对R2实际大小、内容类型、完整校验和/自定义元数据；WebP解析真实结构/尺寸，HEVC MP4解析有界BMFF box与moov前置/hvc1或hev1，而非查找任意字符串。视频前缀读取最多4MiB，主视频完整校验和由R2验证，错误尺寸/时长/哈希不能ready。预留转实耗、上传complete和媒体ready事务幂等，不重复扣量。发布必须再绑定同区块链上SquarePost事实、本人CID/钱包、post_id/content_hash/storage_receipt_id/类型/分类与已完成上传；分类只由该finalized区块身份派生：candidate为campaign，visitor/voting为normal，客户端不申报分类。
 6. **阅读、资料媒体与删除闭环。** 详情及本人回灌验证原始manifest字节/哈希、上传和帖子归属；回灌固定最多5条、复合游标、不重编码原始字节，一条不完整整页失败。资料媒体仍用本CID固定avatar/banner键，prepare保存在有期限的profile_asset_uploads；条件写/代际核验拒绝旧上传覆盖新版本，PUT完成事实后资料引用变更才能使用对应哈希。读取私有资料对象先过会话/MLS守卫，再校验当前引用哈希、Range/ETag。删除/取消先保留D1定位和删除状态，再批量删R2主媒体+衍生图+manifest及有界清缓存，全部确认后原子删索引并精确一次释放存储/未使用预留；已消费月额度不因删除返还。D1和R2没有共同事务，失败保留定位/状态供幂等重试，不能假报全成功或丢掉待删除对象依据。
@@ -387,8 +394,8 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 ### 业务合同
 
 1. **当前设备的端点API。** 新增PUT/DELETE /api/notifications/endpoint，走现有purpose=request挑战、Bearer会话、新鲜X-MLS-Proof和写事务授权复核。CID、账户、修订、设备只取服务端已验身份；不允许正文自报device_id。PUT准确四字段push_provider、push_token、apns_environment、expires_at；APNs环境为sandbox/production，FCM必须显式null，Unix毫秒期限在当前时间之后且≤90天。APNs token规范64位hex，FCM有界可打印token；请求≤16KiB。每CID最多8个有效端点，当前设备同结果幂等、轮换递增endpoint_revision。同provider/token保持唯一，**不静默抢占其他有效设备/CID的token**；原属主先用授权DELETE释放，或服务端证实原端点已过期/原设备与绑定已撤销后才可登记。DELETE空正文，只删除当前已授权设备端点。同一设备轮换、TTL续期、换绑或吊销使旧代际任务失效。不会新增Cloudflare验证或生成MLS密钥。
-2. **先持久化通知，再交Queue。** 主库包含notification_jobs、notification_deliveries、maintenance_jobs、scheduler_leases；当前主库共39表，下载库独立1表；现有push_endpoints增加单调endpoint_revision，会员清理提醒绑定同一权益失效周期。帖子确认事务同时写唯一post_id/tx_hash来源的outbox，失败全回滚，幂等发布不重复生成任务。清理提醒同样和提醒事实原子持久化。消息仅携带版本、固定任务类型和数据库job_id/delivery_id，不传任意URL、token或客户端推送正文；消费者重新读取D1权威事实。投递记录固定目标CID/绑定修订/设备/端点代际、来源和截止时间。Queue发送失败时保留未派发任务，五分钟调度补派；Queue重复消息只取得一个CAS租约，不重复建收件记录。
-3. **把扇出和发送拆为不同消费轮次。** 恢复现有NOTIFY绑定和citizenserve队列，max_batch_size=1、max_retries=3。扇出每页最多5个粉丝、40个端点，按(created_at,CID)稳定游标只选择通知开关开启且关注关系有效的粉丝；写入去重delivery和推进游标同事务，后续分页可续跑。每个发送任务只处理一个端点，发送前重新核实当前CID双向绑定、真人准入/MLS设备未撤销、端点代际/期限、关注开关、来源帖子仍published；链未知则重试，不能当合法发送。系统任务用独立私有事实证明/端口，不伪造普通用户Authorization或消费用户nonce。租约120秒、续租≤45秒；网络调用前检查租约剩余时间。每个工作单元最多4次持久发送尝试，超过后记blocked，不由Cron无限重置。只有D1终态提交后ack；可重试失败保留并retry，预算不足保存游标/下一执行时间。所有子请求共用45次业务预算并预留5次提交/续跑，外连并发≤4，不能在一个消费轮次直接发送40台设备。
+2. **先持久化通知，再交Queue。** 主库包含notification_jobs、notification_deliveries、maintenance_jobs、scheduler_leases；当前主库共41表，下载库独立1表；现有push_endpoints增加单调endpoint_revision，会员清理提醒绑定同一权益失效周期。帖子确认事务同时写唯一post_id/tx_hash来源的outbox，失败全回滚，幂等发布不重复生成任务。清理提醒同样和提醒事实原子持久化。消息仅携带版本、固定任务类型和数据库job_id/delivery_id，不传任意URL、token或客户端推送正文；消费者重新读取D1权威事实。投递记录固定目标CID/绑定修订/设备/端点代际、来源和截止时间。Queue发送失败时保留未派发任务，五分钟调度补派；Queue重复消息只取得一个CAS租约，不重复建收件记录。
+3. **把扇出和发送拆为不同消费轮次。** 恢复现有NOTIFY绑定和citizenserve队列，max_batch_size=1、max_retries=3。扇出每页最多5个粉丝、40个端点，按(created_at,CID)稳定游标只选择通知开关开启且关注关系有效的粉丝；写入去重delivery和推进游标同事务，后续分页可续跑。每个发送任务只处理一个端点，发送前重新核实当前CID双向绑定、真人准入/MLS设备未撤销、端点代际/期限、关注开关、来源帖子仍published；本分支只读服务端同步健康，链不可达不触发查链；服务端健康失效则重试，不能继续发送。系统任务用独立私有事实证明/端口，不伪造普通用户Authorization或消费用户nonce。租约120秒、续租≤45秒；网络调用前检查租约剩余时间。每个工作单元最多4次持久发送尝试，超过后记blocked，不由Cron无限重置。只有D1终态提交后ack；可重试失败保留并retry，预算不足保存游标/下一执行时间。所有子请求共用45次业务预算并预留5次提交/续跑，外连并发≤4，不能在一个消费轮次直接发送40台设备。
 4. **APNs/FCM固定源发送。** APNs采用Cloudflare WebCrypto ES256签JWT，APNS_KEY只来自运行环境秘密，APNS_KID/APNS_TEAM/APNS_TOPIC为配置；准确访问https://api.push.apple.com/3/device/{token}或https://api.sandbox.push.apple.com/3/device/{token}。FCM以FCM_KEY/FCM_EMAIL签RS256服务账户JWT，通过https://oauth2.googleapis.com/token取得限定firebase.messaging scope的短期令牌，只向https://fcm.googleapis.com/v1/projects/{FCM_PROJECT}/messages:send发送。私钥不入D1/KV/日志或共同库。每次网络10秒、有界16KiB响应、禁止重定向，最终推送载荷≤4096B，只包含公开广场通知或存储提醒；不包含MLS密文/联系人/聊天资料。APNs 410/明确BadDeviceToken、FCM UNREGISTERED仅按原endpoint_revision条件删除失效端点；鉴权配置错误不误删，429/5xx有界退避并保存next_attempt_at。provider成功只表示accepted，不宣称设备已收到。外部成功而D1落库失败可能重发，固定collapse/tag减少重复展示；不能承诺跨外部系统严格恰好一次。Queue与D1去重、最多四次和单调状态保证重试有界。[Queue确认/重试规则](https://developers.cloudflare.com/queues/configuration/batching-retries/)、[Apple token认证](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)、[FCM授权](https://firebase.google.com/docs/cloud-messaging/send/v1-api)、[FCM错误码](https://firebase.google.com/docs/cloud-messaging/error-codes)作为实现依据。
 5. **有界Cron与两个链投影。** 保留*/5 * * * *，恢复4 3 * * *。scheduled只取得对应调度槽的持久租约并创建固定maintenance任务；同一触发重复执行不重建。身份与会员各最多顺序补10个块，会员进度不越过已完成身份投影；每轮受统一预算约束，整块CAS提交后才推进游标，预算不足拆到下一次消费，不能把“最多10块”当成一次必须跑满。遗漏或重试不会跳块。认证清理每表每轮≤1000行，清理过期挑战、会话、失效/过期端点、过期登记能力和七天以上已完成通讯录操作；生效准入和业务资料不受TTL垃圾清理影响。pending登记仍按原10分钟/verified24小时合同，不因调度延迟扩大有效期。已终止通知记录保留7天，blocked保留诊断；没有删除topup_orders、永久财务claim或submitting/unknown广播记录的通用TTL语句。
 6. **过期上传、长期超额存储和R2审计。** 未开始写入的过期预留原子释放一次；writing、完成但未发布的上传及资料临时代际先核实凭据期限/对象与当前引用，持久保留对象定位和每项进度，再分批删除。不能盲删正在写入对象，也不删除已发布帖或新的头像代际。会员权益失效满30天且实际云存储超过Freedom 100GB时，先写可查询提醒和推送任务；至少24小时后按最旧内容回收至阈值，每次扫描最多3 CID、处理最多4内容项，子请求预算更早耗尽则续跑。GET /api/membership增加storage_cleanup_notice（null或同周期notified_at/cleanup_after/storage_limit_bytes），用户离线或没有推送端点也有持久提醒；提醒已创建与provider已accepted分别记录。提醒以本次实际失效时间为周期，续费恢复或低于阈值取消；每个破坏性批次前重新核实新鲜canonical资格及当前代际，RPC不明不删。删除先保存R2/CDN定位，再删主文件/衍生图/manifest和purge，全部确认后才释放D1存储一次，不退款月用量、不删链上内容事实。旧故障任务重试仍复核当前资格；续费后的剩余对象停止删除，已执行云删除无法恢复的事实保留。日常审计在UTC03:04形成带日期游标任务，分页检查管理对象、D1引用、删除重试及孤立对象；无法证明归属/失效的对象只记审计结果，不能仅凭前缀或“查不到一行”删除。每天任务错过触发后仍从持久游标补齐，不依赖精确某一秒运行。
@@ -421,12 +428,11 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 
 通用聊天唯一归本产品根tatachat，由auth、protocol、key、mailbox、attachment、push、realtime七个功能目录及根mod/service/tests组成，共28件Rust源码。公民Subject、会员Permissions与宿主Authorization仍归user/membership/server；通用层只接受可信宿主映射的中性HostAccess，不解析CID或会员Plan。密钥包目录只有key；SDK官方KeyPackage类型和既有字段编号保持。
 
-GitHub Runner只使用本产品声明的TataChatSDK固定提交及该提交的三件.proto，不读取本机相邻仓库。protoc35.0由产品Build在本次Runner现场按锁定来源准备并验真；Build的协议需求与准备仅作为内部公开函数使用，不再提供本机测试或控制台编译命令。
+GitHub Runner只使用本产品声明的TataChatSDK固定提交及该提交的三件.proto，不读取本机相邻仓库。protoc35.0由产品Build在本次Runner现场按锁定来源准备并验真；Build的协议需求与准备沿本仓公开接口，正式软件流程只走自动化与发布；测试另复用公开测试API，不新增控制台编译命令。
 
 资源只使用产品独立模式。锁定原件保存在Runner本轮指定的源码外store；缺件、损坏或错误身份失败，不从控制台供给、不读取本机相邻仓库，也不在源码内另建原件库。
 
 产品Build在Runner编译现场直接准备并核验协议原件，回执位于当前`target/build/cloudflare/tatachat-protocol/receipt.json`；根build.rs只消费这份回执及准确文件列表。缺件或字节漂移直接失败。
-
 
 JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。server/cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及canonical CID后映射；recheck匹配原主体、会话、修订及中性附件状态并裁剪原期限，authorize_wake取得目标当前权限；attachment_limit单独消费统一会员门禁。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
 
@@ -444,7 +450,7 @@ TATACHAT_DB为独立聊天D1，schema只有聊天公开密钥包、设备密文�
 
 消息首次提交在同一batch建立不可变全收件摘要、所有设备密文和outbox；收件集合、发送者、会话编号、时间或任何设备密文变化均冲突。ACK只删当前可信收件设备的密文与对应outbox，回执保存到原服务端期限。同ID同内容重试不延长期限，不恢复已ACK密文或推送任务。过期密文不返回。
 
-附件创建归属可信创建设备，下载按发送用户或收件用户授权；完成和中止只允许创建设备，ACK按收件用户。每次上传先持久预留全新attachment/generation/index/attempt对象键，CAS reserved→writing后只调用一次R2 put，并实际校验长度/SHA及R2校验和。记录written的版本后才确认分块；失败只补偿本尝试，绝不覆盖或删除另一尝试。HEAD/DELETE没有版本CAS，本实现通过不可复用键限制归属。未知writing没有对象时继续保留定位，不能把超时当作未写入；观测到对象才清理，全部尝试deleted后才删除父记录并保留幂等回执。附件与尝试轮换清理，避免未知前缀饿死其他对象。进程恰在writing持久化后、发起put前崩溃仍无法仅凭HEAD不存在证明已终结，该定位会保留并阻止安全重建；必须在运行态验收中核实此边界。
+附件创建归属可信创建设备，下载按发送用户或收件用户授权；完成和中止只允许创建设备，ACK按收件用户。首次为分块持久预留不可复用的attachment/generation/index/attempt对象键，已知尚未PUT的失败复用准确原预留；成功重试不PUT，未知重试只恢复原键。CAS reserved→writing后实际R2 put最多一次，并实际校验长度/SHA及R2校验和。记录written的版本后才确认分块；失败只补偿本尝试，绝不覆盖或删除另一尝试。HEAD/DELETE没有版本CAS，本实现通过不可复用键限制归属。未知writing没有对象时继续保留定位，不能把超时当作未写入；观测到对象才清理，全部尝试deleted后才删除父记录并保留幂等回执。附件与尝试轮换清理，避免未知前缀饿死其他对象。进程恰在writing持久化后、发起put前崩溃仍无法仅凭HEAD不存在证明已终结，该定位会保留并阻止安全重建；必须在运行态验收中核实此边界。
 
 TataChatDevice使用SQLite DO休眠WebSocket API，连接attachment仅保存随机小定位，完整权限快照与解析限额存DO storage。每次设备事件恢复都重新查询Host，核对actor/revision/session/额度，凭证终期不延长；每设备只有一个最早再核验alarm，无自动Pong。安排alarm失败时关闭连接，静默连接也要按期限重查。事件锁只串行本设备快照，提交和响应后释放锁再发送DO内部提示，避免互等。提示可丢失，设备同步与持久outbox负责补足；内部notify只走namespace stub。业务操作归属错误返回Failure；会话撤销、未知Host、非法文本或超限帧关闭连接。实际平台alarm调度延迟及DO休眠/重启尚未验收，不宣称硬实时截止。
 
@@ -465,10 +471,6 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 发布器核对正式Wrangler时仅接受 `DB` 和 `TATACHAT_DB` 两个D1绑定，分节数量由这两个准确名称推导；旧公民链下载指针的第三个D1绑定仍按多余资源拒绝。
 `scripts/config.mjs` 另声明 `citizenserve-approval:COLD_SIGNER_PUBLIC_KEY` 为受保护且只用于正式发布批准验签的公钥。它因信任锚身份只存控制台 Touch ID Keychain，不属于九项Worker运行变量，也不交付Cloudflare；公钥值尚须由用户在控制台配置，缺失时生产批准失败关闭。离线钱包私钥不进入本仓或控制台。
 本仓发布接口在冷签后重新验真同一份正式归档摘要，并将摘要连同任务、Tag和源码提交交给控制台原生安全层核对；返回的部署回执必须带回相同摘要。任何候选资产漂移都不能进入 Cloudflare 部署。九项公开运行值由同一产品配置声明校验，注入正式包Wrangler模板后以实际将写出的UTF-8字节计算SHA-256，作为独立QR_V1动作码17的最终配置摘要；发布前重新取得公开值并重建同一配置，摘要不一致则在任何密钥装配或云写入前失败。Worker Secret值不进入冷签载荷。
-
-
-
-产品Build公开编译合同供GitHub Workflow读取；控制台不再为公民服务端读取或执行本机Build声明，只按本产品接入文件中的`cloudflare.yml`坐标派发自动化。聊天云资源维护仍由`scripts/tatachat.mjs`独立负责。
 
 ### Runner资源、可信引导与任务边界
 
@@ -500,8 +502,6 @@ runTool只允许当前产品源码根、当前GitHub编译工作根及已登记C
 
 ## Cloudflare Runner Build公开资源与完整入口
 
-
-
 当前唯一编译宿主是GitHub Ubuntu24.04 Linux x64 Runner，使用锁定Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及esbuild。Build不准备Mac Xcode或本机测试工具。
 
 Build按本仓合同与锁读取唯一编译需求；协议配方固定消费TataChatSDK提交b0485cf0a2c0922791741a748fdec0a49003089f及其lib/protocol三件文件。Linux工具从锁定官方来源准备；XZ/LZMA2由产品Node解码，不依赖系统xz。
@@ -509,9 +509,6 @@ Build按本仓合同与锁读取唯一编译需求；协议配方固定消费Tat
 Workflow调用产品公开`executeBuild`并显式交付本次Runner源码外工具库、依赖库与编译工作根。Build按本仓声明取得、验真、使用和清理资源；缺件、取消、错身份或未确认的工具后代均失败。
 
 work_claim=product使完整入口在创建内部现场前持短锁领取长期守卫，核验活跃保护并清空准确build现场；独立与控制台调用互斥。控制台在产品实际close及结果核验后登记确认，守卫继续保护两件候选直到既有SQLite记录完成；然后在同一短锁内删除守卫并清空当前任务现场。独立执行在返回成功或失败前确认全部工具退出并清空现场，返回的文件坐标仅作当前任务结果证据，不是持久可下载包。退出未确认或SQLite记录失败保留受保护现场，不登记成功清理；不建立替代持久产物目录。本机仅实现既有Cloudflare Build，未新增CitizenServe Start或LinuxARM实现。
-
-
-
 
 ## 会员确认回执
 
@@ -533,7 +530,7 @@ work_claim=product使完整入口在创建内部现场前持短锁领取长期�
 
 钱包签名固定为signing_message(0x1d)=blake2_256(GMB‖0x1d‖SCALE)。SCALE依次包含字符串citizenserve.account_deletion、服务HTTPS origin、32字节chain_scope、CID字符串、32字节account_id、u64小端binding_revision、用途字节（delete=0/status=1）、32字节challenge_id、u64小端expires_at_millis。挑战有效期300000毫秒；App用本机可信IdentityBinding和实际服务origin独立构造完整字节，再比对服务下发payload。未知字段、错用途/域/链/绑定、期限、非规范nonce及任意不透明payload均拒绝，不直接签服务下发的任意内容。
 
-主库增加account_deletion_challenges、account_deletions和约束断言表，最终schema源码为39表；本节不表示云DDL已经执行。提交在同一D1事务再次核对当前MLS授权、钱包挑战与准入，消费nonce、保存任务、撤销会话和设备并冻结该CID业务写入。已有profile writing、未完成/删除中的广场上传或其他维护对象定位使提交回滚，保留原会话、nonce及上传定位；不能凭过期/HEAD缺失认定在途写入已结束。准入、设备、会话、MLS挑战、维护定位与通知收件方的数据库断言共同防止绕过冻结。
+主库增加account_deletion_challenges、account_deletions和约束断言表，最终schema源码为41表；本节不表示云DDL已经执行。提交在同一D1事务再次核对当前MLS授权、钱包挑战与准入，消费nonce、保存任务、撤销会话和设备并冻结该CID业务写入。已有profile writing、未完成/删除中的广场上传或其他维护对象定位使提交回滚，保留原会话、nonce及上传定位；不能凭过期/HEAD缺失认定在途写入已结束。准入、设备、会话、MLS挑战、维护定位与通知收件方的数据库断言共同防止绕过冻结。
 
 后台复用既有Storage维护事件和同一资源绑定，每次仅执行一个有界批次：私有square/{cid}/与profile/{cid}/前缀、公开媒体、聊天，然后固定非金融白名单每次最多100行。公开对象先保存全部已分配键，再分页覆盖为零字节、无原内容或自定义元数据的空对象并刷新CDN；不物理移除这些空对象，使旧If-None-Match:*直传无法在删除后重建内容。普通公开媒体删除共用这一封堵方式，后续维护不能删掉封堵对象。私有对象每批最多8件；对象端口明确成功后才解除IO屏障，CDN刷新失败继续保留键并安全重试。每次外部对象操作前持久保存键与独占IO屏障，结果未知时保留pending及定位，不通过租约过期自动重发或标记完成。恢复查询始终能区分pending与complete；未知IO须取得明确结束证据后才可处理，不能承诺仅按超时自动收敛。
 
@@ -546,7 +543,6 @@ work_claim=product使完整入口在创建内部现场前持短锁领取长期�
 scripts/build.mjs按本仓公开声明和原始Cargo/npm锁准备协议、工具、Cargo vendor及npm任务视图，直接消费已提供路径。协议回执包含当前任务和原始协议文件列表；build.rs只消费准确回执，不执行Node/资源版本重复判定。workerTestView仅在本轮任务根物化真实Worker测试视图；资源回执不承载自建配方或全树签名。
 
 供给缺件、离线缺件、工具非零退出、取消或后代未退出按实际结果失败。固定工作根、任务身份、隔离、互斥与清场合同继续适用。业务授权、钱包及链签名、TLS和正式应用产物的签名安装合同保持各自职责。
-
 
 ### 脚本边界
 
@@ -572,7 +568,7 @@ main推送后不自动启动本产品Workflow。公民服务端自动化由控�
 
 ## GitHub Runner编译入口
 
-本产品不再提供本机编译或测试流程。GitHub Workflow直接调用`scripts/build.mjs`的`executeBuild`，由产品独立准备锁定资源、编译Worker，并在输出被本轮Runner消费后清空固定工作根。
+本产品不提供本机产品Build流程；公开测试API只生成临时测试依赖。GitHub Workflow直接调用`scripts/build.mjs`的`executeBuild`，由产品独立准备锁定资源、编译Worker，并在输出被本轮Runner消费后清空固定工作根。
 
 公开编译及资源配方唯一归`scripts/build.mjs`；GitHub Workflow将当前Run身份投影为产品任务编号，不向编译子流程交付GitHub令牌。Tag/Release步骤只消费已验真的Runner输出。
 
@@ -586,17 +582,15 @@ Cloudflare自动化只在GitHub main源码上执行。YAML调用产品Build公�
 
 当前自动化目标仅Cloudflare；未实现的Linux ARM自动化入口、声明及对应断言移除。
 
-Build文件不再含本机测试入口；GitHub真实编译、正式Release及资产回读以本次Workflow终态为准。
+正式Build与本机测试API各自独立；GitHub真实编译、正式Release及资产回读以Workflow终态为准。
 
 GitHub Runner编译现场由本产品领取和收尾。固定工作根互斥、输出被Workflow消费且子进程退出后清场；Workflow持有Tag/Release和Runner临时资产，不由控制台实现产品编译。
 
 软件版本计算使用本目标GitHub运行序号作为单调下界，并与本仓已有正式Release版本比较；版本只在GitHub本次运行内产生，Tag另绑定准确Run与attempt。
 
-
 ### 当前自动化最后处理
 
 本仓Cloudflare自动化仅由 `cloudflare.yml` 调用产品 `scripts/build.mjs`。Build收尾只处理本次固定编译现场，Workflow清理本次Runner临时目录；正式产物失败时仅撤销本次Tag/Release，不根据已删除的旧入口猜测历史归属。固定依赖仍由本仓声明和原锁管理。
-
 
 ### 本仓 GitHub 自动化与塔塔鹿鹿
 
@@ -613,9 +607,6 @@ GitHub Runner编译现场由本产品领取和收尾。固定工作根互斥、�
 
 本产品现有 `scripts/build.mjs` 提供 `startAutomation(route, action, host)`、`recoverAutomation(task, route, host)` 和独立模式的 `dispatchAutomation(platform, token, options)`。产品按本仓平台与 Workflow 白名单派发、回读、观察 Run 与 Job、限额读取终态日志、取消及恢复原 GitHub Run；控制台的 `tata/citizenserve.mjs` 仅调用这些公开入口，提供任务宿主及短期授权。派发回执中的 Run ID 先写入任务，回读中断后只恢复该 Run，禁止重复派发；控制台宿主通过 `recoverTask(task)` 重进所属产品的恢复授权上下文，显式独立模式才调用产品恢复入口。恢复时先挂接原任务的产品取消入口，再请求观察授权；观察授权失败仍保留取消能力，用户取消时单独领取关闭授权。取消和恢复均重新核验本仓、主分支、Workflow、提交及 Run ID。其他记录、资产和发布能力不在本次迁移范围内。 同文件的合成合同回归覆盖派发成功与不确定回执、错误仓库/平台/SHA、观察两种终态、只取消原 Run、只恢复原 Run 和过期授权保留取消入口。
 
-
-
-
 ## 独立执行与外部接入边界
 
 本仓工具、依赖、SDK选择、原始锁、测试及验收均由本仓实现决定。完整编译入口自行准备资源；不接收控制台资源FD、任务宿主、控制台工具/依赖路径或控制台清场回调。签名材料由产品已有独立实现处理。工作目录互斥、子进程退出确认和任务清场仍由本产品负责。外部调用与本仓直接运行使用同一CLI和公开实现。
@@ -625,7 +616,6 @@ GitHub接口使用普通参数和已授权令牌，返回本仓既有版本计�
 发布接口只接收普通配置、payload、credentials及公开回执；不接收控制台安全操作名、file或base64帧。控制台安全帧由其tata/唯一接入文件转换，原生层在原授权内调用本仓deploy入口，产品实际上传实现只有本仓这一份。
 
 当前候选仍待运行验收；本轮只补准确业务回归，不追修新增通用自动化夹具，也不向控制台或其它产品添加跨仓准入。scripts/config.mjs及其公开配置合同保持；通过控制台保存推送仍要求本仓.github/tatalulu.yml。 发布prepare只读核验正式资产；publish接收公开配置、准确候选和本轮凭据，deploy接收payload与credentials调用同一deployCloudflare实现。密钥装配、Worker上传及实际部署回读归本仓。Node25.2.1与Wrangler4.149.0沿用本仓锁；公开配置仍由既有scripts/config.mjs解释，不增加本机Worker Build或LinuxARM流程。
-
 
 ## 统一注册门禁
 
@@ -664,7 +654,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 
 `chain/subscription.rs::for_authority`只在完整注册Authority之后读取会员，并核对身份同一canonical finalized哈希、块号及链时间。普通业务不读取价格；会员页面/交易所需原u128价格另由Current提供。会员许可取身份确认、普通会话、最长60秒会员核验及paid_until中的最早期限，保留时钟回退拒绝。
 
-聊天入口和Host每次通过既有head/metadata/by_cid取得真实canonical CID并执行原D1单调投影，不占用15秒投影刷新租约；链故障仍拒绝凭证/关闭连接，多设备不相互占锁。普通聊天不读取会员。中性聊天JWT唯一版本为2，附件状态明确Disabled；只有附件操作经统一门禁取得含非零额度及会员期限的AttachmentGrant，派生单次Access不延长基础凭证。原Ed25519、Origin、设备代际、请求签名、15分钟凭证、60秒复核和交付前D1围栏保留。
+聊天入口和Host只消费当前服务端授权及独立同步健康，不查询链或写身份投影；设备/会话/绑定撤销与同步失效仍拒绝凭证/关闭连接。普通聊天不读取会员。中性聊天JWT唯一版本为2，附件状态明确Disabled；只有附件操作经统一门禁取得含非零额度及会员期限的AttachmentGrant，派生单次Access不延长基础凭证。原Ed25519、Origin、设备代际、请求签名、15分钟凭证、60秒复核和交付前D1围栏保留。
 
 ### 额度与计量
 
@@ -680,11 +670,11 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 | 同时上传 | 1 | 2 | 3 |
 | 广场存储字节 | 100,000,000,000 | 1,000,000,000,000 | 10,000,000,000,000 |
 
-会员浏览继续不限额，每页安全顶50；没有新增浏览/下载收费额度，也没有非会员免费广场分支。原图片/视频/存储账本按last_charged_at至paid_until的链上周期原子预留和扣减，聊天只限制原单附件大小，不增加普通聊天配额。
+会员浏览每页安全顶50，广场仍要求有效会员。原图片/视频/存储账本按last_charged_at至paid_until的会员周期原子预留和扣减；聊天、附件及媒体另受下述UTC日风控硬顶，不改变原单文件权益或新增收费接口。
 
-统一`server/cloudflare/sql/meter.sql`在原AUTH_ASSERT事务中保存指标和幂等操作。浏览按实际返回条数计量，详情/他人资料按获准成功返回次数，发布按首次成功确认事件，媒体按GET获准正文范围字节计量；HEAD/304为零正文，重复GET是新的获准读取，不冒充客户端实际接收字节。首次发布操作、资源和数量稳定；已提交同发布跨周期重试保留首次周期并且不重复计数，其它指标仍严格匹配周期。缺字段、非整数、安全整数溢出、冲突、过期和撤销均失败并回滚。
+统一`server/cloudflare/sql/meter.sql`保留原AUTH_ASSERT及会员最新行/期限/同步健康保护。浏览、详情和他人资料只更新原汇总，不新增随机操作流水；发布保留稳定回执，跨周期同结果重试保留首次周期且不重复计数。媒体和聊天资源使用同文件资源预算段，同事务预扣CID汇总membership_usage与全站rate_windows，不写随机访问流水。媒体HEAD/304只扣请求，GET在R2读取前按获准Range长度扣交付字节；重复GET再次预扣，失败保守占量。缺字段、非整数、溢出、冲突、过期和撤销均拒绝。
 
-主库新增membership_operations及membership_usage，原资源账本不重置；两表在原注销清理名单末尾按CID、原100行上限清理，旧阶段编号及永久财务证据保留；本轮未执行生产DDL迁移或部署。媒体直读先通过会员再访问R2，交付前再验证原授权view、对象版本和许可期限，保留Range/条件请求及私有no-store响应。
+主库新增membership_operations及membership_usage，原资源账本不重置；两表在原注销清理名单末尾按CID、原100行上限处理；当前UTC日风控行（含资料媒体请求/预留字节）保留，删除与剩余检查使用同一条件，旧阶段编号及永久财务证据保留；本轮未执行生产DDL迁移或部署。媒体直读先通过会员再访问R2，交付前再验证原授权view、对象版本和许可期限，保留Range/条件请求及私有no-store响应。
 
 ### 最小名片与接口同步
 
@@ -693,3 +683,90 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 名片只读CID、当前账户、昵称、头像、更新时间及原认证/会员显示徽标，不查询bio、背景、关注计数或帖子。完整profiles路由仍受他人主页会员规则约束，不能通过名片访问背景或完整资料。App的聊天、通讯录和关注列表消费名片，完整主页缓存独立。
 
 对外只使用HTTPS及WSS，既有域名、来源、证书、主机名、有效安全端口、准确路径、查询、重定向及内部来源校验不降级。源码接线已实现，全部正常/失败/边界及回归状态以既有任务卡为准；本轮不进入生产编译、安装或部署。
+
+## 统一服务端门禁与查链资源上界（前后端联调第1步）
+
+实现路径：`server/cloudflare/repositories/auth.rs`一次D1快照取得身份、真人准入、设备、会话、原会员行及两项同步健康；`server/gate/identity.rs`生成Authority，`membership/gate.rs`生成对应操作的Permit。普通GET会员、创作者套餐/概览、媒体、业务挑战、已有设备建会话和通知投递均不创建Chain，也不通过失败分支排队补查。会员表历史扣款账户不代替当前CID身份；业务写事务比较最新档位、状态、paid_until、last_charged_at和投影块，旧许可不能跨越降档、停用或续费。
+
+聊天签发、WSS定位/升级、恢复、消息、附件、闹钟和唤醒推送直接及间接RPC均为0。Worker先验JWT定位设备DO，DO核验一次完整D1上下文；同事件的基础身份与附件限额共享Host结果。JWT仍为v2、最多15分钟，最长60秒宿主复核，每设备最多4连接。异步签发后的D1撤销围栏保留，不把交付围栏误称为重复完整鉴权。
+
+健康复用原scheduler_leases：`sync:identity:{genesis}`和`sync:membership:{genesis}`。last_slot是已追平高度，updated_at是真实完成时间；相应全局游标必须达到该高度。只有成功追平观察目标才更新，部分进度不能标健康；缺失、未来时间或距完成已达600秒拒绝对应授权。现有5分钟Cron及Queue续跑：有进度未完成1秒，无进度/异常60秒退避、最多4次失败；业务I/O最多45、含提交50、每轮45秒。身份与会员健康独立，单个目标确认不更新全局健康。
+
+| 查链池 | 每分钟预扣 | 每UTC日预扣 | 每动作实际发送上限 |
+| --- | ---: | ---: | --- |
+| 后台身份/会员投影、到期与价格 | 5000 | 1000000 | 45 |
+| 会员/帖子确认、受保护充值结算、广场破坏性存储清理核验 | 1000 | 100000 | 64 |
+| 身份确认/激活、匿名广播、充值意图及原公共EVM/宪法/runtime/固定资源 | 1000 | 100000 | 身份/广播/意图64；EVM为5+合法子请求数≤25；宪法16；runtime5；资源1 |
+
+预扣复用rate_windows，一批原子检查minute/day；真实HTTP唯一出口从同一Chain余量扣减，失败和未用余量不退款。公共池不能占用确认池或后台池，不因增加用途另开预算；原IP AUTH10/READ120/WRITE30每分钟及Base独立300每分钟保持。公共26方法、20项批量、参数/正文/日志限制保持；全非法批次不构造Chain。身份确认的typed JSON及块hash格式、设备登记typed正文、广播typed JSON及原bytes()长度/十六进制校验先于Chain创建；这些本地非法输入不预扣、不查链。TopupIntent仅供匿名充值意图只读目标，不能广播；Topup仍只供受SETTLE_TOKEN保护的结算。旧窗口计数不回退或清零，公共池耗尽拒绝公共动作，不转扣确认池。预算是最大预留量，不等同实际账单。
+
+创作者概览独立映射CreatorOverview会员操作，复用唯一Permit及600秒会员同步健康、paid_until和最长60秒许可，缺健康/过期/未来时间拒绝，不能因身份健康正常而使用旧会员行。概览仓库仅一次SQL返回一行：有效订阅人数、非法行数、精确月摊高低位合计及档位数；仍最多检查100001条，超过100000拒绝。月/季/年逐笔按1/3/12整数取整，再以1000000拆位求和，Rust用checked u128重组并经原safe_price验证，不使用浮点或交付越界收入。只减少查询往返、结果传输及Worker内存/CPU，不承诺D1只扫描一行或实际扫描费用必然下降。鉴权读取、真实验签、一次性挑战和交付前期限复核保持；普通概览RPC为0。
+
+到期刷新复用原会员维护任务，每批最多1 CID；`member-refresh:{genesis}:{cid}:{binding_revision}:{old_paid_until}`协调45秒租约、60秒重试和最多4次失败。刷新事务核对原绑定、旧paid_until/区块及租约；旧结果不能覆盖续费。成功但未续费的版本保留已检查标记，不按TTL删除后重复查询；仅原记录/绑定/期限不再匹配时有界清理。旧授权价未知行由独立维护补齐，普通读取不触发刷新。原展示KV键`membership:prices:{genesis}`期限600秒，每个5分钟会员维护任务更新一次；缺缓存返回待同步，不能伪造零价或现场补查，其他缓存键仍60至300秒。
+
+两张原表square_memberships/square_creator_subscriptions各增加可空authorized_price_fen，由原投影事务保存真实链值；旧行NULL不能替代成last_charged_price_fen或0。未新增业务表、目录、队列、DO。会员确认先核对原交易回执的CID、账户、区块、交易及用途；新回执在原action_kind保存入口/创作者与真实动作，历史裸动作只有现有投影能证明用途时才复用，否则冲突拒绝，不为该旧回执补查链。相同已完成确认RPC为0，原成功接口字段保持。帖子同交易确认也复用原索引事实。
+
+数据库更新和发布尚未执行。已有数据库需要在独立发布审批中准备两次ALTER TABLE ADD COLUMN、原视图的事务内DROP/CREATE及恢复定义；只重新执行CREATE TABLE IF NOT EXISTS不会给旧表加列。本步仅在临时SQLite验证视图/列切换、失败回滚及重复应用，不能据此声称生产已生效。投影游标及健康标记必须由独立同步真实追平建立。
+
+macOS测试工具与正式声明统一：Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及协议提交b0485cf0a2c0922791741a748fdec0a49003089f。测试入口核对原件摘要和实际工具版本，不使用系统protoc34.0；正式Linux Build、依赖锁、Workflow与生产绑定保持。具体本轮结果与下一步审批记录在原任务卡`/Users/rhett/tataconsole/tasks/进行中/前后端联调任务.md`。
+
+## 前后端联调第2步：平台确认可选快照（2026年10月18日）
+
+仅原POST /api/membership/confirm本地解析可选include_state布尔值，默认false；该字段仍受原MLS正文签名保护。不改共享chain::transaction::Confirm、不新增路由或查链用途。省略/false的成功响应精确保持ok、tx_hash、block_hash三字段；true时增加membership_state，结构和GET /api/membership相同，由最新真实D1会员行和既有价格KV经原membership::service::current组装。
+
+原确认或幂等回执成立后才读快照，许可期限沿原Authority裁剪，不延长60秒，不回退RPC。会员同步健康或三档价格缺失时响应不可用，但已确认交易事实保留；恢复后相同证明直接重试，不能再次付款。旧版不要求新快照。非布尔flag和原交易/用途/主体冲突继续拒绝。原Worker回归覆盖旧三字段、新四字段、缺KV/健康、恢复、幂等及RPC=0；资源风控规则见下节，部署状态以原任务卡为准。
+## 聊天、附件与媒体资源硬额度
+
+数值唯一归`membership/limits.rs`内部常量及ResourceLimits，不增加原Plan响应字段。聊天全路径直接及间接RPC=0；有效非会员可用基础聊天，附件要求有效会员。下表按公民号合并全部设备，UTC日以服务端时间计算，密文存量包含pending、ready和deleting。
+
+| 每CID限制 | 自由 | 民主 | 薪火 |
+| --- | ---: | ---: | ---: |
+| 原单文件明文上限 | 10MiB | 100MiB | 5GiB |
+| 待上传件数 / writing块数 | 1 / 1 | 2 / 2 | 3 / 3 |
+| 暂存总件数 / 密文字节 | 8 / 32MiB | 16 / 512MiB | 32 / 12GiB |
+| 日附件新建尝试 | 32 | 128 | 256 |
+| 日聊天附件上传密文字节 | 64MiB | 1GiB | 12GiB |
+| 日交付字节（聊天附件+广场媒体共用） | 128MiB | 2GiB | 24GiB |
+| 日分块PUT/GET/恢复HEAD操作 | 512 | 4096 | 65536 |
+| 日广场媒体请求（含HEAD/304） | 10000 | 10000 | 10000 |
+
+基础聊天每CID每日：非Ping命令20000、设备投递10000、原始帧128MiB、WSS升级512。全站每日：命令200000、投递100000、原始帧2GiB、升级50000。按实际收件设备数计投递，帧字节仅计算实际输入长度，不重复加密文载荷。
+
+全站聊天附件暂存最多5000件/512GiB，每日新建尝试5000；聊天附件上传100GiB、聊天附件与广场媒体交付合计200GiB、分块操作500000、广场媒体请求200000。头像及广场预签名上传仍使用各自原有控制，本节聊天上传硬顶不宣称覆盖所有云上传。
+
+原RATE_READ=120/分钟、RATE_WRITE=30/分钟分别限制IP及可信CID，两个键域独立；换IP不能重置CID。WSS升级用WRITE，附件HTTP与媒体用READ，持久聊天命令按读写类别用对应CID挡板。设备DO最多4连接共用一个持久分钟窗：240帧/8MiB，含Ping和非法输入，先于恢复鉴权/D1检查；重连不清零。Ping另限同设备全部连接合计16次/分钟、原始帧最多64字节；与原总帧/字节同次读取和保存固定分钟窗，旧窗缺pings仅按0解码。超额在恢复/Host/主库前关闭触发连接，重连或实例重建不清零；合法Ping仍完整核验当前授权及原闹钟，不写主库日预算或随机流水。原单帧2MiB、HTTP单块4MiB不变。
+
+CID与全站预算在主库同批全量检查并预扣，已耗尽时不更新计数。主库预算与聊天库存量分属两笔事务：主库成功后聊天库失败仍占预算，不能宣称跨库原子。库存量直接按原attachments记录检查，deleting及未知writing均不提前释放。只有原Store装配有效会员限额才能begin/独占写入，不接受客户端档位、CID或额度。
+
+begin、upload、complete、download均比较整份密文与当前原明文上限及MLS允许开销，降档或低档接收者不能用小块绕过。属主、期限、状态和完整大小检查先于正文及对象操作。已确认成功块直接返回，不读正文、不PUT；未写前失败复用准确预留，调用PUT后结果未知则保留同一attempt/object_key，只能在有预算时HEAD原键恢复，不换键重写。已有真实R2成功回执只补原确认，不额外HEAD。ACK、abort、独立到期清理及已删除幂等回执仍可沿原归属规则释放占用。
+
+媒体先扣请求再HEAD，按原ETag/Range校验后在GET前预扣真实范围字节；HEAD/304无正文扣量。流式响应、对象版本、交付前会话围栏与no-store保持。HTTP频率/日预算耗尽沿原429及重试头，附件存量或整份上限沿原413/ResourceLimit，WSS沿原resource_limit帧；存储故障拒绝，不默认有额度。ACK/abort仍受非Ping命令总预算，独立到期清理不消费用户预算。
+
+资料媒体读取（名片头像、本人及他人完整资料头像/背景）在原注册/会员门禁之后，使用独立CID与IP的RATE_READ挡板；同一原预算batch在引用查询/R2 HEAD/GET之前预扣profile_requests及profile_read_bytes。每CID每日1000请求/64MiB预留、全站100000请求/10GiB预留，UTC日和数值唯一取membership/limits.rs。每次字节额复用Kind.limit：头像512KiB、背景1536KiB；Range、304、404和失败都预留且不退。它是最坏读取量，头像实际最多128次/日，不能当作真实传输或计费字节。名片头像/本人资料不要求会员，他人完整资料继续原Member许可及最新行/健康围栏。原完整对象哈希与Range检查保持；额度耗尽不查询引用或R2，指标只写原汇总，不增随机流水。两指标沿原7日/1000条维护清理并保留当前日，注销重新准入不重置同CID当日余额；上传与其单文件限制不在本次读取额度范围。
+
+应用硬顶限制这些入口获准的动作和用量，公网拒绝请求仍可能产生边缘/Worker请求成本；不等于云账户金额封顶。暂存文件最长7天，到期立即禁读；连续回收和普通访问历史按下节执行。生产索引/部署状态仅记录于原任务卡。
+
+## 暂存回收与历史保留
+
+收件用户在下载、校验、解密、最终缓存保存和MLS终态成功后ACK；已有缓存恢复也先核大小/摘要。单收件用户确认后或全部收件用户确认后进入deleting，普通HTTP响应结束不代表客户端已保存。附件最长7天，到期立即禁读写并安排回收。进入deleting后不再交付；只有全部对象与尝试实际终结，才移除元数据和释放暂存占用。
+
+原Objects端口明确返回完成/实际进度，正常部分完成与未知无对象不冒充存储故障。ACK/abort小批未删完沿原成功响应表示已受理并唤醒原维护；真实故障仍保留定位并返回原错误。已确认written且准确一次性键直接DELETE，省去例行HEAD；reserved通过原条件更新阻止开写后终结；writing仍只HEAD原键，观察到真实版本才转已知状态清理，缺对象不能按超时释放。重复ACK/abort遵守未知尝试300秒待查时间，不能反复HEAD同键。discard也先用原持久回执证明准确attempt/key/version，再直接DELETE，不宣称版本CAS。
+
+| 清理范围 | 固定上限与续跑 |
+| --- | --- |
+| 前台ACK/abort | 单次最多8次对象I/O；部分完成留原deleting与定位 |
+| 后台附件轮次 | 最多8件；复用同一个Budget，业务I/O最多45、含收尾提交最多50，45秒后不启动新I/O |
+| 后台日池 | rate_windows独立cleanup日窗，每UTC日1000000名额，每轮预扣50、未用不退；包括聊天维护和注销附件，不占用户或RPC额度 |
+| 正常进度 | 同一maintenance任务1秒续跑；预算不足时同批未处理定位一起延期，不能掉回5分钟瓶颈 |
+| 未知/故障 | 未知无进度300秒复查；真实故障60秒退避、连续4次后保留定位由下一Cron重领 |
+| 日池耗尽 | 持久延期至下一UTC日，0对象I/O，不每秒重建任务 |
+| 聊天行清理 | key_packages、messages、message_receipts、attachment_receipts每表每轮最多1000行；满批续跑，空闲结束 |
+
+所有D1/R2和该轮Queue发送共用轮内预算；D1直接使用真实meta变更数，不另发SELECT计数或返回千行占位。未删完或日顶耗尽仍占存量，禁止提前放行更多附件。原5分钟Cron只安排/兜底，原maintenance/Queue连续分批；租约条件更新阻止旧消费者结束新租约，失败进度存原lease_id，不新增表列或消息字段。最早due使用原attachment_cleanup/attachment_expiry索引的三次首项查询；活动尝试跳过deleted及尚未到期未知项，不排序扫描已删记录。注销不再保留另一份对象删除实现，沿同一R2Objects一对象/轮执行。
+
+普通browse/detail/profile读取只更新原汇总，媒体继续第3步预扣；membership_operations仅保留必要发布幂等。旧committed普通访问明细保留7天后每批最多1000行删除，reserved及published不作普通TTL清理。普通每日汇总和风控计数保留当前UTC日及此前6个完整UTC日，square_browse_days同一7日桶；发布汇总、有效上传周期、交易/上传/删除幂等及永久金融证据保持。主库三个普通索引支持按metric/created_at、metric/period_start、browse_day清理，认证维护按真实删行进度续跑。
+
+消息回执只在已无消息时删除，避免回执级联突破清理批量。未到期附件回执保持原expires_at，不延长；过期附件物理删完后不再插已过期回执。completed/failed聊天维护槽保留7天，每批最多1000项，pending/leased不删。注销保留同CID当前UTC日九类风控原行，普通业务资料仍按原阶段删除；不能靠注销重注册重置当日额度，保留行随后按原日桶保留期清理。
+
+这些是应用操作上界，不等于云账户金额封顶；D1计费行数与一次接口调用数不同。未知在途对象保留必要恢复定位，资源不足可能延后物理清理。没有配置R2生命周期或执行生产DDL/部署；执行和验收证据仅归原任务卡。
+

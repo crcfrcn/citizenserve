@@ -1,7 +1,7 @@
 // 实际worker-build ESM/WASM + 本地workerd/D1/R2。所有出站请求均由闭合白名单测试服务处理。
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {createRequire} from 'node:module';
 import {readFile,realpath,lstat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
@@ -9,6 +9,9 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,generateKeyPairSync,sign,randomBytes} from 'node:crypto';
 import {testKeys,verifyJwt} from './push_crypto.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
+// 本机测试只加载本仓固定test资源视图；正式/既有入口继续按原模块解析。
+const require=createRequire(process.env.CITIZENSERVE_TEST_WORKER_DIR===join(root,'target/test/worker')?join(root,'target/test/npm/package.json'):import.meta.url);
+const {Miniflare,convertV4MiniflareOptions}=require('miniflare');
 // 临时宿主仅接受本次源码快照内target/test/worker准确目录，禁止链接或外部产物。
 const testWorker=process.env.CITIZENSERVE_TEST_WORKER_DIR;
 const workerRoot=testWorker??join(root,'target/build/cloudflare/worker');
@@ -49,7 +52,7 @@ for line in SCHEMA.splitlines(True):
  if sqlite3.complete_statement(part):
   if part.strip():statements.append({'sql':part,'args':[]})
   part=''
-for table in ['users','registration_enrollments','mls_devices','square_sessions','cid_admissions','user_identity_checks','user_profiles']:
+for table in ['users','registration_enrollments','mls_devices','square_sessions','cid_admissions','user_identity_checks','user_profiles','square_memberships','scheduler_leases','user_projection_cursor','membership_projection_cursor']:
  for row in b.execute('SELECT * FROM '+table):statements.append({'sql':'INSERT OR IGNORE INTO '+table+' VALUES('+','.join('?' for _ in row)+')','args':list(row)})
 print(json.dumps(statements))
 `,root],{encoding:'utf8'}));
@@ -84,7 +87,7 @@ async function outbound(req){
    return new Response(url.pathname==='/'?networkHTML:networkPNG,{headers});
   }
   if(unknownChain)return new Response('{}',{status:503});
-  if(slowChain>0){const round=slowChain--;if(round===4)firstLeaseExpiry=(await first("SELECT lease_expires_at FROM notification_deliveries WHERE state='leased' ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;await new Promise(resolve=>setTimeout(resolve,8000));if(round===1)renewedLeaseExpiry=(await first("SELECT lease_expires_at FROM notification_deliveries WHERE state='leased' ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;}
+  if(slowChain>0){const round=slowChain--;if(round===4)firstLeaseExpiry=(await first("SELECT lease_expires_at FROM maintenance_jobs WHERE state='leased' AND artifact_owner IS NULL ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;await new Promise(resolve=>setTimeout(resolve,8000));if(round===1)renewedLeaseExpiry=(await first("SELECT lease_expires_at FROM maintenance_jobs WHERE state='leased' AND artifact_owner IS NULL ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;}
   const {method,params,id:rid}=await req.json();receivedRpc.push(method);let result;
   if(method==='chain_getFinalizedHead')result=fixture.head;
   else if(method==='chain_getBlockHash')result=params[0]===0?fixture.genesis:h(Number(params[0]));
@@ -118,9 +121,67 @@ async function outbound(req){
  }
  throw new Error('Forbidden external request '+req.url);
 }
+// 只在本地夹具入口计数，真实Worker ESM/WASM保持原样；不增加产品路由。
+const instrumentedEntry=String.raw`
+import Actual,{TataChatDevice as Device} from './index.js';
+import {WorkerEntrypoint} from 'cloudflare:workers';
+const counters={do_window_reads:0,do_window_writes:0,contexts:0,statements:0,batches:0,r2_head:0,r2_get:0,r2_put:0,r2_delete:0,queue_sends:0,body_reads:0};let queueMessages=[],failDeletionReceipt=0;const queues=new WeakMap();const databases=new WeakMap(),buckets=new WeakMap(),requests=new WeakMap();let failReceipt=false;
+function database(db){if(databases.has(db))return databases.get(db);const proxy=new Proxy(db,{get(target,key){
+ if(key==='constructor')return target.constructor;
+ if(key==='prepare')return sql=>{counters.statements++;if(sql.includes("CASE WHEN d.device_id IS NOT NULL THEN json_object"))counters.contexts++;if(failReceipt&&sql.startsWith("UPDATE attachment_uploads SET state='written',object_version=?3")){failReceipt=false;return target.prepare("UPDATE synthetic_unavailable SET first=?1,second=?2 WHERE third=?3");}if(failDeletionReceipt>0&&sql.startsWith("UPDATE attachment_uploads SET state='deleted' WHERE attempt_id=?1 AND object_key=?2 AND state='written'")){failDeletionReceipt--;return target.prepare("UPDATE synthetic_unavailable SET first=?1,second=?2 WHERE third=?3");}return target.prepare(sql);};
+ if(key==='batch')return async statements=>{counters.batches++;return target.batch(statements);};
+ const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+}});databases.set(db,proxy);return proxy;}
+function bucket(value){if(buckets.has(value))return buckets.get(value);const proxy=new Proxy(value,{get(target,key){
+ if(key==='constructor')return target.constructor;
+ const member=Reflect.get(target,key,target);if(['head','get','put','delete'].includes(key))return (...args)=>{counters['r2_'+key]++;return member.apply(target,args);};return typeof member==='function'?member.bind(target):member;
+}});buckets.set(value,proxy);return proxy;}
+// 升级向原生DO转交真实Request；普通HTTP的正文计数仍覆盖真实流读取。
+function input(request){if(requests.has(request))return requests.get(request);const proxy=new Proxy(request,{get(target,key){
+ if(key==='constructor')return target.constructor;if(key==='clone')return ()=>input(target.clone());
+ if(key==='body'){counters.body_reads++;return target.body;}
+ const value=Reflect.get(target,key,target);if(['arrayBuffer','text','json','formData'].includes(key))return (...args)=>{counters.body_reads++;return value.apply(target,args);};return typeof value==='function'?value.bind(target):value;
+}});requests.set(request,proxy);return proxy;}
+function queue(value){if(queues.has(value))return queues.get(value);const proxy=new Proxy(value,{get(target,key){if(key==='constructor')return target.constructor;const member=Reflect.get(target,key,target);if(key==='send')return (body,options)=>{counters.queue_sends++;queueMessages.push({body:typeof body==='string'?JSON.parse(body):body,delay:options?.delaySeconds??0});return member.call(target,body,options);};return typeof member==='function'?member.bind(target):member;}});queues.set(value,proxy);return proxy;}
+function environment(env){return new Proxy(env,{get(target,key){const value=Reflect.get(target,key,target);return key==='TATACHAT_PUSH'?queue(value):key==='DB'||key==='TATACHAT_DB'?database(value):['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'].includes(key)?bucket(value):value;}});}
+export default class extends WorkerEntrypoint {
+ async fetch(request){if(new URL(request.url).hostname==='fixture.internal'){if(new URL(request.url).pathname==='/fail-deletion-receipt'){failDeletionReceipt=Number(await request.text());return new Response(null,{status:204});}if(new URL(request.url).pathname==='/fail-receipt'){failReceipt=true;return new Response(null,{status:204});}const result={...counters,queue_messages:queueMessages};if(request.method==='DELETE'){for(const key in counters)counters[key]=0;queueMessages=[];}return Response.json(result);}return new Actual(this.ctx,environment(this.env)).fetch(new URL(request.url).pathname==='/api/tatachat/realtime'?request:input(request));}
+ queue(batch){return new Actual(this.ctx,environment(this.env)).queue(batch);}
+ scheduled(event){return new Actual(this.ctx,environment(this.env)).scheduled(event);}
+}
+// 仅夹具记录真实固定窗I/O并可重建Rust实例；不改变发布ESM/WASM或生产时间。
+function deviceState(state){
+ const storage=new Proxy(state.storage,{get(target,key){
+  if(key==='get'||key==='put')return (...args)=>{if(args[0]==='resource:minute')counters[key==='get'?'do_window_reads':'do_window_writes']++;return target[key](...args);};
+  const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+ }});
+ return new Proxy(state,{get(target,key){if(key==='storage')return storage;const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
+}
+export class TataChatDevice extends Device {
+ constructor(state,env){super(deviceState(state),environment(env));this.fixtureState=state;this.fixtureEnv=env;this.recreated=null;}
+ async fetch(request){if(request.url==='https://fixture.internal/window'){
+  if(request.method==='PUT'){
+   const value=await request.json();
+   if('frames' in value||'bytes' in value||'pings' in value||'minute' in value){
+    const window={minute:value.minute??Math.floor(Date.now()/60000),frames:value.frames??0,bytes:value.bytes??0};
+    if('pings' in value)window.pings=value.pings;
+    await this.fixtureState.storage.put('resource:minute',window);
+   }
+   if(value.recreate)this.recreated=new Device(deviceState(this.fixtureState),environment(this.fixtureEnv));
+  }
+  return Response.json((await this.fixtureState.storage.get('resource:minute'))??null);
+ }return this.recreated?this.recreated.fetch(request):super.fetch(request);}
+ async webSocketMessage(...args){return this.recreated?this.recreated.webSocketMessage(...args):super.webSocketMessage(...args);}
+ async webSocketClose(...args){return this.recreated?this.recreated.webSocketClose(...args):super.webSocketClose(...args);}
+ async webSocketError(...args){return this.recreated?this.recreated.webSocketError(...args):super.webSocketError(...args);}
+ async alarm(...args){return this.recreated?this.recreated.alarm(...args):super.alarm(...args);}
+}
+
+`;
+export async function queryCounts(reset=false){return (await worker.fetch('https://fixture.internal/counts',{method:reset?'DELETE':'GET'})).json();}
 export async function startWorker(extraBindings={},readLimit=1000){
  anchorTime=Date.now();
- mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:join(workerRoot,'index.js')},{type:'CompiledWasm',path:join(workerRoot,'index_bg.wasm')}],modulesRoot:workerRoot,compatibilityDate:'2026-10-07',compatibilityFlags:['no_nodejs_global_timers'],
+ mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:join(workerRoot,'_test_entry.mjs'),contents:instrumentedEntry},{type:'ESModule',path:join(workerRoot,'index.js')},{type:'CompiledWasm',path:join(workerRoot,'index_bg.wasm')}],modulesRoot:workerRoot,compatibilityDate:'2026-10-07',compatibilityFlags:['no_nodejs_global_timers'],
  bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CF_ACCESS_CLIENT_ID:'offline-test.access',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
  d1Databases:['DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:n==='RATE_READ'?readLimit:1000,period:60}}])),outboundService:outbound}]}));
  db=await mf.getD1Database('DB');worker=await mf.getWorker();privateBucket=await mf.getR2Bucket('SQUARE_PRIVATE');publicBucket=await mf.getR2Bucket('SQUARE_PUBLIC_MEDIA');
@@ -139,6 +200,10 @@ print(json.dumps(parts))
  await sql('DELETE FROM mls_devices');await sql('DELETE FROM square_sessions');await sql('INSERT INTO mls_devices VALUES(?,?,1,?,?,1,?,?,?)',fixture.cid,device,fixture.account,publicKey,Date.now(),Date.now(),Date.now());await sql('INSERT INTO square_sessions VALUES(?,?,1,?,?,?,?)',tokenHash,fixture.cid,fixture.account,device,Date.now(),Date.now()+86400000);
  const i=JSON.parse(await readFile(new URL('../contract/finalized_identity.json',import.meta.url)));i.checked_at_millis=Date.now();i.verification_deadline_millis=i.checked_at_millis+60000;i.chain_scope=fixture.genesis;i.registered_block_number=0;i.registered_block_hash=fixture.genesis;i.registered_at_millis=0;i.finalized_timestamp_millis=anchorTime;
  await sql('UPDATE user_identity_checks SET checked_at_millis=?,verification_deadline_millis=?,row_json=?',i.checked_at_millis,i.verification_deadline_millis,JSON.stringify(i));
+ for(const kind of ['identity','membership'])await sql('UPDATE scheduler_leases SET last_slot=9,updated_at=? WHERE lease_key=?',Date.now(),'sync:'+kind+':'+fixture.genesis);
+ await sql('UPDATE user_projection_cursor SET finalized_block_number=9,finalized_block_hash=?',fixture.head);await sql('UPDATE membership_projection_cursor SET finalized_block_number=9,finalized_block_hash=?',fixture.head);
+ const cache=await mf.getKVNamespace('SQUARE_CACHE'),now=Date.now();await cache.put('membership:prices:'+fixture.genesis,JSON.stringify({created:now,deadline:now+600000,value:JSON.parse(await readFile(new URL('../contract/subscription.json',import.meta.url))).prices}));
+ await setMembership();
 }
 export async function stopWorker(){await mf?.dispose();}
 async function fetch(path,method='GET',body='',headers={}){return mf.dispatchFetch(registration.service_origin+path,{method,headers:{'cf-connecting-ip':'192.0.2.1','content-length':String(Buffer.byteLength(body)),...headers},...(method==='GET'||method==='DELETE'?{}:{body})});}
@@ -147,7 +212,10 @@ function u64(n){const b=Buffer.alloc(8);b.writeBigUInt64BE(BigInt(n));return b;}
 async function proof(method,path,body='',identity={publicKey,token,key:mls}){
  const request={account_id:fixture.account,public_key:identity.publicKey,purpose:'request',method,request_target:path,body_sha256:'0x'+digest(body)};
  const r=await fetch('/api/user/challenges','POST',JSON.stringify(request),{authorization:'Bearer '+identity.token});assert.equal(r.status,200,await r.clone().text());const p=await r.json();delete p.ok;
- const content=Buffer.concat([vector(p.user_id),Buffer.from(p.device_id,'hex'),Buffer.from(p.account_id.slice(2),'hex'),u64(p.binding_revision),vector(p.service_origin),Buffer.from(p.challenge.slice(2),'hex'),u64(p.expires_at_millis),vector(p.method),vector(p.request_target),Buffer.from(p.body_sha256.slice(2),'hex')]);p.signature='0x'+sign(null,Buffer.concat([vector('MLS 1.0 TataChatAuthentication'),vector(content)]),identity.key.privateKey).toString('hex');return Buffer.from(JSON.stringify(p)).toString('base64url');
+ return signMlsProof(p,identity.key.privateKey);
+}
+function signMlsProof(p,key){
+ const content=Buffer.concat([vector(p.user_id),Buffer.from(p.device_id,'hex'),Buffer.from(p.account_id.slice(2),'hex'),u64(p.binding_revision),vector(p.service_origin),Buffer.from(p.challenge.slice(2),'hex'),u64(p.expires_at_millis),vector(p.method),vector(p.request_target),Buffer.from(p.body_sha256.slice(2),'hex')]);p.signature='0x'+sign(null,Buffer.concat([vector('MLS 1.0 TataChatAuthentication'),vector(content)]),key).toString('hex');return Buffer.from(JSON.stringify(p)).toString('base64url');
 }
 export async function chatIdentity(extra=false){
  const key=extra?generateKeyPairSync('ed25519'):mls;const pub='0x'+key.publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('hex');const session=extra?'sqs_'+randomBytes(16).toString('hex'):token;const who={publicKey:pub,token:session,key};
@@ -157,7 +225,10 @@ export async function chatIdentity(extra=false){
 export async function chatSQL(query,...args){return chatDB.prepare(query).bind(...args).run();}
 export async function chatFirst(query,...args){return chatDB.prepare(query).bind(...args).first();}
 export async function chatObject(key,body){return body===undefined?chatBucket.head(key):chatBucket.put(key,body);}
-export async function chatUpgrade(credential,protocol='tatachat'){return mf.dispatchFetch(registration.service_origin+'/api/tatachat/realtime',{headers:{upgrade:'websocket',authorization:'Bearer '+credential.access_token,'sec-websocket-protocol':protocol}});}
+export async function chatUpgrade(credential,protocol='tatachat'){return mf.dispatchFetch(registration.service_origin+'/api/tatachat/realtime',{headers:{'cf-connecting-ip':'192.0.2.1',upgrade:'websocket',authorization:'Bearer '+credential.access_token,'sec-websocket-protocol':protocol}});}
+export async function setChatDeletionReceiptFailure(count=1){const response=await worker.fetch('https://fixture.internal/fail-deletion-receipt',{method:'POST',body:String(count)});assert.equal(response.status,204);}
+export async function setChatReceiptFailure(){const response=await worker.fetch('https://fixture.internal/fail-receipt',{method:'POST'});assert.equal(response.status,204);}
+export async function chatWindow(device,value){const ns=await mf.getDurableObjectNamespace('TATACHAT_DEVICES');const stub=ns.get(ns.idFromName(JSON.stringify([fixture.cid,device])));const response=await stub.fetch('https://fixture.internal/window',value?{method:'PUT',body:JSON.stringify(value)}:{});return response.json();}
 export async function chatQueue(body){return worker.queue('citizenserve-tatachat-test',[{id:'chat-fixture-'+randomBytes(8).toString('hex'),timestamp:new Date(),body,attempts:1}]);}
 async function register(provider='apns'){
  const input={push_provider:provider,push_token:provider==='apns'?'ab'.repeat(32):'offline-fcm-token-123456',apns_environment:provider==='apns'?'sandbox':null,expires_at:Date.now()+86400000};const body=JSON.stringify(input);const p=await proof('PUT','/api/notifications/endpoint',body);const r=await fetch('/api/notifications/endpoint','PUT',body,{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,200,await r.clone().text());return r.json();
@@ -292,7 +363,7 @@ test('actual Worker fetch and exact endpoint MLS guard',async()=>{
  const input=JSON.stringify({push_provider:'apns',push_token:'ab'.repeat(32),apns_environment:'sandbox',expires_at:Date.now()+86400000});const noSession=await fetch('/api/notifications/endpoint','PUT',input);assert.equal(noSession.status,401,await noSession.text());const noProof=await fetch('/api/notifications/endpoint','PUT',input,{authorization:'Bearer '+token});assert.equal(noProof.status,401);
  await register();const p=await proof('DELETE','/api/notifications/endpoint');const r2=await fetch('/api/notifications/endpoint','DELETE','',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r2.status,200,await r2.text());assert.equal((await first('SELECT COUNT(*) n FROM push_endpoints')).n,0);await register();
 });
-test('APNs actual WebCrypto signature, fresh RPC, terminal CAS and duplicate queue',async()=>{
+test('APNs实际WebCrypto签名、服务端授权零RPC、终态CAS与重复队列',async()=>{
  const d=await notification(1);const prior=seen.filter(x=>x.url.includes('push.apple.com')).length;await enqueue('delivery',d);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'accepted');await enqueue('delivery',d);assert.equal(seen.filter(x=>x.url.includes('push.apple.com')).length,prior+1);
 });
 test('late old-token invalidation preserves rotated generation; topic error preserves endpoint',async()=>{
@@ -301,8 +372,8 @@ test('late old-token invalidation preserves rotated generation; topic error pres
 test('FCM actual RS256 OAuth JWT and accepted name; invalid registration removed',async()=>{
  await register('fcm');let d=await notification(4);await enqueue('delivery',d);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'accepted');pushStatus=404;pushReason='UNREGISTERED';d=await notification(5);await enqueue('delivery',d);assert.equal((await first('SELECT COUNT(*) n FROM push_endpoints')).n,0);pushStatus=200;pushReason='BadDeviceToken';await register();
 });
-test('unknown chain prevents sending, four durable 429 attempts block',async()=>{
- let d=await notification(6);unknownChain=true;const before=seen.filter(x=>x.url.includes('push.apple.com')).length;await enqueue('delivery',d);assert.equal(seen.filter(x=>x.url.includes('push.apple.com')).length,before);unknownChain=false;await sql('UPDATE notification_deliveries SET lease_expires_at=0,state=\'pending\',lease_token=NULL WHERE delivery_id=?',d);await enqueue('delivery',d);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'accepted');
+test('通知链不可达仍按服务端授权投递，提供方429四次后阻断',async()=>{
+ let d=await notification(6);unknownChain=true;const before=chainCalls();await enqueue('delivery',d);assert.equal(chainCalls(),before);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'accepted');unknownChain=false;
  d=await notification(7);pushStatus=429;for(let n=0;n<4;n++){await sql('UPDATE notification_deliveries SET next_attempt_at=0 WHERE delivery_id=?',d);await enqueue('delivery',d);}assert.deepEqual(await first('SELECT state,attempts FROM notification_deliveries WHERE delivery_id=?',d),{state:'blocked',attempts:4});pushStatus=200;
 });
 test('scheduled persists one slot, queue consumes auth and audit; no financial TTL delete',async()=>{
@@ -313,7 +384,7 @@ test('scheduled persists one slot, queue consumes auth and audit; no financial T
 async function insert(table,row){const columns=Object.keys(row);await sql(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map(()=>'?').join(',')})`,...Object.values(row));}
 test('identity then membership project complete canonical blocks with independent CAS cursors',async()=>{
  await sql('INSERT OR REPLACE INTO user_projection_cursor VALUES(1,8,?,?)',h(8),Date.now());await sql('INSERT OR REPLACE INTO membership_projection_cursor VALUES(1,8,?,?)',h(8),Date.now());
- for(const work of ['identity','membership']){const row=await first('SELECT job_id FROM maintenance_jobs WHERE work_kind=? AND artifact_owner IS NULL',work);await sql('UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=?',row.job_id);await enqueue('maintenance',row.job_id);assert.equal((await first(`SELECT finalized_block_number FROM ${work==='identity'?'user':'membership'}_projection_cursor`)).finalized_block_number,9,JSON.stringify(await first('SELECT * FROM maintenance_jobs WHERE job_id=?',row.job_id)));assert.equal((await first('SELECT state FROM maintenance_jobs WHERE job_id=?',row.job_id)).state,'done');}
+ for(const work of ['identity','membership']){const row=await first('SELECT job_id FROM maintenance_jobs WHERE work_kind=? AND artifact_owner IS NULL',work);await sql('UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=?',row.job_id);await enqueue('maintenance',row.job_id);assert.equal((await first(`SELECT finalized_block_number FROM ${work==='identity'?'user':'membership'}_projection_cursor`)).finalized_block_number,9,JSON.stringify(await first('SELECT * FROM maintenance_jobs WHERE job_id=?',row.job_id)));for(let n=0;n<4&&(await first('SELECT state FROM maintenance_jobs WHERE job_id=?',row.job_id)).state==='pending';n++){await sql('UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=?',row.job_id);await enqueue('maintenance',row.job_id);}assert.equal((await first('SELECT state FROM maintenance_jobs WHERE job_id=?',row.job_id)).state,'done');}
 });
 test('R2/CDN interruption retains locator and storage; resume releases once, keeps monthly usage',async()=>{
  const now=Date.now(),upload='squ_100',post='sqp_100',prefix=`square/${fixture.cid}/posts/${post}`;
@@ -332,8 +403,11 @@ test('source muted/deleted or device revoked cancels delivery without calling pr
   await enqueue('delivery',d);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'cancelled');assert.equal(seen.filter(x=>x.url.includes('push.apple.com')).length,before);await sql('UPDATE square_follows SET notify_enabled=1');await sql('UPDATE mls_devices SET active=1 WHERE device_id=?',device);
  }
 });
-test('long chain verification renews the same CAS lease within 45 seconds',async()=>{
- const d=await notification(13);slowChain=4;await enqueue('delivery',d);assert.ok(renewedLeaseExpiry>firstLeaseExpiry+20000);assert.equal((await first('SELECT state FROM notification_deliveries WHERE delivery_id=?',d)).state,'accepted');
+test('后台长链同步在45秒内续租同一CAS租约',async()=>{
+ let row=await first("SELECT job_id FROM maintenance_jobs WHERE work_kind='identity' AND artifact_owner IS NULL AND state='pending' LIMIT 1");
+ if(!row){row={job_id:id('maintenance',['long-identity',String(Date.now())])};await sql("INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) VALUES(?,'identity',?,?)",row.job_id,Date.now(),Date.now());}
+ await sql('UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=?',row.job_id);slowChain=4;await enqueue('maintenance',row.job_id);
+ assert.ok(renewedLeaseExpiry>firstLeaseExpiry+20000);assert.equal((await first('SELECT lease_token FROM maintenance_jobs WHERE job_id=?',row.job_id)).lease_token,null);
 });
 test('fanout persists 40 recipients per page, resumes stable cursor and never sends in fanout',async()=>{
  const base=await first('SELECT * FROM users WHERE cid_number=?',fixture.cid);const now=Date.now(),author='CN777';await insert('users',{...base,cid_number:author,account_id:'0x'+777..toString(16).padStart(64,'0')});
@@ -357,7 +431,7 @@ test('统一门禁拒绝未知请求、伪造内部类型和无效签名且不�
  assert.equal(rejected.status,401);await rejected.text();assert.equal(receivedRpc.length,before);
 });
 test('业务媒体GET和HEAD及Range先校验CID与当前会话，旧裸地址不匿名交付',async t=>{
- const restoreMembership=setMembership();t.after(restoreMembership);
+ const restoreMembership=await setMembership();t.after(restoreMembership);
  const post='sqp_gate_media',key=`square/${fixture.cid}/posts/${post}/media/0/source.webp`,bytes=Uint8Array.of(1,2,3,4,5,6,7,8);
  t.after(async()=>{await publicBucket.delete(key);await sql('DELETE FROM square_posts WHERE post_id=?',post);});
  await insert('square_posts',{post_id:post,cid_number:fixture.cid,account_id:fixture.account,post_category:'normal',post_type:'document',title:null,excerpt:'门禁媒体夹具',content_hash:'aa'.repeat(32),storage_receipt_id:'sqr_gate_media',chain_block:9,chain_block_hash:fixture.head,tx_hash:h(5),created_at:Date.now(),post_state:'published'});
@@ -395,6 +469,9 @@ test('durable deletion removes cloud content in bounded batches, holds unknown c
   await insert('membership_operations',{cid_number:owner,operation_id:'synthetic-deletion-meter',metric:'detail',resource_key:'synthetic-post',amount:1,state:'committed',period_start:0,created_at:now});
   await insert('membership_usage',{cid_number:owner,metric:'detail',period_start:0,amount:1,updated_at:now});
  }
+ const quotaMetrics=['chat_connections','chat_commands','chat_frame_bytes','chat_deliveries','attachment_begins','chat_chunk_operations','upload_bytes','delivery_bytes','media_requests','profile_requests','profile_read_bytes'],quotaDay=Math.floor(now/86400000)*86400000;
+ for(const metric of quotaMetrics)await insert('membership_usage',{cid_number:cid,metric,period_start:quotaDay,amount:1,updated_at:now});
+ await insert('membership_usage',{cid_number:cid,metric:'chat_commands',period_start:quotaDay-86400000,amount:99,updated_at:now});
  const admission=await first('SELECT enrollment_id FROM cid_admissions WHERE cid_number=?',cid);
  await sql("INSERT INTO account_deletions(deletion_id,cid_number,account_id,binding_revision,chain_scope,enrollment_id,created_at,updated_at) VALUES(?,?,?,1,?,?,?,?)",operation,cid,fixture.account,fixture.genesis,admission.enrollment_id,now,now);
  await sql('UPDATE mls_devices SET active=0 WHERE cid_number=?',cid);
@@ -431,6 +508,8 @@ test('durable deletion removes cloud content in bounded batches, holds unknown c
  assert.equal((await chatDB.prepare("SELECT COUNT(*) n FROM messages WHERE user_id='other'").first()).n,1);
  // 模拟原one-shot写入明确提交，其对象键仍由持久账本持有。
  await chatBucket.put('synthetic-chat-key','synthetic-ciphertext');
+ // 真实晚到对象已经提交，再推进原300秒待查时间；不伪造版本/成功状态。
+ await chatDB.prepare("UPDATE attachment_uploads SET cleanup_after=0 WHERE attempt_id='unknown' AND state='writing'").run();
  for(let n=0;n<40;n++){await advance();if((await first('SELECT state FROM account_deletions')).state==='complete')break;}
  assert.equal((await first('SELECT state FROM account_deletions')).state,'complete');
  assert.equal(await privateBucket.head(privateKey),null);assert.equal(await privateBucket.head(profileKey),null);
@@ -445,7 +524,7 @@ test('durable deletion removes cloud content in bounded batches, holds unknown c
  assert.equal((await first('SELECT cid_status FROM users WHERE cid_number=?',cid)).cid_status,'active');
  assert.equal((await first('SELECT COUNT(*) n FROM cid_admissions WHERE cid_number=?',cid)).n,0);
  for(const table of ['membership_operations','membership_usage']){
-  assert.equal((await first(`SELECT COUNT(*) n FROM ${table} WHERE cid_number=?`,cid)).n,0);
+  assert.equal((await first(`SELECT COUNT(*) n FROM ${table} WHERE cid_number=?`,cid)).n,table==='membership_usage'?quotaMetrics.length:0);
   assert.equal((await first(`SELECT COUNT(*) n FROM ${table} WHERE cid_number=?`,meterOther)).n,1);
  }
 
@@ -453,7 +532,7 @@ test('durable deletion removes cloud content in bounded batches, holds unknown c
 
 test('真实总入口先CID再会员：本人和名片可用，他人主页广场详情媒体拒绝',async(t)=>{
  await stopWorker();await startWorker();
- const restore=setMembership(0,0,Date.now()-1);t.after(restore);
+ const restore=await setMembership(0,0,Date.now()-1);t.after(restore);
  async function get(path){return fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':await proof('GET',path)});}
  for(const path of [`/api/user/profiles/${fixture.cid}`,`/api/user/cards/${fixture.cid}`]){
   const r=await get(path);assert.equal(r.status,200,await r.clone().text());
@@ -468,8 +547,62 @@ test('真实总入口先CID再会员：本人和名片可用，他人主页广�
  assert.equal((await first('SELECT COUNT(*) n FROM membership_operations')).n,0);
 });
 
+// 当前文件主入口内的公开合成资料，不在生产建立调试路由或新权限。
+async function profileAsset(kind='avatar',cid=fixture.cid){
+ const data=Buffer.from('5249464612000000574542505650384c060000002f0000000000','hex'),hash=digest(data),key='profile/'+cid+'/'+kind,now=Date.now();
+ await privateBucket.put(key,data,{sha256:hash,httpMetadata:{contentType:'image/webp'}});
+ await insert('profile_asset_uploads',{upload_id:'profile-quota-'+kind+'-'+cid,cid_number:cid,kind,object_key:key,content_type:'image/webp',byte_size:data.length,sha256:hash,generation:1,state:'completed',created_at:now,expires_at:now+900000,completed_at:now});
+ await sql('INSERT INTO user_profiles(cid_number,'+kind+'_object_key,'+kind+'_content_hash) VALUES(?,?,?) ON CONFLICT(cid_number) DO UPDATE SET '+kind+'_object_key=excluded.'+kind+'_object_key,'+kind+'_content_hash=excluded.'+kind+'_content_hash',cid,key,hash);
+ return {data,hash,key};
+}
+test('资料媒体普通/Range/304/404及失败按Kind最大值预扣，基础读取不依赖会员',async()=>{
+ await stopWorker();await startWorker();const avatar=await profileAsset(),banner=await profileAsset('banner'),calls=chainCalls();await setMembership(0,0,Date.now()-1);
+ const card='/api/user/cards/'+fixture.cid+'/avatar';
+ let r=await fetch(card,'GET','',{authorization:'Bearer '+token});assert.equal(r.status,200);await r.arrayBuffer();
+ r=await fetch(card,'GET','',{authorization:'Bearer '+token,range:'bytes=1-2'});assert.equal(r.status,206);assert.deepEqual(Buffer.from(await r.arrayBuffer()),avatar.data.subarray(1,3));
+ r=await fetch(card,'GET','',{authorization:'Bearer '+token,'if-none-match':'*'});assert.equal(r.status,304);await r.arrayBuffer();
+ const full='/api/user/profiles/'+fixture.cid+'/assets/banner';r=await fetch(full,'GET','',{authorization:'Bearer '+token,'x-mls-proof':await proof('GET',full)});assert.equal(r.status,200);assert.deepEqual(Buffer.from(await r.arrayBuffer()),banner.data);
+ await privateBucket.delete(avatar.key);r=await fetch(card,'GET','',{authorization:'Bearer '+token});assert.equal(r.status,404);await r.arrayBuffer();
+ // 对象自身校验和必须真实，数据库仍保留原内容摘要，验证原哈希围栏。
+ await privateBucket.put(avatar.key,Buffer.from('bad'),{sha256:digest(Buffer.from('bad')),httpMetadata:{contentType:'image/webp'}});
+ r=await fetch(card,'GET','',{authorization:'Bearer '+token});assert.equal(r.status,409);await r.arrayBuffer();
+ assert.equal((await first("SELECT amount FROM membership_usage WHERE cid_number=? AND metric='profile_requests'",fixture.cid)).amount,6);
+ assert.equal((await first("SELECT amount FROM membership_usage WHERE cid_number=? AND metric='profile_read_bytes'",fixture.cid)).amount,5*512*1024+1536*1024);
+ assert.equal((await first('SELECT COUNT(*) n FROM membership_operations')).n,0);assert.equal(chainCalls(),calls);
+});
+test('资料媒体CID/全站请求或字节任一超额均在引用/R2前拒绝，不退款或借换IP重置',async()=>{
+ await stopWorker();await startWorker();await profileAsset();const calls=chainCalls(),day=Math.floor(Date.now()/86400000)*86400000,dayNumber=day/86400000;
+ for(const [side,metric,amount] of [['cid','profile_requests',1000],['cid','profile_read_bytes',64*1024*1024],['global','profile_requests',100000],['global','profile_read_bytes',10*1024**3]]){
+  await sql("DELETE FROM membership_usage WHERE metric IN ('profile_requests','profile_read_bytes')");
+  await sql('DELETE FROM rate_windows WHERE rate_key IN (?,?)','quota:global:'+dayNumber+':profile_requests','quota:global:'+dayNumber+':profile_read_bytes');
+  if(side==='cid')await insert('membership_usage',{cid_number:fixture.cid,metric,period_start:day,amount,updated_at:Date.now()});
+  else await insert('rate_windows',{rate_key:'quota:global:'+dayNumber+':'+metric,request_count:amount,expires_at:day+86400000});
+  const before=await first('SELECT COUNT(*) n,COALESCE(SUM(amount),0) amount FROM membership_usage');
+  await queryCounts(true);const r=await fetch('/api/user/cards/'+fixture.cid+'/avatar','GET','',{authorization:'Bearer '+token,'cf-connecting-ip':'198.51.100.7'});
+  assert.equal(r.status,429,await r.clone().text());assert.equal((await r.json()).error,'resource_limit');
+  const cost=await queryCounts();assert.equal(cost.contexts,1);assert.equal(cost.batches,1);assert.equal(cost.r2_head,0);assert.equal(cost.r2_get,0);
+  assert.deepEqual(await first('SELECT COUNT(*) n,COALESCE(SUM(amount),0) amount FROM membership_usage'),before);
+ }
+ assert.equal(chainCalls(),calls);
+});
+test('资料媒体CID/IP独立限流且会员/撤销拒绝先于预扣或对象读取',async()=>{
+ await stopWorker();await startWorker({},1);await profileAsset();const card='/api/user/cards/'+fixture.cid+'/avatar';
+ let r=await fetch(card,'GET','',{authorization:'Bearer '+token});assert.equal(r.status,200);await r.arrayBuffer();
+ await queryCounts(true);r=await fetch(card,'GET','',{authorization:'Bearer '+token,'cf-connecting-ip':'198.51.100.1'});assert.equal(r.status,429);await r.arrayBuffer();
+ assert.equal((await queryCounts()).r2_head,0);assert.equal((await queryCounts()).batches,0);
+ const invalid=token.slice(0,-1)+(token.endsWith('a')?'b':'a');
+ r=await fetch(card,'GET','',{authorization:'Bearer '+invalid,'cf-connecting-ip':'198.51.100.2'});assert.equal(r.status,401);await r.arrayBuffer();
+ await queryCounts(true);r=await fetch(card,'GET','',{authorization:'Bearer '+token,'cf-connecting-ip':'198.51.100.2'});assert.equal(r.status,429);await r.arrayBuffer();assert.equal((await queryCounts()).contexts,0);
+ await stopWorker();await startWorker();await profileAsset();const owner=await first('SELECT * FROM users WHERE cid_number=?',fixture.cid),other='PROFILE-OTHER';
+ await insert('users',{...owner,cid_number:other,account_id:h(97)});await profileAsset('banner',other);
+ const path='/api/user/profiles/'+other+'/assets/banner',p=await proof('GET',path);await setMembership(0,0,Date.now()-1);await queryCounts(true);
+ r=await fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,403);await r.arrayBuffer();assert.equal((await queryCounts()).batches,0);assert.equal((await queryCounts()).r2_head,0);
+ const self='/api/user/profiles/'+fixture.cid+'/assets/avatar',ownProof=await proof('GET',self);await sql('UPDATE mls_devices SET active=0 WHERE cid_number=?',fixture.cid);await queryCounts(true);
+ r=await fetch(self,'GET','',{authorization:'Bearer '+token,'x-mls-proof':ownProof});assert.equal(r.status,401);await r.arrayBuffer();assert.equal((await queryCounts()).batches,0);assert.equal((await queryCounts()).r2_head,0);
+});
+
 test('名片头像普通会话读取仍核验公民设备准入，完整资料媒体不豁免MLS',async(t)=>{
- await stopWorker();await startWorker();const restore=setMembership(0,0,Date.now()-1);t.after(restore);
+ await stopWorker();await startWorker();const restore=await setMembership(0,0,Date.now()-1);t.after(restore);
  // 沿用媒体合同的最小完整WebP容器，仅作格式/摘要/传输夹具。
  const bytes=Buffer.from('5249464612000000574542505650384c060000002f0000000000','hex'),hash=digest(bytes),key=`profile/${fixture.cid}/avatar`,now=Date.now();
  await privateBucket.put(key,bytes,{sha256:hash,httpMetadata:{contentType:'image/webp'}});
@@ -486,7 +619,7 @@ test('名片头像普通会话读取仍核验公民设备准入，完整资料�
 
 
 test('完整资料媒体每次GET与Range使用新鲜MLS，失败重试不可复用旧证明',async(t)=>{
- await stopWorker();await startWorker();const restore=setMembership(0,0,Date.now()-1);t.after(restore);
+ await stopWorker();await startWorker();const restore=await setMembership(0,0,Date.now()-1);t.after(restore);
  const bytes=Buffer.from('5249464612000000574542505650384c060000002f0000000000','hex'),hash=digest(bytes),key=`profile/${fixture.cid}/avatar`,now=Date.now();
  await privateBucket.put(key,bytes,{sha256:hash,httpMetadata:{contentType:'image/webp'}});
  await insert('profile_asset_uploads',{upload_id:'avatar-proof-fixture',cid_number:fixture.cid,kind:'avatar',object_key:key,content_type:'image/webp',byte_size:bytes.length,sha256:hash,generation:1,state:'completed',created_at:now,expires_at:now+900000,completed_at:now});
@@ -508,16 +641,287 @@ test('完整资料媒体每次GET与Range使用新鲜MLS，失败重试不可复
  assert.equal((await get(revoked)).status,401);
 });
 
+test('日常会员与本人资料上下文只加载一次，链不可达时RPC为0',async()=>{
+ await stopWorker();await startWorker();setUnknownChain(true);
+ try{
+  for(const path of ['/api/membership',`/api/user/profiles/${fixture.cid}`,`/api/membership/creators/${fixture.cid}/plans`]){
+   const p=await proof('GET',path),before=chainCalls();await queryCounts(true);
+   const response=await fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(response.status,200,await response.clone().text());await response.arrayBuffer();
+   const counts=await queryCounts();assert.equal(counts.contexts,1);assert.equal(chainCalls(),before);
+  }
+ }finally{setUnknownChain(false);}
+});
+test('会员同交易确认重试复用回执，异主体/区块/用途不复用且RPC为0',async()=>{
+ const tx=h(44),input={tx_hash:tx,block_hash:fixture.head};
+ await insert('chain_transaction_confirmations',{tx_hash:tx,cid_number:fixture.cid,account_id:fixture.account,block_hash:fixture.head,block_number:9,extrinsic_index:0,action_kind:'membership:platform:subscribe',request_hash:'aa'.repeat(32),chain_timestamp:Date.now(),confirmed_at:Date.now()});
+ setUnknownChain(true);const before=chainCalls();
+ try{
+  for(const [path,body,status] of [['/api/membership/confirm',input,200],['/api/membership/confirm',{...input,block_hash:h(8)},409],['/api/membership/creators/plans',input,409]]){
+   const bytes=JSON.stringify(body),p=await proof('POST',path,bytes),r=await fetch(path,'POST',bytes,{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,status,await r.clone().text());await r.arrayBuffer();
+  }
+  await sql("UPDATE chain_transaction_confirmations SET action_kind='subscribe' WHERE tx_hash=?",tx);
+  await sql('UPDATE square_memberships SET last_tx_hash=? WHERE cid_number=?',tx,fixture.cid);
+  for(const [known,status] of [[true,200],[false,409]]){
+   if(!known)await sql('UPDATE square_memberships SET last_tx_hash=NULL WHERE cid_number=?',fixture.cid);
+   const bytes=JSON.stringify(input),p=await proof('POST','/api/membership/confirm',bytes),r=await fetch('/api/membership/confirm','POST',bytes,{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,status,await r.clone().text());await r.arrayBuffer();
+  }
+  await sql('UPDATE chain_transaction_confirmations SET account_id=? WHERE tx_hash=?','0x'+'ee'.repeat(32),tx);
+  const bytes=JSON.stringify(input),p=await proof('POST','/api/membership/confirm',bytes),r=await fetch('/api/membership/confirm','POST',bytes,{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,409);await r.arrayBuffer();assert.equal(chainCalls(),before);
+ }finally{setUnknownChain(false);}
+});
+
+test('平台确认可选真实会员快照，旧版三字段兼容且新请求不再GET会员',async()=>{
+ await stopWorker();await startWorker();
+ const tx=h(46),input={tx_hash:tx,block_hash:fixture.head};
+ await insert('chain_transaction_confirmations',{tx_hash:tx,cid_number:fixture.cid,account_id:fixture.account,block_hash:fixture.head,block_number:9,extrinsic_index:0,action_kind:'membership:platform:subscribe',request_hash:'bb'.repeat(32),chain_timestamp:Date.now(),confirmed_at:Date.now()});
+ const path='/api/membership/confirm';
+ async function confirm(extra={}){const body=JSON.stringify({...input,...extra}),p=await proof('POST',path,body);return fetch(path,'POST',body,{authorization:'Bearer '+token,'x-mls-proof':p});}
+ setUnknownChain(true);const before=chainCalls();
+ try{
+  for(const options of [{},{include_state:false}]){const r=await confirm(options);assert.equal(r.status,200,await r.clone().text());assert.deepEqual(await r.json(),{ok:true,...input});}
+  const r=await confirm({include_state:true});assert.equal(r.status,200,await r.clone().text());const result=await r.json();assert.deepEqual(Object.keys(result).sort(),['block_hash','membership_state','ok','tx_hash']);assert.equal(result.tx_hash,tx);assert.equal(result.block_hash,fixture.head);
+  const p=await proof('GET','/api/membership'),ordinary=await fetch('/api/membership','GET','',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(ordinary.status,200);assert.deepEqual(result.membership_state,await ordinary.json());
+  for(const value of ['true',1,null])assert.equal((await confirm({include_state:value})).status,400);
+  assert.equal(chainCalls(),before);
+  const cache=await mf.getKVNamespace('SQUARE_CACHE');await cache.delete('membership:prices:'+fixture.genesis);
+  const unavailable=await confirm({include_state:true});assert.equal(unavailable.status,503);await unavailable.arrayBuffer();assert.ok(await first('SELECT tx_hash FROM chain_transaction_confirmations WHERE tx_hash=?',tx));
+  const now=Date.now();await cache.put('membership:prices:'+fixture.genesis,JSON.stringify({created:now,deadline:now+600000,value:[199900,599900,5999900]}));
+  const recovered=await confirm({include_state:true});assert.equal(recovered.status,200,await recovered.clone().text());await recovered.arrayBuffer();
+  await sql('UPDATE scheduler_leases SET updated_at=? WHERE lease_key=?',Date.now()-600000,'sync:membership:'+fixture.genesis);
+  const stale=await confirm({include_state:true});assert.equal(stale.status,503);await stale.arrayBuffer();assert.equal((await confirm()).status,200);
+  await sql('UPDATE scheduler_leases SET updated_at=? WHERE lease_key=?',Date.now(),'sync:membership:'+fixture.genesis);assert.equal(chainCalls(),before);
+ }finally{setUnknownChain(false);}
+});
+
+test('帖子确认重试先读既有结果，不预扣或消耗查链预算',async()=>{
+ const now=Date.now(),post='sqp_confirmed',upload='squ_confirmed',tx=h(45),hash='aa'.repeat(32),receipt='sqr_confirmed';
+ await insert('square_uploads',{upload_id:upload,post_id:post,cid_number:fixture.cid,account_id:fixture.account,post_type:'document',manifest_hash:hash,manifest_byte_size:100,storage_receipt_id:receipt,content_hash:hash,estimated_bytes:100,status:'published',created_at:now,expires_at:now+900000,completed_at:now});
+ await insert('square_posts',{post_id:post,cid_number:fixture.cid,account_id:fixture.account,post_category:'normal',post_type:'document',title:null,excerpt:'已确认的公开摘要',content_hash:hash,storage_receipt_id:receipt,chain_block:9,chain_block_hash:fixture.head,tx_hash:tx,created_at:now,post_state:'published'});
+ const key='rpc:'+fixture.genesis+':confirmation:day:'+Math.floor(now/86400000);
+ await sql('INSERT OR REPLACE INTO rate_windows VALUES(?,100000,?)',key,(Math.floor(now/86400000)+1)*86400000);
+ const path='/api/8964/posts/confirm',body=JSON.stringify({post_id:post,tx_hash:tx,block_hash:fixture.head}),p=await proof('POST',path,body),before=chainCalls();
+ setUnknownChain(true);
+ try{const r=await fetch(path,'POST',body,{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,200,await r.clone().text());await r.arrayBuffer();assert.equal(chainCalls(),before);assert.equal((await first('SELECT request_count FROM rate_windows WHERE rate_key=?',key)).request_count,100000);}finally{setUnknownChain(false);}
+});
+
+
+test('媒体硬顶在HEAD和GET前预扣，Range/HEAD/304口径一致且无随机读流水',async()=>{
+ await stopWorker();await startWorker();await setMembership();
+ const post='sqp_resource_media',key=`square/${fixture.cid}/posts/${post}/media/0/source.webp`,data=Uint8Array.of(1,2,3,4,5,6,7,8);
+ await insert('square_posts',{post_id:post,cid_number:fixture.cid,account_id:fixture.account,post_category:'normal',post_type:'document',title:null,excerpt:'额度夹具',content_hash:'ab'.repeat(32),storage_receipt_id:'sqr_resource',chain_block:9,chain_block_hash:fixture.head,tx_hash:h(46),created_at:Date.now(),post_state:'published'});
+ await publicBucket.put(key,data,{httpMetadata:{contentType:'image/webp'}});
+ const media=(method='GET',headers={})=>mf.dispatchFetch('https://media.example.test/'+key,{method,headers:{'cf-connecting-ip':'198.51.100.9',authorization:'Bearer '+token,...headers}});
+ const before=chainCalls(),day=Math.floor(Date.now()/86400000)*86400000;
+ await queryCounts(true);const part=await media('GET',{range:'bytes=1-2'});assert.equal(part.status,206,await part.clone().text());assert.deepEqual(new Uint8Array(await part.arrayBuffer()),data.slice(1,3));
+ let counts=await queryCounts();assert.equal(counts.r2_head,1);assert.equal(counts.r2_get,1);const etag=part.headers.get('etag');
+ const usage=async metric=>(await first('SELECT amount FROM membership_usage WHERE cid_number=? AND metric=? AND period_start=?',fixture.cid,metric,day)).amount;
+ assert.equal(await usage('delivery_bytes'),2);
+ await queryCounts(true);const head=await media('HEAD');assert.equal(head.status,200);assert.equal((await head.arrayBuffer()).byteLength,0);counts=await queryCounts();assert.equal(counts.r2_head,1);assert.equal(counts.r2_get,0);
+ await queryCounts(true);const unchanged=await media('GET',{'if-none-match':etag});assert.equal(unchanged.status,304);assert.equal((await unchanged.arrayBuffer()).byteLength,0);counts=await queryCounts();assert.equal(counts.r2_head,1);assert.equal(counts.r2_get,0);
+ assert.equal(await usage('delivery_bytes'),2);assert.equal(await usage('media_requests'),3);assert.equal((await first('SELECT count(*) AS n FROM membership_operations')).n,0);
+ await sql("UPDATE membership_usage SET amount=? WHERE cid_number=? AND metric='delivery_bytes' AND period_start=?",128*1024*1024,fixture.cid,day);
+ await queryCounts(true);const bytesDenied=await media('GET',{range:'bytes=1-2'});assert.equal(bytesDenied.status,429,await bytesDenied.text());counts=await queryCounts();assert.equal(counts.r2_head,1);assert.equal(counts.r2_get,0);
+ const global='quota:global:'+Math.floor(Date.now()/86400000)+':media_requests';await sql('UPDATE rate_windows SET request_count=200000 WHERE rate_key=?',global);
+ await queryCounts(true);const globalDenied=await media('HEAD');assert.equal(globalDenied.status,429,await globalDenied.text());counts=await queryCounts();assert.equal(counts.r2_head,0);assert.equal(counts.r2_get,0);
+ await sql('UPDATE rate_windows SET request_count=0 WHERE rate_key=?',global);await sql("UPDATE membership_usage SET amount=10000 WHERE cid_number=? AND metric='media_requests' AND period_start=?",fixture.cid,day);
+ await queryCounts(true);const cidDenied=await media('HEAD');assert.equal(cidDenied.status,429,await cidDenied.text());counts=await queryCounts();assert.equal(counts.r2_head,0);assert.equal(counts.r2_get,0);assert.equal(chainCalls(),before);
+});
+
+test('媒体CID与IP分别快速限流，换IP不能重置CID且查找无效凭证前受IP挡板',async()=>{
+ await stopWorker();await startWorker({},1);await setMembership();
+ const post='sqp_rate_media',key=`square/${fixture.cid}/posts/${post}/media/0/source.webp`;
+ await insert('square_posts',{post_id:post,cid_number:fixture.cid,account_id:fixture.account,post_category:'normal',post_type:'document',title:null,excerpt:'频率夹具',content_hash:'cd'.repeat(32),storage_receipt_id:'sqr_rate',chain_block:9,chain_block_hash:fixture.head,tx_hash:h(47),created_at:Date.now(),post_state:'published'});
+ await publicBucket.put(key,Uint8Array.of(1),{httpMetadata:{contentType:'image/webp'}});
+ const missing=token.slice(0,-1)+(token.endsWith('a')?'b':'a');
+ const read=(ip,valid=true)=>mf.dispatchFetch('https://media.example.test/'+key,{method:'HEAD',headers:{'cf-connecting-ip':ip,authorization:'Bearer '+(valid?token:missing)}});
+ assert.equal((await read('198.51.100.1')).status,200);
+ await queryCounts(true);assert.equal((await read('198.51.100.2')).status,429);assert.equal((await queryCounts()).r2_head,0);
+ await queryCounts(true);assert.equal((await read('203.0.113.77',false)).status,401);assert.equal((await queryCounts()).contexts,1);await queryCounts(true);assert.equal((await read('203.0.113.77',false)).status,429);assert.equal((await queryCounts()).contexts,0);assert.equal((await read('203.0.113.78',false)).status,401);
+});
+
+
+test('普通浏览和他人资料真实成功读取只写汇总，重复读取不新增随机流水且RPC为0',async()=>{
+ await stopWorker();await startWorker();await setMembership();
+ const other='CN220-CTZN2-100000002-2026',owner=await first('SELECT * FROM users WHERE cid_number=?',fixture.cid);
+ await insert('users',{...owner,cid_number:other,account_id:h(57)});await insert('user_profiles',{cid_number:other,display_name:'合成公开资料'});
+ await insert('square_posts',{post_id:'sqp_'+ '55'.repeat(16),cid_number:fixture.cid,account_id:fixture.account,post_category:'normal',post_type:'document',title:null,excerpt:'合成汇总读取',content_hash:'cd'.repeat(32),storage_receipt_id:'sqr_aggregate',chain_block:9,chain_block_hash:fixture.head,tx_hash:h(57),created_at:Date.now(),post_state:'published'});
+ const before=chainCalls();
+ for(let round=0;round<2;round++)for(const path of ['/api/8964/feed/recommended','/api/user/profiles/'+other]){
+  const p=await proof('GET',path);await queryCounts(true);const response=await fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(response.status,200,await response.clone().text());await response.arrayBuffer();assert.equal((await queryCounts()).contexts,1);
+ }
+ assert.equal((await first('SELECT COUNT(*) n FROM membership_operations')).n,0);
+ assert.equal((await first('SELECT SUM(browse_count) n FROM square_browse_days')).n,2);assert.equal((await first("SELECT SUM(amount) n FROM membership_usage WHERE metric='profile'")).n,2);assert.equal(chainCalls(),before);
+});
+
+test('原鉴权维护连续清理1001历史读取，保留发布reserved及当前日额度且RPC为0',async()=>{
+ await stopWorker();await startWorker();const now=Date.now(),old=now-7*86400000,day=Math.floor(now/86400000)*86400000;
+ await sql("WITH RECURSIVE n(x) AS(VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO membership_operations SELECT ?,'history_'||x,'detail','',1,'committed',0,? FROM n",fixture.cid,old);
+ for(const [operation,metric,state,created] of [['publish_keep','published','committed',old],['reserved_keep','detail','reserved',old],['recent_keep','detail','committed',old+60000]])await insert('membership_operations',{cid_number:fixture.cid,operation_id:operation,metric,resource_key:'',amount:1,state,period_start:0,created_at:created});
+ for(const period of [day-7*86400000,day])await insert('membership_usage',{cid_number:fixture.cid,metric:'chat_commands',period_start:period,amount:1,updated_at:now});
+ const task=id('maintenance',['history',String(now)]);await sql("INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) VALUES(?,'authentication',?,?)",task,now,now);
+ const before=chainCalls();await enqueue('maintenance',task);
+ let row=await first('SELECT state,progress_json FROM maintenance_jobs WHERE job_id=?',task);assert.equal(row.state,'pending');assert.ok(JSON.parse(row.progress_json).examined>=1000);
+ assert.equal((await first("SELECT COUNT(*) n FROM membership_operations WHERE operation_id LIKE 'history_%'")).n,1);
+ await sql("UPDATE maintenance_jobs SET next_attempt_at=0 WHERE job_id=? AND state='pending'",task);await enqueue('maintenance',task);
+ assert.equal((await first('SELECT state FROM maintenance_jobs WHERE job_id=?',task)).state,'done');assert.equal((await first("SELECT COUNT(*) n FROM membership_operations WHERE operation_id LIKE 'history_%'")).n,0);
+ assert.equal((await first('SELECT COUNT(*) n FROM membership_operations')).n,3);assert.equal((await first("SELECT amount FROM membership_usage WHERE metric='chat_commands' AND period_start=?",day)).amount,1);assert.equal((await first("SELECT COUNT(*) n FROM membership_usage WHERE metric='chat_commands'")).n,1);assert.equal(chainCalls(),before);
+});
+
+test('本地非法身份/广播输入既不预扣RPC预算也不访问上游',async()=>{
+ await stopWorker();await startWorker({RELAY_ENABLED:'1'});
+ try{
+  const budget=()=>first("SELECT COUNT(*) n,COALESCE(SUM(request_count),0) amount FROM rate_windows WHERE rate_key LIKE 'rpc:%'");
+  const before=await budget(),calls=chainCalls();
+  const inputs=[
+   ['/api/user/identity','{'],['/api/user/identity','{}'],['/api/user/identity',JSON.stringify({block_hash:'invalid'})],
+   ['/api/user/identity',JSON.stringify({block_hash:'0x'+'AA'.repeat(32)})],
+   ['/api/chain/extrinsics','{'],['/api/chain/extrinsics','{}'],
+   ...['','0x','0x1','0xgg','11','0x'+'01'.repeat(65537)].map(value=>['/api/chain/extrinsics',JSON.stringify({signed_extrinsic_hex:value})]),
+  ];
+  for(const [path,body] of inputs){
+   const response=await fetch(path,'POST',body);
+   assert.equal(response.status,400,await response.clone().text());await response.arrayBuffer();
+   assert.deepEqual(await budget(),before);assert.equal(chainCalls(),calls);
+  }
+  // 真实设备密钥签署准确坏正文，确保失败来自typed解析而非无效签名提前挡住。
+  for(const body of ['{','{}']){
+   const p={user_id:fixture.cid,device_id:device,public_key:publicKey,account_id:fixture.account,binding_revision:1,service_origin:registration.service_origin,challenge:h(75),expires_at_millis:Date.now()+60000,method:'POST',request_target:'/api/user/devices',body_sha256:'0x'+digest(body)};
+   const response=await fetch('/api/user/devices','POST',body,{'x-mls-proof':signMlsProof(p,mls.privateKey)});
+   assert.equal(response.status,400,await response.clone().text());await response.arrayBuffer();
+   assert.deepEqual(await budget(),before);assert.equal(chainCalls(),calls);
+  }
+ }finally{await stopWorker();await startWorker();}
+});
+
+test('匿名身份/广播/充值意图共用公共池，耗尽不抢会员确认池',async()=>{
+ await stopWorker();await startWorker({
+  RELAY_ENABLED:'1',TOPUP_RECV_ADDRESS:'0x'+'11'.repeat(20),TOPUP_DISBURSE_ACCOUNT_ID:fixture.account,TOPUP_MIN_CONFIRMATIONS:'1',
+  TOPUP_BASE_USDC:'0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',TOPUP_BASE_USDT:'0xfde4c96c8593536e31f229ea8f37b2ada2699bb2',
+  TOPUP_INTENT_SECRET:'synthetic-payment-intent-key-with-32-bytes',
+ });
+ try{
+  const now=Date.now(),day=Math.floor(now/86400000),dayKey='rpc:'+fixture.genesis+':public:day:'+day;
+  await sql('INSERT INTO rate_windows VALUES(?,100000,?)',dayKey,(day+1)*86400000);
+  await sql('INSERT INTO rate_windows VALUES(?,1000,?)','rpc:'+fixture.genesis+':public:minute:'+Math.floor(now/60000),(Math.floor(now/60000)+1)*60000);
+  const confirmation=()=>first("SELECT COUNT(*) n,COALESCE(SUM(request_count),0) amount FROM rate_windows WHERE rate_key IN (?,?)",'rpc:'+fixture.genesis+':confirmation:day:'+day,'rpc:'+fixture.genesis+':confirmation:minute:'+Math.floor(now/60000));
+  const before=await confirmation(),calls=chainCalls();
+  for(const [path,body] of [
+   ['/api/user/identity',{block_hash:fixture.head}],
+   ['/api/chain/extrinsics',{signed_extrinsic_hex:'0x01'}],
+   ['/api/topup/intent',{account_id:fixture.account,token:'USDC',package_id:'pkg_15',payer_address:'0x'+'22'.repeat(20)}],
+  ]){
+   const response=await fetch(path,'POST',JSON.stringify(body));
+   assert.equal(response.status,429,await response.clone().text());await response.arrayBuffer();
+   assert.deepEqual(await confirmation(),before);assert.equal(chainCalls(),calls);
+  }
+  // 新的已认证确认仍能预扣自己的池；上游失败是合成故障，不冒充交易确认成功。
+  setUnknownChain(true);
+  const path='/api/membership/confirm',input={tx_hash:h(77),block_hash:fixture.head},body=JSON.stringify(input),p=await proof('POST',path,body);
+  const response=await fetch(path,'POST',body,{authorization:'Bearer '+token,'x-mls-proof':p});
+  assert.equal(response.status,503,await response.clone().text());await response.arrayBuffer();
+  const privateDay=await first('SELECT request_count FROM rate_windows WHERE rate_key=?','rpc:'+fixture.genesis+':confirmation:day:'+day);
+  assert.equal(privateDay.request_count,64);assert.equal(chainCalls(),calls+1);
+  assert.equal((await first('SELECT request_count FROM rate_windows WHERE rate_key=?',dayKey)).request_count,100000);
+  // 已完成的同主体交易继续真实走D1回执，公共池耗尽也能返回原成功结果。
+  const done={tx_hash:h(78),block_hash:fixture.head};
+  await insert('chain_transaction_confirmations',{...done,cid_number:fixture.cid,account_id:fixture.account,block_number:9,extrinsic_index:0,action_kind:'membership:platform:subscribe',request_hash:'ab'.repeat(32),chain_timestamp:now,confirmed_at:now});
+  const doneBody=JSON.stringify(done),doneProof=await proof('POST',path,doneBody);
+  const repeated=await fetch(path,'POST',doneBody,{authorization:'Bearer '+token,'x-mls-proof':doneProof});
+  assert.equal(repeated.status,200,await repeated.clone().text());assert.deepEqual(await repeated.json(),{ok:true,...done});
+  assert.equal(chainCalls(),calls+1);
+  assert.equal((await first('SELECT request_count FROM rate_windows WHERE rate_key=?','rpc:'+fixture.genesis+':confirmation:day:'+day)).request_count,64);
+ }finally{setUnknownChain(false);await stopWorker();await startWorker();}
+});
+
+test('创作者概览只交付整数汇总，会员健康失效或身份撤销仍拒绝且RPC为0',async()=>{
+ await stopWorker();await startWorker();
+ try{
+  const owner=await first('SELECT * FROM users WHERE cid_number=?',fixture.cid);
+  for(const [n,billing,price] of [[70,'monthly',101],[71,'quarterly',8],[72,'yearly',25]]){
+   const cid='OV'+n,account=h(n);await insert('users',{...owner,cid_number:cid,account_id:account});
+   await insert('square_creator_subscriptions',{subscriber_cid_number:cid,creator_cid_number:fixture.cid,subscriber_account_id:account,creator_account_id:fixture.account,tier_id:'tier',billing_period:billing,started_at:1,last_charged_at:2,last_charged_price_fen:price,authorized_price_fen:price,paid_until:Date.now()+86400000,subscription_status:'active',finalized_block_number:9,finalized_block_hash:fixture.head,verified_at:Date.now()});
+  }
+  await insert('square_creator_tiers',{creator_cid_number:fixture.cid,creator_account_id:fixture.account,tier_id:'tier',tier_name:'合成档位',tier_order:0,monthly_price_fen:101,quarterly_price_fen:8,yearly_price_fen:25,finalized_block_number:9,finalized_block_hash:fixture.head,verified_at:Date.now()});
+  const path='/api/membership/creator/overview',calls=chainCalls();
+  async function read(){const p=await proof('GET',path);await queryCounts(true);return fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':p});}
+  const response=await read();assert.equal(response.status,200,await response.clone().text());
+  assert.deepEqual(await response.json(),{ok:true,overview:{subscriber_count:3,monthly_income_fen:105,tier_count:1}});
+  let counts=await queryCounts();assert.equal(counts.contexts,1);assert.equal(counts.statements,3);assert.equal(counts.batches,0);
+  const key='sync:membership:'+fixture.genesis,health=await first('SELECT * FROM scheduler_leases WHERE lease_key=?',key);
+  for(const updated of [null,0,Date.now()+60000,Date.now()-600000]){
+   await sql('DELETE FROM scheduler_leases WHERE lease_key=?',key);
+   if(updated!==null)await insert('scheduler_leases',{...health,updated_at:updated});
+   const denied=await read();assert.equal(denied.status,503,await denied.clone().text());await denied.arrayBuffer();
+   counts=await queryCounts();assert.equal(counts.statements,2,'坏会员健康不能进入概览SQL');
+  }
+  await sql('DELETE FROM scheduler_leases WHERE lease_key=?',key);await insert('scheduler_leases',{...health,updated_at:Date.now()});
+  await sql('UPDATE square_memberships SET paid_until=? WHERE cid_number=?',Date.now()-1,fixture.cid);
+  const expired=await read();assert.equal(expired.status,403);assert.equal((await expired.json()).error,'membership_required');
+  await setMembership();const restored=await read();assert.equal(restored.status,200);await restored.arrayBuffer();
+  // 精确金额超过公开整数上限时必须失败，不能以浮点截断后交付收入。
+  await sql('UPDATE square_creator_subscriptions SET last_charged_price_fen=9007199254740991 WHERE billing_period=?','monthly');
+  const overflow=await read();assert.equal(overflow.status,503);await overflow.arrayBuffer();
+  const p=await proof('GET',path);await sql('UPDATE mls_devices SET active=0 WHERE cid_number=?',fixture.cid);
+  const revoked=await fetch(path,'GET','',{authorization:'Bearer '+token,'x-mls-proof':p});
+  assert.equal(revoked.status,401);await revoked.arrayBuffer();assert.equal(chainCalls(),calls);
+ }finally{await stopWorker();await startWorker();}
+});
+
+test('匿名重复Session挑战不增长或续期，真实持钥登录仍一次消费且不查链',async()=>{
+ await stopWorker();await startWorker();
+ try{
+  const calls=chainCalls(),body=JSON.stringify({account_id:fixture.account});
+  const input={account_id:fixture.account,public_key:publicKey,purpose:'session',method:'POST',request_target:'/api/user/sessions',body_sha256:'0x'+digest(body)};
+  const issue=()=>fetch('/api/user/challenges','POST',JSON.stringify(input));
+  await queryCounts(true);
+  const initial=await issue();assert.equal(initial.status,200,await initial.clone().text());const original=await initial.json();
+  let cost=await queryCounts();assert.equal(cost.contexts,1);assert.equal(cost.statements,3);assert.equal(cost.batches,1);
+  const before=await first("SELECT COUNT(*) n FROM mls_authentication_challenges WHERE purpose='session'");
+  for(let n=0;n<65;n++){
+   await queryCounts(true);
+   const response=await issue();assert.equal(response.status,200,await response.clone().text());assert.deepEqual(await response.json(),original);
+   cost=await queryCounts();assert.equal(cost.contexts,1);assert.equal(cost.statements,3);assert.equal(cost.batches,1);
+  }
+  const parallel=await Promise.all(Array.from({length:8},issue));
+  for(const response of parallel){assert.equal(response.status,200);assert.deepEqual(await response.json(),original);}
+  assert.deepEqual(await first("SELECT COUNT(*) n FROM mls_authentication_challenges WHERE purpose='session'"),before);
+  // 任意/空白正文摘要在上下文或batch前拒绝，不靠变化摘要占槽。
+  for(const hash of ['0x'+'aa'.repeat(32),'0x'+digest(' '+body)]){
+   await queryCounts(true);
+   const denied=await fetch('/api/user/challenges','POST',JSON.stringify({...input,body_sha256:hash}));
+   assert.equal(denied.status,400);assert.equal((await denied.json()).error,'invalid_mls_target');
+   const counts=await queryCounts();assert.equal(counts.contexts,0);assert.equal(counts.batches,0);
+  }
+  const p={...original};delete p.ok;
+  const bad=await fetch('/api/user/sessions','POST',body,{'x-mls-proof':signMlsProof({...p},generateKeyPairSync('ed25519').privateKey)});
+  assert.equal(bad.status,401);await bad.arrayBuffer();
+  assert.deepEqual(await first("SELECT COUNT(*) n FROM mls_authentication_challenges WHERE purpose='session'"),before);
+  const signed=signMlsProof({...p},mls.privateKey);
+  const login=await fetch('/api/user/sessions','POST',body,{'x-mls-proof':signed});
+  assert.equal(login.status,200,await login.clone().text());const session=await login.json();
+  assert.equal(session.device_id,device);assert.equal(session.account_id,fixture.account);
+  const replay=await fetch('/api/user/sessions','POST',body,{'x-mls-proof':signed});assert.equal(replay.status,401);await replay.arrayBuffer();
+  const next=await issue();assert.equal(next.status,200);assert.notEqual((await next.json()).challenge,original.challenge);
+  await sql('UPDATE mls_devices SET active=0 WHERE device_id=?',device);
+  const revoked=await issue();assert.equal(revoked.status,401);await revoked.arrayBuffer();
+  const unknown=await fetch('/api/user/challenges','POST',JSON.stringify({...input,public_key:'0x'+'aa'.repeat(32)}));
+  assert.equal(unknown.status,401);await unknown.arrayBuffer();
+  assert.equal(chainCalls(),calls);
+ }finally{await stopWorker();await startWorker();}
+});
+
 }
 
 // 所有修改只作用于本地公开合成runtime和本地D1。
-export function setMembership(level=0,status=0,paidUntil=Date.now()+86400000){
- const key=Object.keys(fixture.storage).find(k=>fixture.storage[k]?.length===122);
- const previous=fixture.storage[key];
+export async function setMembership(level=0,status=0,paidUntil=Date.now()+86400000){
+ const key=Object.keys(fixture.storage).find(k=>fixture.storage[k]?.length===122),previous=fixture.storage[key];
  const value=Buffer.from(previous.slice(2),"hex");
  value[1]=level;value[42]=status;value.writeBigUInt64LE(BigInt(paidUntil),34);fixture.storage[key]="0x"+value.toString("hex");
- return ()=>{fixture.storage[key]=previous;};
+ const apply=async raw=>{const v=Buffer.from(raw.slice(2),'hex');await sql('UPDATE square_memberships SET membership_level=?,subscription_status=?,started_at=?,last_charged_at=?,last_charged_price_fen=?,authorized_price_fen=?,paid_until=?,finalized_block_number=9,finalized_block_hash=? WHERE cid_number=?',['freedom','democracy','spark'][v[1]],['active','cancelled','terminated','suspended','issuerPaused'][v[42]],Number(v.readBigUInt64LE(2)),Number(v.readBigUInt64LE(10)),Number(v.readBigUInt64LE(18)),Number(v.readBigUInt64LE(43)),Number(v.readBigUInt64LE(34)),fixture.head,fixture.cid);};
+ await apply(fixture.storage[key]);
+ return async()=>{fixture.storage[key]=previous;await apply(previous);};
 }
+export function chainCalls(){return seen.filter(x=>x.url.startsWith('https://chain.example.test')).length;}
 export function setUnknownChain(value){unknownChain=value;}
 export function setChatPushOutcome(status,reason='BadDeviceToken'){pushStatus=status;pushReason=reason;}
 export {sql,first,fetch,proof,fixture,registration,token,tokenHash,device,seen};

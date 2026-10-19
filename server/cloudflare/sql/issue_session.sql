@@ -4,7 +4,8 @@ SELECT NULL,'turnstile','assertion',1,'assertion','assertion','assertion','CTZN'
 WHERE NOT EXISTS(SELECT 1 FROM users u JOIN user_identity_checks c USING(cid_number) JOIN cid_admissions a USING(cid_number) JOIN mls_devices d USING(cid_number)
  WHERE u.cid_number=json_extract(?1,'$.session.cid_number') AND u.cid_status='active' AND u.account_id=json_extract(?1,'$.session.account_id')
  AND u.binding_revision=json_extract(?1,'$.session.binding_revision') AND c.account_id=u.account_id AND c.binding_revision=u.binding_revision
- AND json_extract(c.row_json,'$.authoritative_current')=1 AND c.checked_at_millis<=json_extract(?1,'$.now') AND c.verification_deadline_millis>json_extract(?1,'$.now')
+ AND EXISTS(SELECT 1 FROM scheduler_leases h JOIN user_projection_cursor cur ON cur.cursor_id=1 AND cur.finalized_block_number>=h.last_slot
+ WHERE h.lease_key='sync:identity:'||json_extract(c.row_json,'$.chain_scope') AND h.updated_at>0 AND h.updated_at<=json_extract(?1,'$.now') AND h.updated_at+json_extract(?1,'$.config.sync_health_millis')>json_extract(?1,'$.now'))
  AND a.source='turnstile' AND a.registration_scope=json_extract(?1,'$.config.registration_scope') AND a.service_origin=json_extract(?1,'$.config.service_origin')
  AND a.chain_scope=json_extract(?1,'$.config.chain_scope') AND a.institution=u.institution AND json_extract(c.row_json,'$.chain_scope')=a.chain_scope
  AND d.device_id=json_extract(?1,'$.session.device_id') AND d.account_id=u.account_id AND d.binding_revision=u.binding_revision AND d.active=1);

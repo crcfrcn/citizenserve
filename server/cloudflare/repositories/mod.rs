@@ -31,8 +31,10 @@ WHERE NOT EXISTS(SELECT 1 FROM authorized_business_sessions a
  AND a.device_id=json_extract(?1,'$.auth.device_id') AND a.registration_scope=json_extract(?1,'$.auth.registration_scope')
  AND a.service_origin=json_extract(?1,'$.auth.service_origin') AND a.chain_scope=json_extract(?1,'$.auth.chain_scope')
  AND a.institution=json_extract(?1,'$.auth.institution') AND a.created_at<=json_extract(?1,'$.auth.now')
- AND a.expires_at>json_extract(?1,'$.auth.now') AND a.checked_at_millis<=json_extract(?1,'$.auth.now')
- AND a.verification_deadline_millis>json_extract(?1,'$.auth.now')
+ AND a.expires_at>json_extract(?1,'$.auth.now') AND a.identity_synced_at>0
+ AND a.identity_synced_at<=json_extract(?1,'$.auth.now')
+ AND a.identity_synced_at+json_extract(?1,'$.auth.sync_health_millis')>json_extract(?1,'$.auth.now')
+ AND json_extract(?1,'$.auth.deadline')>json_extract(?1,'$.auth.now')
  AND NOT EXISTS(SELECT 1 FROM account_deletions x WHERE x.cid_number=a.cid_number AND x.state='pending'));
 "#;
 pub(crate) async fn first<T: DeserializeOwned>(

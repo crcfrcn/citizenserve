@@ -16,7 +16,7 @@ pub struct Stored {
 }
 
 /// 对象定位由一次持久上传预留产生，不复用其他尝试的可写对象键。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Upload {
     pub attachment_id: String,
     pub generation: String,
@@ -31,16 +31,39 @@ pub struct Written {
     pub size: u64,
     pub sha256: String,
 }
+
+/// 已成功不读正文；只有本次独占可写，其余未知尝试仅核验原键，不能重新分配。
+#[derive(Clone, Debug)]
+pub enum Reservation {
+    Complete(Written),
+    Write(Upload),
+    Recover(Upload),
+}
 #[derive(Clone, Debug)]
 pub struct Deletion {
     pub attachment_id: String,
     pub generation: String,
 }
+/// 正常分批/未知写入不伪装故障；complete成立才允许删除元数据和释放占用。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeletionProgress {
+    pub complete: bool,
+    pub progressed: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
     Complete,
     Acknowledge,
     Abort,
+}
+
+/// 同一轮的正常续跑、未知写入和真实故障使用不同持久退避。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeletionRetry {
+    Progress,
+    Unknown,
+    Failure,
 }
 
 pub trait Store {
@@ -69,7 +92,14 @@ pub trait Store {
         stored: &Stored,
         index: u32,
         now: u64,
-    ) -> impl Future<Output = Result<Upload>>;
+    ) -> impl Future<Output = Result<Reservation>>;
+    /// 仅调用方能证明尚未开始put时释放独占；保留同一预留和对象键供安全复用。
+    fn release_upload(
+        &self,
+        access: &Access,
+        upload: &Upload,
+        now: u64,
+    ) -> impl Future<Output = Result<()>>;
     /// CAS核验创建用户/设备、生命周期代际、attempt_id、pending和授权截止后标记完成。
     /// 失败不能删除成功者；旧尝试定位须保留到条件删除完成。
     fn confirm_upload(
@@ -98,6 +128,13 @@ pub trait Store {
     fn abort(&self, access: &Access, id: &str, now: u64) -> impl Future<Output = Result<Deletion>>;
     /// 必须在对象删除完成后，以相同代际移除元数据；保留必要幂等凭据。
     fn finalize(&self, deletion: &Deletion) -> impl Future<Output = Result<()>>;
+    /// 同代际保存下一次清理时间，已取得的删除进度不能因队列中断而丢失。
+    fn defer_deletions(
+        &self,
+        deletions: &[Deletion],
+        now: u64,
+        retry: DeletionRetry,
+    ) -> impl Future<Output = Result<()>>;
     /// 有界地持久标记过期附件并重取失败的删除定位，包括全部上传尝试。
     fn pending_deletions(
         &self,
@@ -110,6 +147,12 @@ pub trait Store {
 pub trait Objects {
     type UploadBody;
     type DownloadBody;
+    /// HEAD准确旧键并核验摘要/大小/版本；无对象仍未知，不授权重写或换键。
+    fn recover(
+        &self,
+        upload: &Upload,
+        permission_deadline: u64,
+    ) -> impl Future<Output = Result<Option<Written>>>;
     fn put(
         &self,
         upload: &Upload,
@@ -124,5 +167,5 @@ pub trait Objects {
         permission_deadline: u64,
     ) -> impl Future<Output = Result<Self::DownloadBody>>;
     /// 删除定位代际下全部对象和未完成尝试；必须可重复并有界执行。
-    fn delete(&self, deletion: &Deletion) -> impl Future<Output = Result<()>>;
+    fn delete(&self, deletion: &Deletion) -> impl Future<Output = Result<DeletionProgress>>;
 }

@@ -129,7 +129,7 @@ pub async fn catch_up<R: Rpc, D: IdentityRepository>(
     repo: &D,
     genesis: &str,
     checked: u64,
-) -> Result<()> {
+) -> Result<bool> {
     let head = finalized::head(rpc, genesis).await?;
     let mut previous = repo.cursor().await?;
     let start = previous.as_ref().map(|a| a.number + 1).unwrap_or(0);
@@ -152,5 +152,5 @@ pub async fn catch_up<R: Rpc, D: IdentityRepository>(
             .await?;
         previous = Some(anchor);
     }
-    Ok(())
+    Ok(previous.as_ref().is_some_and(|p| p.number >= head.number))
 }

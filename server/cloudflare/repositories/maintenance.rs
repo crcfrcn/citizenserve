@@ -170,11 +170,43 @@ impl D1Maintenance {
         )
         .await
     }
-    pub async fn authentication(&self) -> Result<bool> {
+    pub async fn healthy(
+        &self,
+        lease: &Lease,
+        kind: &str,
+        genesis: &str,
+        height: u64,
+        now: u64,
+    ) -> Result<()> {
+        self.budget.commit(1)?;
+        let query="INSERT INTO scheduler_leases(lease_key,last_slot,updated_at) SELECT ?1,?2,?3 WHERE EXISTS(SELECT 1 FROM maintenance_jobs WHERE job_id=?4 AND state='leased' AND lease_token=?5 AND lease_expires_at>?3) ON CONFLICT(lease_key) DO UPDATE SET last_slot=excluded.last_slot,updated_at=excluded.updated_at WHERE scheduler_leases.last_slot<=excluded.last_slot AND scheduler_leases.updated_at<=excluded.updated_at";
+        let result = self
+            .db
+            .prepare(query)
+            .bind(&[
+                string(&format!("sync:{kind}:{genesis}")),
+                JsValue::from_f64(height as f64),
+                JsValue::from_f64(now as f64),
+                string(lease.id()),
+                string(lease.token()),
+            ])
+            .map_err(|_| bad())?
+            .run()
+            .await
+            .map_err(|_| bad())?;
+        if result.meta().map_err(|_| bad())?.and_then(|m| m.changes) != Some(1) {
+            return Err(bad());
+        }
+        Ok(())
+    }
+    pub async fn authentication(&self) -> Result<(u64, bool)> {
         let now = js_sys::Date::now() as u64;
         let mut changed = 0;
+        let mut more = false;
         // 固定白名单，绝不以通用TTL扫描金融claim、准入、未知广播或业务资料。
         let sqls=[
+   "DELETE FROM rate_windows WHERE rowid IN (SELECT rowid FROM rate_windows WHERE expires_at<=?1 LIMIT 1000)",
+   "DELETE FROM scheduler_leases WHERE rowid IN (SELECT l.rowid FROM scheduler_leases l WHERE l.lease_key LIKE 'member-refresh:%' AND l.lease_expires_at<=?1 AND NOT EXISTS(SELECT 1 FROM users u JOIN user_identity_checks i USING(cid_number) JOIN square_memberships m USING(cid_number) WHERE l.lease_key='member-refresh:'||json_extract(i.row_json,'$.chain_scope')||':'||u.cid_number||':'||u.binding_revision||':'||m.paid_until) AND NOT EXISTS(SELECT 1 FROM users u JOIN user_identity_checks i USING(cid_number) JOIN square_creator_subscriptions m ON m.subscriber_cid_number=u.cid_number WHERE l.lease_key='member-refresh:'||json_extract(i.row_json,'$.chain_scope')||':'||u.cid_number||':'||u.binding_revision||':'||m.paid_until) LIMIT 1000)",
    "DELETE FROM mls_authentication_challenges WHERE rowid IN (SELECT rowid FROM mls_authentication_challenges WHERE expires_at_millis<=?1 LIMIT 1000)",
    "DELETE FROM square_sessions WHERE rowid IN (SELECT rowid FROM square_sessions WHERE expires_at<=?1 LIMIT 1000)",
    "DELETE FROM push_endpoints WHERE rowid IN (SELECT e.rowid FROM push_endpoints e WHERE e.expires_at<=?1 OR NOT EXISTS(SELECT 1 FROM users u JOIN mls_devices d ON d.cid_number=u.cid_number WHERE u.cid_number=e.cid_number AND u.account_id=e.account_id AND u.binding_revision=e.binding_revision AND u.cid_status='active' AND d.device_id=e.device_id AND d.account_id=e.account_id AND d.binding_revision=e.binding_revision AND d.active=1) LIMIT 1000)",
@@ -184,9 +216,31 @@ impl D1Maintenance {
    "DELETE FROM maintenance_jobs WHERE rowid IN (SELECT rowid FROM maintenance_jobs WHERE artifact_owner IS NULL AND state IN ('done','cancelled') AND updated_at<=?1-604800000 LIMIT 1000)",
   ];
         for sql in sqls {
-            changed += self.execute(sql, &[JsValue::from_f64(now as f64)]).await?;
+            let count = self.execute(sql, &[JsValue::from_f64(now as f64)]).await?;
+            changed += count;
+            more |= count >= citizenserve::membership::limits::CLEANUP_ROWS;
         }
-        Ok(changed > 0)
+        use citizenserve::membership::limits as l;
+        let oldest_day =
+            (now / l::QUOTA_DAY_MILLIS * l::QUOTA_DAY_MILLIS).saturating_sub(l::HISTORY_DAY_OFFSET);
+        for (sql, before) in [
+            (
+                HISTORY_OPERATIONS,
+                JsValue::from_f64(now.saturating_sub(l::HISTORY_MILLIS) as f64),
+            ),
+            (HISTORY_USAGE, JsValue::from_f64(oldest_day as f64)),
+            (
+                HISTORY_BROWSE,
+                string(&citizenserve::square::feed::utc_day(oldest_day)),
+            ),
+        ] {
+            let count = self
+                .execute(sql, &[before, JsValue::from_f64(l::CLEANUP_ROWS as f64)])
+                .await?;
+            changed += count;
+            more |= count >= l::CLEANUP_ROWS;
+        }
+        Ok((changed, more))
     }
 }
 const CACHE: &str = r#"
@@ -195,3 +249,96 @@ INSERT INTO maintenance_jobs(job_id,work_kind,scheduled_at,updated_at) SELECT NU
 -- statement
 INSERT INTO maintenance_jobs(job_id,artifact_owner,artifact_seq,work_kind,scheduled_at,state,progress_json,updated_at) SELECT json_extract(value,'$.id'),json_extract(?1,'$.lease.id'),json_extract(value,'$.seq'),json_extract(?1,'$.work'),json_extract(?1,'$.slot'),'done',json_extract(value,'$.data'),json_extract(?1,'$.now') FROM json_each(?1,'$.chunks');
 "#;
+
+/// 原rate_windows中一次预扣本次有界动作；分钟/日同时成功才可发出RPC。
+pub async fn reserve_rpc(
+    db: &worker::D1Database,
+    key: &str,
+    amount: u32,
+    minute: u32,
+    day: u32,
+    now: u64,
+) -> citizenserve::shared::Result<()> {
+    if amount == 0 || amount > minute || amount > day {
+        return Err(citizenserve::shared::Error::new(
+            429,
+            "chain_rpc_budget_exceeded",
+        ));
+    }
+    let mut statements = Vec::new();
+    for (period, limit, span) in [("minute", minute, 60000u64), ("day", day, 86400000u64)] {
+        let window = now / span;
+        let key = format!("rpc:{key}:{period}:{window}");
+        statements.push(
+            db.prepare(RPC_RESERVE)
+                .bind(&[
+                    wasm_bindgen::JsValue::from_str(&key),
+                    wasm_bindgen::JsValue::from_f64(amount as f64),
+                    wasm_bindgen::JsValue::from_f64(((window + 1) * span) as f64),
+                    wasm_bindgen::JsValue::from_f64(limit as f64),
+                ])
+                .map_err(|_| {
+                    citizenserve::shared::Error::new(503, "chain_rpc_budget_unavailable")
+                })?,
+        );
+        statements.push(db.prepare(RPC_ASSERT));
+    }
+    let results = db.batch(statements).await.map_err(|e| match e {
+        worker::Error::D1(c)
+            if c.cause()
+                .contains("NOT NULL constraint failed: rate_windows.request_count") =>
+        {
+            citizenserve::shared::Error::new(429, "chain_rpc_budget_exceeded")
+        }
+        _ => citizenserve::shared::Error::new(503, "chain_rpc_budget_unavailable"),
+    })?;
+    if results.iter().any(|r| !r.success()) {
+        return Err(citizenserve::shared::Error::new(
+            503,
+            "chain_rpc_budget_unavailable",
+        ));
+    }
+    Ok(())
+}
+
+const RPC_RESERVE: &str = r#"INSERT INTO rate_windows(rate_key,request_count,expires_at) SELECT ?1,?2,?3 WHERE ?2<=?4 ON CONFLICT(rate_key) DO UPDATE SET request_count=rate_windows.request_count+excluded.request_count WHERE rate_windows.request_count<=?4-excluded.request_count"#;
+const RPC_ASSERT: &str = r#"INSERT INTO rate_windows(rate_key,request_count,expires_at) SELECT 'rpc-budget-assert',NULL,0 WHERE changes()<>1"#;
+
+// 只清普通访问和已结束UTC日，发布/财务及现行上传周期不属于历史白名单。
+const HISTORY_OPERATIONS: &str = r#"DELETE FROM membership_operations WHERE rowid IN(SELECT rowid FROM membership_operations WHERE metric IN('browse','detail','profile','delivery_bytes') AND state='committed' AND created_at<=?1 ORDER BY metric,created_at LIMIT ?2)"#;
+const HISTORY_USAGE: &str = r#"DELETE FROM membership_usage WHERE rowid IN(SELECT rowid FROM membership_usage WHERE metric IN('browse','detail','profile','delivery_bytes','chat_connections','chat_commands','chat_frame_bytes','chat_deliveries','attachment_begins','chat_chunk_operations','upload_bytes','media_requests','profile_requests','profile_read_bytes') AND period_start<?1 ORDER BY metric,period_start LIMIT ?2)"#;
+const HISTORY_BROWSE: &str = r#"DELETE FROM square_browse_days WHERE rowid IN(SELECT rowid FROM square_browse_days WHERE browse_day<?1 ORDER BY browse_day LIMIT ?2)"#;
+
+/// 后台附件回收独立日池，原系统租约领取后预扣整轮名额；不占RPC或用户额度。
+pub(crate) async fn reserve_cleanup(db: &D1Database, budget: &Budget, now: u64) -> Result<()> {
+    use citizenserve::membership::limits as l;
+    budget.business(1)?;
+    let day = now / l::QUOTA_DAY_MILLIS;
+    let statement = db
+        .prepare(CLEANUP_RESERVE)
+        .bind(&[
+            string(&format!("cleanup:day:{day}")),
+            JsValue::from_f64(l::CLEANUP_RESERVE_IO as f64),
+            JsValue::from_f64(((day + 1) * l::QUOTA_DAY_MILLIS) as f64),
+            JsValue::from_f64(l::CLEANUP_IO_DAY as f64),
+        ])
+        .map_err(|_| bad())?;
+    let results = db
+        .batch(vec![statement, db.prepare(CLEANUP_ASSERT)])
+        .await
+        .map_err(|e| match e {
+            worker::Error::D1(c)
+                if c.cause()
+                    .contains("NOT NULL constraint failed: rate_windows.request_count") =>
+            {
+                Error::new(429, "cleanup_budget_exceeded")
+            }
+            _ => bad(),
+        })?;
+    if results.iter().any(|r| !r.success()) {
+        return Err(bad());
+    }
+    Ok(())
+}
+const CLEANUP_RESERVE: &str = r#"INSERT INTO rate_windows(rate_key,request_count,expires_at) SELECT ?1,?2,?3 WHERE ?2<=?4 ON CONFLICT(rate_key) DO UPDATE SET request_count=rate_windows.request_count+excluded.request_count WHERE rate_windows.request_count>=0 AND rate_windows.request_count<=?4-excluded.request_count"#;
+const CLEANUP_ASSERT: &str = r#"INSERT INTO rate_windows(rate_key,request_count,expires_at) SELECT 'cleanup:assert',NULL,0 WHERE changes()<>1"#;

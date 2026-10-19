@@ -9,6 +9,7 @@ use crate::{
 pub enum Operation {
     Account,
     Membership,
+    CreatorOverview,
     Chat,
     Attachment,
     Profile(String),
@@ -29,7 +30,9 @@ impl Operation {
             Self::Profile(target) | Self::ProfileAsset { target, .. } if target != actor => {
                 Requirement::Member
             }
-            Self::Square(_) | Self::Media(_) | Self::Attachment => Requirement::Member,
+            Self::Square(_) | Self::Media(_) | Self::Attachment | Self::CreatorOverview => {
+                Requirement::Member
+            }
             Self::Profile(_)
             | Self::ProfileAsset { .. }
             | Self::Card(_)
@@ -56,6 +59,7 @@ impl Operation {
                 Error::new(403, "profile_membership_required")
             }
             Self::Attachment => Error::new(403, "attachment_membership_required"),
+            Self::CreatorOverview => Error::new(403, "membership_required"),
             _ => Error::new(403, "square_membership_required"),
         }
     }
@@ -103,6 +107,10 @@ pub fn api(route: Route, path: &str) -> Result<Operation> {
             | ProtectedUserRoute::DeletionChallenge
             | ProtectedUserRoute::Delete,
         ) => Operation::Account,
+        // 概览需要真实会员许可，不能借会员状态/确认的基础入口绕过同步健康。
+        Route::Membership(crate::membership::routes::MembershipRoute::Overview) => {
+            Operation::CreatorOverview
+        }
         Route::Membership(_) => Operation::Membership,
         Route::TataChat(_) => Operation::Chat,
         Route::Square(route) => Operation::Square(route),

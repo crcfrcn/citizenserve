@@ -24,6 +24,57 @@ fn run<F: Future>(f: F) -> F::Output {
     }
 }
 struct Node(Value);
+
+#[test]
+fn invalid_relay_bytes_never_reach_rpc_reservation_or_broadcast() {
+    struct NoRpc;
+    impl Rpc for NoRpc {
+        async fn call(&self, _: &str, _: Value) -> Result<Value> {
+            panic!("非法本地字节不得进入上游RPC");
+        }
+    }
+    let repo = Memory(Mutex::new(None));
+    let broadcast = Broadcast {
+        hash: String::new(),
+        timeout: false,
+        count: Mutex::new(0),
+    };
+    for value in [
+        "".into(),
+        "0x".into(),
+        "0x0".into(),
+        "0xgg".into(),
+        "11".into(),
+        format!("0x{}", "01".repeat(65537)),
+    ] {
+        let error = run(chain::relay::submit(
+            &repo,
+            &broadcast,
+            &NoRpc,
+            &format!("0x{}", "00".repeat(32)),
+            chain::Relay {
+                signed_extrinsic_hex: value,
+            },
+            &"33".repeat(32),
+            &"55".repeat(16),
+            1000000,
+        ))
+        .unwrap_err();
+        assert_eq!(error.status, 400);
+    }
+    assert!(repo.0.lock().unwrap().is_none());
+    assert_eq!(*broadcast.count.lock().unwrap(), 0);
+    assert_eq!(
+        chain::Relay {
+            signed_extrinsic_hex: format!("0x{}", "01".repeat(65536))
+        }
+        .bytes()
+        .unwrap()
+        .len(),
+        65536
+    );
+}
+
 impl Rpc for Node {
     async fn call(&self, m: &str, p: Value) -> Result<Value> {
         let v = &self.0;

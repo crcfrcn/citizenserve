@@ -1,5 +1,18 @@
--- 同一交易规范结果严格幂等；发布绑定完整上传及当前平台资格。
+-- 最新会员行和独立同步健康在原写事务复核；旧许可不能跨越降档、撤销或续费。
 -- statement
+INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT EXISTS(
+ SELECT 1 FROM square_memberships m
+ JOIN scheduler_leases h ON h.lease_key='sync:membership:'||json_extract(?1,'$.auth.chain_scope')
+ JOIN membership_projection_cursor c ON c.cursor_id=1 AND c.finalized_block_number>=h.last_slot
+ WHERE m.cid_number=json_extract(?1,'$.auth.cid_number')
+ AND m.membership_level=json_extract(?1,'$.membership_level')
+ AND m.subscription_status=json_extract(?1,'$.membership_status') AND m.subscription_status IN ('active','cancelled')
+ AND m.paid_until=json_extract(?1,'$.paid_until') AND m.paid_until>json_extract(?1,'$.auth.now')
+ AND m.last_charged_at=json_extract(?1,'$.period_start') AND m.finalized_block_number=json_extract(?1,'$.membership_block')
+ AND h.updated_at>0 AND h.updated_at<=json_extract(?1,'$.auth.now')
+ AND h.updated_at+json_extract(?1,'$.auth.sync_health_millis')>json_extract(?1,'$.auth.now'));
+-- statement
+-- 同一交易规范结果严格幂等；发布绑定完整上传及当前平台资格。
 INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT (json_extract(?1,'$.membership_checked')<=json_extract(?1,'$.auth.now') AND json_extract(?1,'$.auth.now')<json_extract(?1,'$.membership_deadline') AND json_extract(?1,'$.paid_until')>MAX(json_extract(?1,'$.auth.now'),json_extract(?1,'$.chain_time')) AND json_extract(?1,'$.period_start')<=json_extract(?1,'$.paid_until'));
 -- statement
 INSERT OR IGNORE INTO chain_transaction_confirmations(tx_hash,cid_number,account_id,block_hash,block_number,extrinsic_index,action_kind,request_hash,chain_timestamp,confirmed_at) SELECT json_extract(?1,'$.fact.evidence.tx_hash'),json_extract(?1,'$.fact.evidence.cid_number'),json_extract(?1,'$.fact.evidence.account_id'),json_extract(?1,'$.fact.evidence.block_hash'),json_extract(?1,'$.fact.evidence.block_number'),json_extract(?1,'$.fact.evidence.extrinsic_index'),json_extract(?1,'$.fact.evidence.action_kind'),json_extract(?1,'$.fact.evidence.request_hash'),json_extract(?1,'$.fact.evidence.chain_timestamp'),json_extract(?1,'$.auth.now') WHERE json_extract(?1,'$.fact.evidence.tx_hash') IS NOT NULL;

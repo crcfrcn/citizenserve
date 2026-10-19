@@ -1,6 +1,6 @@
 use super::{
     challenge::Consumption,
-    mls_authentication::{self, Proof, Purpose},
+    mls_authentication::{self, Purpose},
 };
 use crate::{
     shared::{ids, Error, Result},
@@ -88,12 +88,13 @@ pub async fn register<A: AuthRepository, R: Repository>(
     config: &Config,
     identity: &Identity,
     input: &Register,
-    proof: &Proof,
+    checked_proof: &crate::server::gate::identity::CheckedProof<'_>,
     body: &[u8],
     target: &str,
     now: u64,
 ) -> Result<Registered> {
     identity.require_current(now)?;
+    let proof = checked_proof.proof();
     if identity.chain_scope != config.chain_scope
         || input.account_id != identity.account_id
         || proof.public_key != input.public_key
@@ -104,7 +105,7 @@ pub async fn register<A: AuthRepository, R: Repository>(
     if !ids::positive(input.issued_at) || input.issued_at > now.saturating_add(300_000) {
         return Err(Error::new(400, "invalid_device_binding"));
     }
-    proof.verify_request(identity, &config.service_origin, "POST", target, body, now)?;
+    checked_proof.require(identity, config, "POST", target, body, now)?;
     let message = mls_authentication::device_binding_message(
         &identity.cid_number,
         identity.binding_revision,

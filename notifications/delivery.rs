@@ -32,8 +32,19 @@ impl AuthorizedEndpoint {
         admission_and_device: bool,
         source_current: bool,
         now: u64,
+        service_deadline: u64,
     ) -> Result<Option<Self>> {
-        identity.require_current(now)?;
+        identity.matches(
+            &identity.cid_number,
+            &identity.account_id,
+            identity.binding_revision,
+        )?;
+        if now >= service_deadline
+            || service_deadline
+                > now.saturating_add(crate::server::gate::policy::SERVICE_AUTH_MILLIS)
+        {
+            return Err(Error::new(503, "notification_authorization_expired"));
+        }
         if !admission_and_device
             || !source_current
             || identity.cid_number != delivery.cid_number
@@ -49,10 +60,11 @@ impl AuthorizedEndpoint {
             return Ok(None);
         }
         endpoint.registration().canonical(now)?;
+        let deadline = service_deadline.min(endpoint.expires_at);
         Ok(Some(Self {
             endpoint,
-            checked_at: identity.checked_at_millis,
-            deadline: identity.verification_deadline_millis,
+            checked_at: now,
+            deadline,
         }))
     }
     pub fn endpoint(&self) -> &Stored {

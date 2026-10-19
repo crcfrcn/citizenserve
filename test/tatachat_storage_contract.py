@@ -19,7 +19,7 @@ class ChatAccessStorageContract(unittest.TestCase):
         self.params = [f"{1:064x}", auth.IDENTITY["cid_number"], auth.FIXTURE["public_key"][2:],
                        auth.IDENTITY["account_id"], 1, auth.FIXTURE["registration_scope"],
                        auth.FIXTURE["service_origin"], auth.FIXTURE["chain_scope"], "CTZN",
-                       1000003, auth.FIXTURE["issued_at"]]
+                       1000003, auth.FIXTURE["issued_at"],600000]
 
     def tearDown(self):
         self.db.close()
@@ -41,7 +41,7 @@ class ChatAccessStorageContract(unittest.TestCase):
     def test_same_public_key_reactivation_invalidates_old_device_generation(self):
         self.db.execute("UPDATE mls_devices SET issued_at=issued_at+1")
         self.assertIsNone(self.current())
-        self.params[-1] += 1
+        self.params[10] += 1
         self.assertIsNotNone(self.current())
 
     def test_signed_during_account_rebinding_cannot_be_delivered(self):
@@ -57,10 +57,18 @@ class ChatAccessStorageContract(unittest.TestCase):
         self.assertIsNone(self.current())
 
     def test_exact_expiry_future_check_and_old_identity_rejected(self):
-        for value in [1000000 - 1, 1060000, 87400002]:
+        for value in [1000000 - 1, 1600000, 87400002]:
             with self.subTest(now=value):
                 self.params[9] = value
                 self.assertIsNone(self.current())
+
+    def test_old_chain_fact_is_not_refreshed_or_needed_for_service_authorization(self):
+        before=self.db.execute("SELECT checked_at_millis,verification_deadline_millis,row_json FROM user_identity_checks").fetchone()
+        self.params[9]=1060000
+        self.assertIsNotNone(self.current())
+        self.assertEqual(self.db.execute("SELECT checked_at_millis,verification_deadline_millis,row_json FROM user_identity_checks").fetchone(),before)
+        self.db.execute("DELETE FROM scheduler_leases WHERE lease_key LIKE 'sync:identity:%'")
+        self.assertIsNone(self.current())
 
     def test_expired_session_rejected_before_cleanup(self):
         self.db.execute("UPDATE square_sessions SET expires_at=?", (self.params[9],))
@@ -80,7 +88,7 @@ class ChatAccessStorageContract(unittest.TestCase):
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset(tables))
         self.assertFalse(any(name.startswith('tatachat_') for name in tables))
         self.assertNotIn("TATACHAT_AUTH_KEY", auth.SCHEMA)
-        for index in range(11):
+        for index in range(12):
             with self.subTest(index=index):
                 original = self.params[index]
                 self.params[index] = None

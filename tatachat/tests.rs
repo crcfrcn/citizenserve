@@ -2,7 +2,7 @@
 use super::{
     attachment::{
         self,
-        ports::{Deletion, Operation, State, Stored, Upload, Written},
+        ports::{Deletion, Operation, Reservation, State, Stored, Upload, Written},
     },
     auth::{self, Access, Device, HostAccess},
     key, mailbox,
@@ -42,7 +42,9 @@ pub fn snapshot(device: Device) -> HostAccess {
     HostAccess {
         actor: device,
         chat_enabled: true,
-        attachments: crate::tatachat::auth::AttachmentPermission::Allowed{max_bytes:10 * 1024 * 1024},
+        attachments: crate::tatachat::auth::AttachmentPermission::Allowed {
+            max_bytes: 10 * 1024 * 1024,
+        },
         authorization_revision: "revision-1".into(),
         session_id_digest: "a".repeat(64),
         issued_at_millis: NOW,
@@ -58,6 +60,8 @@ pub struct FakeHost {
     pub failure: Cell<Option<Error>>,
     pub revision: RefCell<Option<String>>,
     pub calls: Cell<u32>,
+    pub costs: RefCell<Vec<auth::ports::ResourceCost>>,
+    pub resource_failure: Cell<Option<Error>>,
 }
 impl Default for FakeHost {
     fn default() -> Self {
@@ -66,10 +70,19 @@ impl Default for FakeHost {
             failure: Cell::new(None),
             revision: RefCell::new(None),
             calls: Cell::new(0),
+            costs: RefCell::new(Vec::new()),
+            resource_failure: Cell::new(None),
         }
     }
 }
 impl auth::ports::Host for FakeHost {
+    async fn consume(&self, _subject: &HostAccess, cost: auth::ports::ResourceCost) -> Result<()> {
+        if let Some(error) = self.resource_failure.get() {
+            return Err(error);
+        }
+        self.costs.borrow_mut().push(cost);
+        Ok(())
+    }
     fn now_millis(&self) -> u64 {
         self.time.get()
     }
@@ -87,7 +100,15 @@ impl auth::ports::Host for FakeHost {
         }
         Ok(fresh)
     }
-    async fn attachment_limit(&self,subject:&HostAccess)->Result<crate::tatachat::auth::AttachmentGrant> {Ok(crate::tatachat::auth::AttachmentGrant{max_bytes:subject.attachments.limit()?,deadline_millis:subject.recheck_at_millis})}
+    async fn attachment_limit(
+        &self,
+        subject: &HostAccess,
+    ) -> Result<crate::tatachat::auth::AttachmentGrant> {
+        Ok(crate::tatachat::auth::AttachmentGrant {
+            max_bytes: subject.attachments.limit()?,
+            deadline_millis: subject.recheck_at_millis,
+        })
+    }
     async fn authorize_wake(&self, registered: &HostAccess) -> Result<HostAccess> {
         self.recheck(registered).await
     }
@@ -107,6 +128,7 @@ struct Data {
     deliveries: Vec<mailbox::Delivery>,
     attachments: BTreeMap<String, Stored>,
     chunks: BTreeMap<(String, u32), Written>,
+    reservations: BTreeMap<(String, u32), (Upload, bool)>,
     acknowledgements: BTreeSet<(String, String)>,
     retired: BTreeMap<String, Retired>,
     aborted: BTreeSet<String>,
@@ -123,6 +145,7 @@ pub struct Memory {
     pub fail_confirm: Cell<bool>,
     pub fail_finalize: Cell<bool>,
     pub lose_lease: Cell<bool>,
+    pub deferred: RefCell<BTreeMap<String, (u64, attachment::ports::DeletionRetry)>>,
 }
 impl Memory {
     pub fn new(host: &FakeHost) -> Self {
@@ -133,6 +156,7 @@ impl Memory {
             fail_confirm: Cell::new(false),
             fail_finalize: Cell::new(false),
             lose_lease: Cell::new(false),
+            deferred: RefCell::new(BTreeMap::new()),
         }
     }
     fn guard(&self, access: &Access) -> Result<()> {
@@ -379,10 +403,10 @@ impl attachment::ports::Store for Memory {
         stored: &Stored,
         index: u32,
         _now: u64,
-    ) -> Result<Upload> {
+    ) -> Result<Reservation> {
         let current = self.get(access, &stored.metadata.attachment_id)?;
         self.owner(access, &current)?;
-        if current.state != State::Pending || current.generation != stored.generation {
+        if current.state == State::Deleting || current.generation != stored.generation {
             return Err(Error::Conflict);
         }
         let chunk = current
@@ -390,10 +414,24 @@ impl attachment::ports::Store for Memory {
             .expected_chunk(index)
             .ok_or(Error::NotFound)?
             .clone();
+        let key = (current.metadata.attachment_id.clone(), index);
         let mut data = self.data.borrow_mut();
+        if let Some(written) = data.chunks.get(&key) {
+            return Ok(Reservation::Complete(written.clone()));
+        }
+        if current.state != State::Pending {
+            return Err(Error::Conflict);
+        }
+        if let Some((upload, writing)) = data.reservations.get_mut(&key) {
+            if *writing {
+                return Ok(Reservation::Recover(upload.clone()));
+            }
+            *writing = true;
+            return Ok(Reservation::Write(upload.clone()));
+        }
         data.attempts += 1;
         let attempt_id = format!("attempt-{}", data.attempts);
-        Ok(Upload {
+        let upload = Upload {
             attachment_id: current.metadata.attachment_id.clone(),
             generation: current.generation.clone(),
             object_key: format!(
@@ -402,7 +440,24 @@ impl attachment::ports::Store for Memory {
             ),
             attempt_id,
             chunk,
-        })
+        };
+        data.reservations.insert(key, (upload.clone(), true));
+        Ok(Reservation::Write(upload))
+    }
+    async fn release_upload(&self, access: &Access, upload: &Upload, _now: u64) -> Result<()> {
+        let current = self.get(access, &upload.attachment_id)?;
+        self.owner(access, &current)?;
+        let mut data = self.data.borrow_mut();
+        if let Some((original, writing)) = data
+            .reservations
+            .get_mut(&(upload.attachment_id.clone(), upload.chunk.chunk_index))
+        {
+            if original == upload {
+                *writing = false;
+                return Ok(());
+            }
+        }
+        Err(Error::Conflict)
     }
     async fn confirm_upload(&self, access: &Access, written: &Written, _now: u64) -> Result<()> {
         let stored = self.get(access, &written.upload.attachment_id)?;
@@ -520,6 +575,31 @@ impl attachment::ports::Store for Memory {
         data.attachments.remove(&deletion.attachment_id);
         data.chunks
             .retain(|(id, _), _| id != &deletion.attachment_id);
+        data.reservations
+            .retain(|(id, _), _| id != &deletion.attachment_id);
+        Ok(())
+    }
+    async fn defer_deletions(
+        &self,
+        deletions: &[Deletion],
+        now: u64,
+        retry: attachment::ports::DeletionRetry,
+    ) -> Result<()> {
+        let data = self.data.borrow();
+        for deletion in deletions {
+            let stored = data
+                .attachments
+                .get(&deletion.attachment_id)
+                .ok_or(Error::NotFound)?;
+            if stored.generation != deletion.generation || stored.state != State::Deleting {
+                return Err(Error::Conflict);
+            }
+        }
+        for deletion in deletions {
+            self.deferred
+                .borrow_mut()
+                .insert(deletion.attachment_id.clone(), (now, retry));
+        }
         Ok(())
     }
     async fn pending_deletions(&self, now: u64, limit: u32) -> Result<Vec<Deletion>> {
@@ -639,6 +719,11 @@ pub struct FakeObjects {
     pub fail_delete: Cell<bool>,
     pub discarded: RefCell<Vec<String>>,
     pub delete_count: Cell<u32>,
+    pub puts: Cell<u32>,
+    pub opens: Cell<u32>,
+    pub recoveries: Cell<u32>,
+    pub delete_batch: Cell<Option<usize>>,
+    pub unknown_deletes: RefCell<BTreeSet<String>>,
 }
 pub fn digest(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -663,12 +748,29 @@ impl FakeObjects {
 impl attachment::ports::Objects for FakeObjects {
     type UploadBody = Vec<u8>;
     type DownloadBody = Vec<u8>;
+    async fn recover(&self, upload: &Upload, _deadline: u64) -> Result<Option<Written>> {
+        self.recoveries.set(self.recoveries.get() + 1);
+        Ok(self
+            .data
+            .borrow()
+            .get(&upload.object_key)
+            .map(|(version, body)| Written {
+                upload: upload.clone(),
+                object_version: version.clone(),
+                size: body.len() as u64,
+                sha256: digest(body),
+            }))
+    }
     async fn put(&self, upload: &Upload, body: Vec<u8>, _deadline: u64) -> Result<Written> {
         let sha256 = digest(&body);
         let size = body.len() as u64;
         if size != upload.chunk.cipher_byte_size || sha256 != upload.chunk.cipher_sha256 {
             return Err(Error::InvalidRequest);
         }
+        if self.data.borrow().contains_key(&upload.object_key) {
+            return Err(Error::Conflict);
+        }
+        self.puts.set(self.puts.get() + 1);
         let version = upload.attempt_id.clone();
         self.data
             .borrow_mut()
@@ -694,6 +796,7 @@ impl attachment::ports::Objects for FakeObjects {
         Ok(())
     }
     async fn open(&self, written: &Written, _deadline: u64) -> Result<Vec<u8>> {
+        self.opens.set(self.opens.get() + 1);
         self.data
             .borrow()
             .get(&written.upload.object_key)
@@ -701,19 +804,37 @@ impl attachment::ports::Objects for FakeObjects {
             .map(|(_, bytes)| bytes.clone())
             .ok_or(Error::NotFound)
     }
-    async fn delete(&self, deletion: &Deletion) -> Result<()> {
+    async fn delete(&self, deletion: &Deletion) -> Result<attachment::ports::DeletionProgress> {
         self.delete_count.set(self.delete_count.get() + 1);
         if self.fail_delete.get() {
             return Err(Error::StorageUnavailable);
+        }
+        if self
+            .unknown_deletes
+            .borrow()
+            .contains(&deletion.attachment_id)
+        {
+            return Ok(attachment::ports::DeletionProgress::default());
         }
         let prefix = format!(
             "attachments/{}/{}/",
             deletion.attachment_id, deletion.generation
         );
-        self.data
-            .borrow_mut()
-            .retain(|key, _| !key.starts_with(&prefix));
-        Ok(())
+        let mut data = self.data.borrow_mut();
+        let keys: Vec<String> = data
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .take(self.delete_batch.get().unwrap_or(usize::MAX))
+            .cloned()
+            .collect();
+        let progressed = !keys.is_empty();
+        for key in keys {
+            data.remove(&key);
+        }
+        Ok(attachment::ports::DeletionProgress {
+            complete: !data.keys().any(|key| key.starts_with(&prefix)),
+            progressed,
+        })
     }
 }
 pub struct FakeProvider {
@@ -803,7 +924,7 @@ fn twelve_commands_execute_through_the_unique_service() {
         objects: &objects,
         push_config: &config,
         limits: Limits {
-            max_attachment_bytes:10 * 1024 * 1024,
+            max_attachment_bytes: 10 * 1024 * 1024,
             max_frame_bytes: 4 * 1024 * 1024,
         },
     };
@@ -878,7 +999,10 @@ fn twelve_commands_execute_through_the_unique_service() {
         sender.access(),
         "file-1",
         0,
-        b"encrypted".to_vec(),
+        (
+            |_| async { Ok(()) },
+            |_| async { Ok(b"encrypted".to_vec()) },
+        ),
         NOW,
     ))
     .expect("上传实际密文");
@@ -938,7 +1062,7 @@ fn failed_commit_produces_no_success_or_notifications() {
         objects: &objects,
         push_config: &config,
         limits: Limits {
-            max_attachment_bytes:1024,
+            max_attachment_bytes: 1024,
             max_frame_bytes: 1024,
         },
     };
@@ -954,4 +1078,88 @@ fn failed_commit_produces_no_success_or_notifications() {
     ));
     assert_eq!(store.deliveries(), 0);
     assert_eq!(store.jobs(), 0);
+}
+
+#[test]
+fn resource_cost_counts_device_fanout_and_raw_frame_without_double_charging() {
+    use auth::ports::ResourceCost;
+    let host = FakeHost::default();
+    let store = Memory::new(&host);
+    let objects = FakeObjects::default();
+    let config = config();
+    let service = Service {
+        host: &host,
+        store: &store,
+        objects: &objects,
+        push_config: &config,
+        limits: Limits {
+            max_frame_bytes: 2 * 1024 * 1024,
+            max_attachment_bytes: 10 * 1024 * 1024,
+        },
+    };
+    let mut session = Session::new(access("sender", "phone"));
+    let ping = protocol::encode_chat_frame(&protocol::ChatFrame {
+        body: Some(Body::Ping(protocol::Ping { sent_at_millis: 1 })),
+    });
+    run(service.execute(&mut session, &ping)).unwrap();
+    assert!(host.costs.borrow().is_empty(), "Ping不能增加主库配额写入");
+    let mut message = message();
+    let mut second = message.deliveries[0].clone();
+    second.recipient.as_mut().unwrap().device_id = "tablet".into();
+    message.deliveries.push(second);
+    let body = Body::SendMessage(protocol::SendMessage {
+        message: Some(message),
+    });
+    let frame = protocol::encode_chat_frame(&protocol::ChatFrame { body: Some(body) });
+    run(service.execute(&mut session, &frame)).unwrap();
+    assert_eq!(
+        host.costs.borrow().as_slice(),
+        &[ResourceCost::Command {
+            frame_bytes: frame.len() as u64,
+            deliveries: 2,
+            begin_attachment: false,
+            read_only: false
+        }]
+    );
+    assert_eq!(store.deliveries(), 2);
+    assert_eq!(store.jobs(), 2);
+}
+
+#[test]
+fn exhausted_resource_budget_stops_message_and_attachment_before_storage() {
+    let host = FakeHost::default();
+    host.resource_failure.set(Some(Error::ResourceLimit));
+    let store = Memory::new(&host);
+    let objects = FakeObjects::default();
+    let config = config();
+    let service = Service {
+        host: &host,
+        store: &store,
+        objects: &objects,
+        push_config: &config,
+        limits: Limits {
+            max_frame_bytes: 2 * 1024 * 1024,
+            max_attachment_bytes: 10 * 1024 * 1024,
+        },
+    };
+    let mut session = Session::new(access("sender", "phone"));
+    for body in [
+        Body::SendMessage(protocol::SendMessage {
+            message: Some(message()),
+        }),
+        Body::BeginAttachment(protocol::BeginAttachment {
+            attachment: Some(attachment_metadata("budget-file")),
+        }),
+    ] {
+        let frame = protocol::encode_chat_frame(&protocol::ChatFrame { body: Some(body) });
+        assert!(matches!(
+            run(service.execute(&mut session, &frame)),
+            Err(Error::ResourceLimit)
+        ));
+    }
+    assert_eq!(store.deliveries(), 0);
+    assert_eq!(store.jobs(), 0);
+    assert!(store.receipt("message-1").is_none());
+    assert!(store.state("budget-file").is_none());
+    assert_eq!(objects.count(), 0);
 }

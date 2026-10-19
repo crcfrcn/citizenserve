@@ -20,6 +20,11 @@ impl Cache for DisplayCache {
         now: u64,
     ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send {
         SendFuture::new(async move {
+            let maximum = if key.starts_with("membership:prices:") {
+                600000
+            } else {
+                300000
+            };
             let Ok(kv) = self.env.kv("SQUARE_CACHE") else {
                 return Ok(None);
             };
@@ -35,9 +40,13 @@ impl Cache for DisplayCache {
             let v: Option<Value> = serde_json::from_str(&text).ok();
             Ok(v.filter(|v| {
                 v["created"].as_u64().is_some_and(|n| n <= now)
-                    && v["deadline"]
-                        .as_u64()
-                        .is_some_and(|n| n > now && n <= now.saturating_add(300000))
+                    && v["deadline"].as_u64().is_some_and(|n| {
+                        n > now
+                            && n <= now.saturating_add(maximum)
+                            && v["created"]
+                                .as_u64()
+                                .is_some_and(|c| n <= c.saturating_add(maximum))
+                    })
             })
             .and_then(|v| v.get("value").cloned()))
         })
@@ -50,7 +59,13 @@ impl Cache for DisplayCache {
         ttl: u32,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         SendFuture::new(async move {
-            if !(60..=300).contains(&ttl) {
+            if !(60..=if key.starts_with("membership:prices:") {
+                600
+            } else {
+                300
+            })
+                .contains(&ttl)
+            {
                 return Err(Error::new(503, "display_cache_invalid"));
             }
             let Ok(kv) = self.env.kv("SQUARE_CACHE") else {

@@ -21,9 +21,12 @@ pub struct Entry {
     rule: Rule,
 }
 impl std::fmt::Debug for Entry {
-    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // 页面能力可能位于查询参数；诊断只输出固定分类和方法，不能输出请求目标或凭据。
-        f.debug_struct("Entry").field("rule",&self.rule).field("method",&self.recognized.method).finish_non_exhaustive()
+        f.debug_struct("Entry")
+            .field("rule", &self.rule)
+            .field("method", &self.recognized.method)
+            .finish_non_exhaustive()
     }
 }
 impl Entry {
@@ -78,9 +81,11 @@ pub fn classify(input: Incoming<'_>) -> Classification {
 }
 
 /// 已建连消息仍先做有界类型识别；未知消息不触发宿主恢复、数据库或链复核。
-pub fn classify_chat(bytes:&[u8],maximum:usize)->Result<()> {
-    let frame=crate::tatachat::protocol::decode_chat_frame(bytes,maximum)
-        .map_err(|_|Error::new(400,"invalid_chat_request"))?;
-    if policy::chat(&frame)!=Rule::Cid(CidRule::Chat) {return Err(Error::new(400,"invalid_chat_request"));}
-    Ok(())
+pub fn classify_chat(bytes: &[u8], maximum: usize) -> Result<crate::tatachat::protocol::ChatFrame> {
+    let frame = crate::tatachat::protocol::decode_chat_frame(bytes, maximum)
+        .map_err(|_| Error::new(400, "invalid_chat_request"))?;
+    if policy::chat(&frame) != Rule::Cid(CidRule::Chat) {
+        return Err(Error::new(400, "invalid_chat_request"));
+    }
+    Ok(frame)
 }

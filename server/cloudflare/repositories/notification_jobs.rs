@@ -314,29 +314,39 @@ impl Verifier for D1Jobs<'_> {
         now: u64,
     ) -> impl std::future::Future<Output = Result<Option<AuthorizedEndpoint>>> + Send {
         SendFuture::new(async move {
-            use citizenserve::{
-                chain::{finalized, identity, subscription},
-                user::identity::CidStatus,
-            };
-            let rpc =
-                crate::maintenance::BudgetRpc::configured(self.env, self.budget.clone(), None)?;
-            let genesis = self
-                .env
-                .var("CHAIN_GENESIS_HASH")
-                .map_err(|_| bad())?
-                .to_string();
-            let anchor = finalized::head(&rpc, &genesis).await?;
-            let m = identity::metadata(&rpc, &anchor).await?;
-            let Some(i) = identity::by_cid(&rpc, &m, &anchor, &d.cid_number, &genesis, now).await?
-            else {
-                return Ok(None);
-            };
-            if i.status != CidStatus::Active
-                || i.account_id != d.account_id
-                || i.binding_revision != d.binding_revision
-            {
-                return Ok(None);
-            }
+            // 通知只读服务端身份/会员和同步健康，不构造Chain或要求补查。
+            let config = crate::config(self.env)?;
+            let query = r#"SELECT c.row_json identity,h.updated_at identity_synced_at,CASE WHEN mc.finalized_block_number IS NOT NULL THEN mh.updated_at END membership_synced_at
+              FROM users u JOIN user_identity_checks c USING(cid_number)
+              JOIN scheduler_leases h ON h.lease_key='sync:identity:'||?4
+              JOIN user_projection_cursor cur ON cur.cursor_id=1 AND cur.finalized_block_number>=h.last_slot
+              LEFT JOIN scheduler_leases mh ON mh.lease_key='sync:membership:'||?4
+              LEFT JOIN membership_projection_cursor mc ON mc.cursor_id=1 AND mc.finalized_block_number>=mh.last_slot
+              WHERE u.cid_number=?1 AND u.account_id=?2 AND u.binding_revision=?3 AND u.cid_status='active'
+              AND c.account_id=u.account_id AND c.binding_revision=u.binding_revision
+              AND json_extract(c.row_json,'$.chain_scope')=?4 AND json_extract(c.row_json,'$.status')='active'
+              AND NOT EXISTS(SELECT 1 FROM account_deletions x WHERE x.cid_number=u.cid_number AND x.state='pending')"#;
+            let row: Option<Value> = self
+                .first(
+                    query,
+                    &[
+                        string(&d.cid_number),
+                        string(&d.account_id),
+                        JsValue::from_f64(d.binding_revision as f64),
+                        string(&config.chain_scope),
+                    ],
+                )
+                .await?;
+            let Some(row) = row else { return Ok(None) };
+            let i: citizenserve::user::identity::Identity =
+                serde_json::from_str(row["identity"].as_str().ok_or_else(bad)?)
+                    .map_err(|_| bad())?;
+            let mut deadline = citizenserve::user::ports::sync_deadline(
+                row["identity_synced_at"].as_u64().ok_or_else(bad)?,
+                now,
+            )?
+            .min(now.saturating_add(citizenserve::server::gate::policy::SERVICE_AUTH_MILLIS));
+            let genesis = &config.chain_scope;
             let Some(e):Option<Stored>=self.first("SELECT * FROM push_endpoints WHERE cid_number=?1 AND device_id=?2 AND endpoint_revision=?3",&[string(&d.cid_number),string(&d.device_id),JsValue::from_f64(d.endpoint_revision as f64)]).await? else{return Ok(None);};
             let scope = self
                 .env
@@ -344,12 +354,15 @@ impl Verifier for D1Jobs<'_> {
                 .map_err(|_| bad())?
                 .to_string();
             let origin = self.env.var("WEB_ORIGIN").map_err(|_| bad())?.to_string();
-            let eligible:Option<Value>=self.first("SELECT 1 ok FROM users u JOIN cid_admissions a ON a.cid_number=u.cid_number JOIN mls_devices m ON m.cid_number=u.cid_number WHERE u.cid_number=?1 AND u.account_id=?2 AND u.binding_revision=?3 AND u.cid_status='active' AND m.device_id=?4 AND m.active=1 AND m.account_id=u.account_id AND m.binding_revision=u.binding_revision AND a.registration_scope=?5 AND a.service_origin=?6 AND a.chain_scope=?7",&[string(&d.cid_number),string(&d.account_id),JsValue::from_f64(d.binding_revision as f64),string(&d.device_id),string(&scope),string(&origin),string(&genesis)]).await?;
+            let eligible:Option<Value>=self.first("SELECT 1 ok FROM users u JOIN cid_admissions a ON a.cid_number=u.cid_number JOIN mls_devices m ON m.cid_number=u.cid_number WHERE u.cid_number=?1 AND u.account_id=?2 AND u.binding_revision=?3 AND u.cid_status='active' AND m.device_id=?4 AND m.active=1 AND m.account_id=u.account_id AND m.binding_revision=u.binding_revision AND a.source='turnstile' AND a.institution=u.institution AND a.registration_scope=?5 AND a.service_origin=?6 AND a.chain_scope=?7",&[string(&d.cid_number),string(&d.account_id),JsValue::from_f64(d.binding_revision as f64),string(&d.device_id),string(&scope),string(&origin),string(genesis)]).await?;
             let source = if job.source_kind == Source::Post {
                 self.first::<Value>("SELECT 1 ok FROM square_posts p JOIN square_follows f ON f.followed_cid_number=p.cid_number WHERE p.post_id=?1 AND p.tx_hash=?2 AND p.cid_number=?3 AND p.post_state='published' AND f.follower_cid_number=?4 AND f.notify_enabled=1",&[string(job.post_id.as_deref().ok_or_else(bad)?),string(job.tx_hash.as_deref().ok_or_else(bad)?),string(&job.cid_number),string(&d.cid_number)]).await?.is_some()
             } else {
-                let s = subscription::at(&rpc, &m, &anchor, &d.cid_number, None).await?;
-                s.is_some_and(|s|!s.active(js_sys::Date::now() as u64,i.finalized_timestamp_millis)&&Some(s.paid_until)==job.lapse_at)&&self.first::<Value>("SELECT 1 ok FROM square_memberships m JOIN resource_totals t USING(cid_number) WHERE m.cid_number=?1 AND m.storage_cleanup_lapse_at=?2 AND m.storage_cleanup_notified_at=?3 AND t.resource_key='square_storage' AND t.byte_size>100000000000",&[string(&d.cid_number),JsValue::from_f64(job.lapse_at.ok_or_else(bad)? as f64),JsValue::from_f64(job.created_at as f64)]).await?.is_some()
+                deadline = deadline.min(citizenserve::user::ports::sync_deadline(
+                    row["membership_synced_at"].as_u64().ok_or_else(bad)?,
+                    js_sys::Date::now() as u64,
+                )?);
+                self.first::<Value>("SELECT 1 ok FROM square_memberships m JOIN resource_totals t USING(cid_number) WHERE m.cid_number=?1 AND m.paid_until=?2 AND (m.subscription_status NOT IN ('active','cancelled') OR m.paid_until<=?4) AND m.storage_cleanup_lapse_at=?2 AND m.storage_cleanup_notified_at=?3 AND t.resource_key='square_storage' AND t.byte_size>100000000000",&[string(&d.cid_number),JsValue::from_f64(job.lapse_at.ok_or_else(bad)? as f64),JsValue::from_f64(job.created_at as f64),JsValue::from_f64(js_sys::Date::now() as u64 as f64)]).await?.is_some()
             };
             AuthorizedEndpoint::from_facts(
                 &i,
@@ -358,6 +371,7 @@ impl Verifier for D1Jobs<'_> {
                 eligible.is_some(),
                 source,
                 js_sys::Date::now() as u64,
+                deadline,
             )
         })
     }

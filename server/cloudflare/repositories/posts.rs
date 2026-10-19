@@ -3,8 +3,9 @@ use super::{
     square::{D1Square, POST_SELECT},
     string, uploads,
 };
+use citizenserve::membership::gate::Permit;
 use citizenserve::{
-    chain::{post::Fact, subscription::Facts},
+    chain::post::Fact,
     shared::{Error, Result},
     square::{
         local_copy::Query, manifest::Manifest, post_service::Repository, posts::Post,
@@ -81,7 +82,7 @@ impl Repository for D1Posts {
         u: &Upload,
         fact: &Fact,
         m: &Manifest,
-        current: &Facts,
+        current: &Permit,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         SendFuture::new(async move {
             // confirm_post.sql同事务持久outbox；Queue失败由调度补派，不影响已确认发布。

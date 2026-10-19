@@ -301,6 +301,17 @@ pub async fn confirm<R: Rpc>(
         )
         .map_err(|_| scale::invalid())?,
     );
+    // 持久回执绑定原动作及入口/创作者，禁止跨用途复用同一交易。
+    verified.evidence.action_kind = format!(
+        "membership:{}:{action}",
+        if route == MembershipRoute::ConfirmPlans {
+            "plans".into()
+        } else {
+            target
+                .map(|c| format!("creator:{c}"))
+                .unwrap_or_else(|| "platform".into())
+        }
+    );
     batch.evidence = Some(verified.evidence);
     Ok(batch)
 }
@@ -417,4 +428,47 @@ pub async fn catch_up<R: Rpc, S: super::ports::Repository>(
         count += 1;
     }
     Ok(count)
+}
+
+/// 独立维护补齐旧授权价/到期版本；读取真实当前块，普通访问没有此入口。
+pub async fn refresh<R: Rpc>(
+    rpc: &R,
+    genesis: &str,
+    cid: &str,
+    account: &str,
+    revision: u64,
+    target: Option<&str>,
+    checked: u64,
+) -> Result<Batch> {
+    let anchor = finalized::head(rpc, genesis).await?;
+    let metadata = identity::metadata(rpc, &anchor).await?;
+    let owner = identity::by_cid(rpc, &metadata, &anchor, cid, genesis, checked)
+        .await?
+        .ok_or_else(scale::invalid)?;
+    owner.matches(cid, account, revision)?;
+    let chain_time = identity::storage(rpc, &metadata, &anchor, "Timestamp", "Now", None)
+        .await?
+        .as_ref()
+        .map(scale::integer)
+        .transpose()?
+        .ok_or_else(scale::invalid)?;
+    let value = row(rpc, &metadata, &anchor, genesis, cid, target, checked).await?;
+    Ok(Batch {
+        anchor,
+        checked_at: checked,
+        verification_deadline: checked.saturating_add(60000),
+        chain_time,
+        platform: if target.is_none() {
+            vec![value.clone()]
+        } else {
+            vec![]
+        },
+        creators: if target.is_some() {
+            vec![value]
+        } else {
+            vec![]
+        },
+        tiers: vec![],
+        evidence: None,
+    })
 }

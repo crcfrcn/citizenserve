@@ -23,11 +23,15 @@ CREATE TABLE attachments(attachment_id TEXT PRIMARY KEY,generation TEXT NOT NULL
 CREATE TRIGGER attachment_immutable BEFORE UPDATE OF fingerprint ON attachments WHEN NEW.fingerprint<>OLD.fingerprint BEGIN SELECT RAISE(ABORT,'chat_conflict'); END;
 CREATE INDEX attachment_expiry ON attachments(state,expires_at);
 CREATE INDEX attachment_cleanup ON attachments(state,cleanup_after,expires_at);
+-- 存量在原表按创建公民及状态计算，deleting仍占用，不增加影子账本。
+CREATE INDEX attachment_creator_state ON attachments(creator_user,state);
 CREATE TABLE attachment_recipients(attachment_id TEXT NOT NULL,user_id TEXT NOT NULL,acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(acknowledged IN(0,1)),PRIMARY KEY(attachment_id,user_id),FOREIGN KEY(attachment_id) REFERENCES attachments(attachment_id) ON DELETE CASCADE);
 CREATE TABLE attachment_chunks(attachment_id TEXT NOT NULL,chunk_index INTEGER NOT NULL,expected TEXT NOT NULL,written TEXT,PRIMARY KEY(attachment_id,chunk_index),FOREIGN KEY(attachment_id) REFERENCES attachments(attachment_id) ON DELETE CASCADE);
 -- 每次尝试使用全新对象键，writing未知结果不能按超时视为完成或删除定位。
 CREATE TABLE attachment_uploads(attempt_id TEXT PRIMARY KEY,attachment_id TEXT NOT NULL,generation TEXT NOT NULL,object_key TEXT NOT NULL UNIQUE,upload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('reserved','writing','written','deleted')),object_version TEXT,cleanup_after INTEGER NOT NULL DEFAULT 0,FOREIGN KEY(attachment_id) REFERENCES attachments(attachment_id) ON DELETE CASCADE);
 CREATE INDEX attachment_upload_generation ON attachment_uploads(attachment_id,generation,state);
+-- 只建普通索引，历史未知尝试保留；独占由原事务条件写实现。
+CREATE INDEX attachment_upload_chunk ON attachment_uploads(attachment_id,generation,json_extract(upload,'$.chunk.chunk_index'),state);
 CREATE TABLE attachment_receipts(attachment_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,creator_user TEXT NOT NULL,creator_device TEXT NOT NULL,recipients TEXT NOT NULL,acknowledged TEXT NOT NULL,completed INTEGER NOT NULL,aborted INTEGER NOT NULL,expires_at INTEGER NOT NULL);
 CREATE INDEX attachment_receipt_expiry ON attachment_receipts(expires_at);
 CREATE TABLE maintenance(slot INTEGER PRIMARY KEY,state TEXT NOT NULL CHECK(state IN('pending','leased','completed','failed')),lease_id TEXT,lease_until INTEGER NOT NULL DEFAULT 0);

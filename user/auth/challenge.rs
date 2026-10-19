@@ -40,11 +40,22 @@ pub fn target(request: &ChallengeRequest) -> Result<()> {
             if request.method == "POST"
                 && request.request_target == UserRoute::Sessions.external() =>
         {
+            if request.body_sha256
+                != format!(
+                    "0x{}",
+                    crypto::sha256_hex(&super::session::canonical_body(&request.account_id)?)
+                )
+            {
+                return Err(Error::new(400, "invalid_mls_target"));
+            }
             Ok(())
         }
         Purpose::Request => {
-            crate::server::gate::request::protected_target(&request.method, &request.request_target)
-                .map_err(|_| Error::new(400, "invalid_mls_target"))?;
+            crate::server::gate::request::protected_target(
+                &request.method,
+                &request.request_target,
+            )
+            .map_err(|_| Error::new(400, "invalid_mls_target"))?;
             if matches!(request.method.as_str(), "GET" | "DELETE")
                 && request.body_sha256 != format!("0x{}", crypto::sha256_hex(b""))
             {
@@ -63,7 +74,14 @@ pub fn issue(
     session_hash: Option<String>,
     now: u64,
 ) -> Result<Challenge> {
-    identity.require_current(now)?;
+    if request.purpose == Purpose::Registration {
+        identity.require_current(now)?;
+    }
+    identity.matches(
+        &identity.cid_number,
+        &identity.account_id,
+        identity.binding_revision,
+    )?;
     target(request)?;
     if request.account_id != identity.account_id {
         return Err(Error::new(401, "cid_binding_changed"));
@@ -92,10 +110,29 @@ pub fn issue(
         created_at: now,
     })
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Consumption<'a> {
     pub proof: &'a Proof,
     pub purpose: Purpose,
     pub session_token_hash: Option<&'a str>,
     pub now: u64,
+}
+
+impl serde::Serialize for Consumption<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Consumption", 5)?;
+        s.serialize_field("proof", self.proof)?;
+        s.serialize_field("purpose", &self.purpose)?;
+        s.serialize_field("session_token_hash", &self.session_token_hash)?;
+        s.serialize_field("now", &self.now)?;
+        s.serialize_field(
+            "sync_health_millis",
+            &crate::server::gate::policy::SYNC_HEALTH_MILLIS,
+        )?;
+        s.end()
+    }
 }

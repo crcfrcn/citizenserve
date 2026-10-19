@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 公民服务发布独立消费成功自动化资产，执行既有Worker上传与部署回读；不创建Release或重建云资源。
 import {createHash} from 'node:crypto';
+import {automationDisplayName} from './build.mjs';
 import {gunzipSync} from 'node:zlib';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';
@@ -128,8 +129,9 @@ async function inspectCandidate({run,release,readTag,readAsset,includeContents=f
  if(run?.path!==workflow||run.repository?.full_name!==repository||run.head_branch!=='main'
   ||run.event!=='workflow_dispatch'||run.status!=='completed'||run.conclusion!=='success'
   ||!positive(run.id)||!positive(run.run_attempt)||!/^[a-f0-9]{40}$/u.test(run.head_sha||''))fail('成功自动化身份无效');
- const match=/^citizenserve-cloudflare-v(\d+\.\d+\.\d+)-r([1-9]\d*)-a([1-9]\d*)$/u.exec(release?.tag_name||'');
- if(!match||Number(match[2])!==run.id||Number(match[3])!==run.run_attempt||!positive(release.id)
+ const match=/^公民服务端·Cloudflare·v(\d+\.\d+\.\d+)$/u.exec(release?.tag_name||'');
+ let automationProof;try{automationProof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(release?.body||'')?.[1]||'null');}catch{fail('正式版本证明无效');}
+ if(!match||automationProof?.run_id!==run.id||automationProof?.run_attempt!==run.run_attempt||!positive(release.id)
   ||release.draft||release.prerelease||release.target_commitish!==run.head_sha||!Array.isArray(release.assets)
   ||release.assets.length!==assets.length)fail('正式Release身份无效');
  const tag=await readTag(release.tag_name);
@@ -169,7 +171,7 @@ async function selectedPublication(request,includeContents){
  if(!success.length)fail('缺少成功自动化');
  success.sort((a,b)=>b.id-a.id);if(success.length>1&&success[0].id===success[1].id)fail('最新成功自动化不唯一：存在重复成功');
  const run=success[0],suffix='-r'+run.id+'-a'+run.run_attempt;
- const release=releases.filter(value=>value?.tag_name?.startsWith('citizenserve-cloudflare-v')&&value.tag_name.endsWith(suffix));
+ const release=releases.filter(value=>{try{const proof=JSON.parse(/^<!-- automation:(\{[^\n]*\}) -->$/m.exec(value?.body||'')?.[1]||'null');return value?.tag_name===automationDisplayName('cloudflare',proof?.version||'')&&proof?.run_id===run.id&&proof?.run_attempt===run.run_attempt;}catch{return false;}});
  if(release.length!==1)fail('成功自动化缺少唯一Release');
  return inspectCandidate({run,release:release[0],readTag:tag=>request('git/ref/tags/'+encodeURIComponent(tag)),readAsset:async asset=>(await request(asset.url,{raw:true}))?.body,includeContents});
 }
@@ -265,7 +267,7 @@ export async function deployCloudflare(payload,credentials,{signal,invoke=runToo
  const keys=['schema','product_id','platform','run_id','release_tag','source_sha','config_sha256','work','node_path'];
  if(payload&&Object.hasOwn(payload,'archive_sha256'))keys.push('archive_sha256');exactKeys(payload,keys,'Worker执行身份');
  if(payload.schema!==1||payload.product_id!=='citizenserve'||payload.platform!=='cloudflare'||!/^[1-9][0-9]{8}$/u.test(payload.run_id||'')
-  ||!/^citizenserve-cloudflare-v\d+\.\d+\.\d+-r[1-9][0-9]*-a[1-9][0-9]*$/u.test(payload.release_tag||'')
+  ||!/^公民服务端·Cloudflare·v\d+\.\d+\.\d+$/u.test(payload.release_tag||'')
   ||!/^[a-f0-9]{40}$/u.test(payload.source_sha||'')||!sha(payload.config_sha256)
   ||Object.hasOwn(payload,'archive_sha256')&&!sha(payload.archive_sha256))fail('Worker执行身份无效');
  const {work,node_path:node}=payload,base=fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url));
@@ -370,7 +372,7 @@ if(testing){
   const archive=gzipSync(Buffer.concat(blocks)),head='a'.repeat(40),run={id:42,run_attempt:2,path:workflow,repository:{full_name:repository},head_branch:'main',event:'workflow_dispatch',status:'completed',conclusion:'success',head_sha:head};
   const manifest={schema:1,product_id:'citizenserve',platform:'cloudflare',software_version:'1.2.3',source_sha:head,producer_run_id:42,producer_run_attempt:2,assets:Object.entries(files).map(([path,bytes])=>({path,bytes:bytes.length,sha256:hash(bytes)}))};
   const metadata=Buffer.from(JSON.stringify(manifest)),sums=Buffer.from(hash(archive)+'  '+assets[0]+'\n'+hash(metadata)+'  '+assets[1]+'\n'),body=new Map([[assets[0],archive],[assets[1],metadata],[assets[2],sums]]);
-  const release={id:7,tag_name:'citizenserve-cloudflare-v1.2.3-r42-a2',draft:false,prerelease:false,target_commitish:head,assets:assets.map((name,index)=>({id:index+1,name,state:'uploaded',size:body.get(name).length,digest:'sha256:'+hash(body.get(name)),url:`https://api.github.com/repos/${repository}/releases/assets/${index+1}`}))};
+  const release={id:7,tag_name:'公民服务端·Cloudflare·v1.2.3',body:'<!-- automation:'+JSON.stringify({version:'1.2.3',run_id:42,run_attempt:2})+' -->',draft:false,prerelease:false,target_commitish:head,assets:assets.map((name,index)=>({id:index+1,name,state:'uploaded',size:body.get(name).length,digest:'sha256:'+hash(body.get(name)),url:`https://api.github.com/repos/${repository}/releases/assets/${index+1}`}))};
   return {run,release,body,readTag:async()=>({ref:'refs/tags/'+release.tag_name,object:{type:'commit',sha:head}}),readAsset:async asset=>Readable.from([body.get(asset.name)])};
  }
  test('成功Worker自动化的三件正式资产及全部包内容独立验真',async()=>{const f=fixture(),value=await inspectCandidate(f);assert.equal(value.run_id,42);assert.equal(value.run_attempt,2);assert.equal(value.assets.length,3);});

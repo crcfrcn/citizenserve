@@ -5,7 +5,7 @@ use super::{
 use crate::{
     server::gate,
     shared::{crypto, ids, Error, Result},
-    user::{identity::Identity, ports::AuthRepository, registration::protocol::Config},
+    user::{ports::AuthRepository, registration::protocol::Config},
 };
 use serde::{Deserialize, Serialize};
 pub const TTL: u64 = 86_400_000;
@@ -14,6 +14,12 @@ pub const MAX_SESSIONS: u64 = 8;
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub account_id: String,
+}
+/// Session挑战只使用当前App已有的单字段紧凑正文；验签仍针对实际原始字节。
+pub(super) fn canonical_body(account: &str) -> Result<Vec<u8>> {
+    ids::account(account)?;
+    serde_json::to_vec(&serde_json::json!({"account_id":account}))
+        .map_err(|_| Error::new(400, "invalid_mls_target"))
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -48,7 +54,7 @@ pub fn hash(token: &str) -> Result<String> {
 pub async fn create<A: AuthRepository>(
     auth: &A,
     config: &Config,
-    identity: &Identity,
+    context: &crate::user::ports::AuthContext,
     input: &Request,
     proof: &Proof,
     body: &[u8],
@@ -56,26 +62,20 @@ pub async fn create<A: AuthRepository>(
     random: [u8; 16],
     now: u64,
 ) -> Result<Response> {
-    if input.account_id != identity.account_id || proof.account_id != input.account_id {
+    let identity = &context.identity;
+    gate::identity::service_device_authority(context, config, now)?;
+    let device = context
+        .device
+        .as_ref()
+        .ok_or(Error::new(401, "device_not_registered"))?;
+    if proof.device_id != device.device_id
+        || proof.public_key != device.public_key
+        || input.account_id != identity.account_id
+        || proof.account_id != input.account_id
+    {
         return Err(Error::new(401, "invalid_mls_proof"));
     }
     proof.verify_request(identity, &config.service_origin, "POST", target, body, now)?;
-    let admission = auth
-        .admission(&identity.cid_number)
-        .await?
-        .ok_or(Error::new(403, "registration_required"))?;
-    let device = auth
-        .device(&identity.cid_number, &proof.device_id)
-        .await?
-        .ok_or(Error::new(401, "device_not_registered"))?;
-    gate::identity::device_authority(
-        identity,
-        &admission,
-        &device,
-        config,
-        &proof.public_key,
-        now,
-    )?;
     if !auth
         .consume(&Consumption {
             proof,

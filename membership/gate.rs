@@ -4,7 +4,7 @@ use super::{
     Level,
 };
 use crate::{
-    chain::subscription::{Facts, Plan},
+    membership::Record,
     server::gate::identity::Authority,
     shared::{Error, Result},
     user::profile_service::Authorization,
@@ -23,6 +23,7 @@ pub struct Permit {
 #[derive(Clone, Debug)]
 struct Member {
     level: Level,
+    record: Record,
     checked: u64,
     deadline: u64,
     paid_until: u64,
@@ -33,7 +34,7 @@ struct Member {
 pub fn authorize(
     authority: &Authority,
     operation: Operation,
-    current: Option<&Facts>,
+    current: Option<&Record>,
     now: u64,
 ) -> Result<Permit> {
     authority.require_current(now)?;
@@ -42,41 +43,27 @@ pub fn authorize(
         .session_deadline()
         .min(authority.recheck_deadline());
     let member = if operation.requirement(&i.cid_number) == Requirement::Member {
-        let current = current.ok_or(Error::new(503, "membership_verification_unavailable"))?;
-        if current.anchor.hash != i.finalized_block_hash
-            || current.anchor.number != i.finalized_block_number
-            || current.chain_time != i.finalized_timestamp_millis
-        {
-            return Err(Error::new(
-                409,
-                if operation == Operation::Attachment {
-                    "chat_authorization_anchor_changed"
-                } else {
-                    "membership_identity_anchor_changed"
-                },
-            ));
+        let current = current.ok_or_else(|| operation.denial())?;
+        let membership_deadline = authority.membership_deadline(now)?;
+        if current.cid_number != i.cid_number {
+            return Err(Error::new(403, "membership_scope_mismatch"));
         }
-        if now < current.checked_at() || now >= current.deadline() {
-            return Err(Error::new(503, "membership_verification_expired"));
-        }
-        let state = current.require(now).map_err(|e| {
+        let level = current.level(now).map_err(|e| {
             if e.code == "membership_required" {
                 operation.denial()
             } else {
                 e
             }
         })?;
-        let Plan::Platform(level) = state.plan else {
-            return Err(operation.denial());
-        };
-        deadline = deadline.min(current.deadline()).min(state.paid_until);
+        deadline = deadline.min(membership_deadline).min(current.paid_until);
         Some(Member {
             level,
-            checked: current.checked_at(),
-            deadline: current.deadline(),
-            paid_until: state.paid_until,
-            period_start: state.last_charged_at,
-            chain_time: current.chain_time,
+            record: current.clone(),
+            checked: now,
+            deadline,
+            paid_until: current.paid_until,
+            period_start: current.last_charged_at,
+            chain_time: i.finalized_timestamp_millis,
         })
     } else {
         None
@@ -142,6 +129,7 @@ impl Permit {
             .ok_or(Error::new(403, "membership_required"))?;
         Ok(
             serde_json::json!({"membership_checked":m.checked,"membership_deadline":self.deadline.min(m.deadline),
+            "membership_level":m.level,"membership_status":m.record.subscription_status,"membership_block":m.record.finalized_block_number,
             "paid_until":m.paid_until,"period_start":m.period_start,"chain_time":m.chain_time,
             "limits":super::limits::plan(m.level),"storage_bytes":super::limits::limits(m.level).storage_bytes}),
         )

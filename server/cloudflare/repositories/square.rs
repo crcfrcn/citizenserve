@@ -161,12 +161,20 @@ impl Repository for D1Square {
             self.indexed(&format!("{POST_SELECT} AND p.cid_number=?2 AND (?3='all' OR p.post_category=?3) AND (?4='all' OR p.post_type=?4) AND (?5 IS NULL OR p.created_at<?5) ORDER BY p.created_at DESC,p.post_id DESC LIMIT ?6"),&[JsValue::from_f64(auth.now() as f64),string(&q.cid_number),string(&q.category),string(&q.post_type),q.cursor.map(|n|JsValue::from_f64(n as f64)).unwrap_or(JsValue::NULL),JsValue::from_f64(limit as f64)]).await
         })
     }
-    fn charge(&self,auth:&Authorization,_day:&str,count:u32,permit:&citizenserve::membership::gate::Permit)->impl std::future::Future<Output=Result<u32>>+Send {
+    fn charge(
+        &self,
+        auth: &Authorization,
+        _day: &str,
+        count: u32,
+        permit: &citizenserve::membership::gate::Permit,
+    ) -> impl std::future::Future<Output = Result<u32>> + Send {
         SendFuture::new(async move {
-            if count>50 {return Err(fail());}
-            let id=citizenserve::shared::crypto::hex(&crate::runtime::random::<16>()?);
-            super::membership::meter(&self.db,auth,permit,"browse",count as u64,"square-list",&id).await?;
-            self.browse_count(auth.cid(),&citizenserve::square::feed::utc_day(auth.now())).await
+            if count > 50 {
+                return Err(fail());
+            }
+            super::membership::record_read(&self.db, auth, permit, "browse", count as u64).await?;
+            self.browse_count(auth.cid(), &citizenserve::square::feed::utc_day(auth.now()))
+                .await
         })
     }
     fn follows(

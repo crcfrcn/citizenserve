@@ -99,7 +99,9 @@ pub async fn handle(
             let r: topup::intent::Request = request::parse_json(&bytes, 16384)?;
             citizenserve::shared::ids::account(&r.account_id)?;
             account_limit(&repo, &r.account_id).await?;
-            let chain = super::chain::Chain::configured(env)?;
+            // 支付意图尚未证明账户持有，必须走公共只读预算；受保护结算仍用Topup。
+            let chain =
+                super::chain::Chain::configured(env, super::chain::Purpose::TopupIntent).await?;
             let a = finalized::head(&chain, &c.chain_genesis_hash).await?;
             let m = identity::metadata(&chain, &a).await?;
             let cid = topup::intent::target_cid(&chain, &m, &a, &r.account_id).await?;
@@ -115,7 +117,11 @@ pub async fn handle(
         }
         TopupRoute::Confirm => {
             let input: topup::orders::Confirm = request::parse_json(&bytes, 16384)?;
-            let intent = citizenserve::server::gate::open::payment(scope, &input.payment_intent, key.as_bytes())?;
+            let intent = citizenserve::server::gate::open::payment(
+                scope,
+                &input.payment_intent,
+                key.as_bytes(),
+            )?;
             account_limit(&repo, &intent.account_id).await?;
             topup::orders::confirm(
                 &repo,
@@ -129,7 +135,8 @@ pub async fn handle(
             .await?
         }
         TopupRoute::Status => {
-            topup::orders::status(&repo, key.as_bytes(), request::parse_json(&bytes, 16384)?).await?
+            topup::orders::status(&repo, key.as_bytes(), request::parse_json(&bytes, 16384)?)
+                .await?
         }
         TopupRoute::Pending | TopupRoute::History => {
             let q = request::query(url.query())?;
@@ -179,7 +186,7 @@ pub async fn handle(
             topup::settlement::settled(
                 &repo,
                 &Base::configured(env)?,
-                &super::chain::Chain::configured(env)?,
+                &super::chain::Chain::configured(env, super::chain::Purpose::Topup).await?,
                 &Now,
                 &c,
                 topup::routes::path_order(url.path())?,

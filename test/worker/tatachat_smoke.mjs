@@ -2,13 +2,13 @@
 import test,{before,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,verify} from 'node:crypto';
-import {startWorker,stopWorker,sql,first,fetch,proof,fixture,registration,token,tokenHash,device,seen,setMembership,setUnknownChain} from './worker_smoke.mjs';
+import {startWorker,stopWorker,sql,first,fetch,proof,fixture,registration,token,tokenHash,device,seen,chainCalls,setMembership,setUnknownChain} from './worker_smoke.mjs';
 const keys=generateKeyPairSync('ed25519');
 const kid='local-test-1';
 const path='/api/tatachat/access';
 before(async()=>{
  await startWorker({TATACHAT_AUTH_KEY:keys.privateKey.export({format:'pem',type:'pkcs8'}),TATACHAT_AUTH_KID:kid});
- setMembership();
+ await setMembership();
 });
 after(()=>stopWorker());
 async function access(body='{}',extra={}){
@@ -49,10 +49,13 @@ test('device reactivation changes opaque revision; revoked device cannot get acc
  r=await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,401,await r.text());
  await sql('UPDATE mls_devices SET active=1 WHERE device_id=?',device);
 });
-test('expired membership keeps basic chat while unknown identity facts reject credentials',async()=>{
- setMembership(0,0,Date.now()-1000);let r=await access();assert.equal(r.status,200,await r.clone().text());assert.deepEqual(claims((await r.json()).access_token).attachments,{mode:"disabled"});setMembership();
- const p=await proof('POST',path,'{}');setUnknownChain(true);
- r=await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,503,await r.text());setUnknownChain(false);
+test('会员到期仍可聊天、链不可达不查链、服务端身份健康过期拒绝',async()=>{
+ await setMembership(0,0,Date.now()-1000);let r=await access();assert.equal(r.status,200,await r.clone().text());assert.deepEqual(claims((await r.json()).access_token).attachments,{mode:"disabled"});await setMembership();
+ const before=chainCalls(),p=await proof('POST',path,'{}');setUnknownChain(true);
+ r=await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p});assert.equal(r.status,200,await r.text());assert.equal(chainCalls(),before);setUnknownChain(false);
+ await sql("UPDATE scheduler_leases SET updated_at=? WHERE lease_key=?",Date.now()-600000,'sync:identity:'+fixture.genesis);
+ assert.equal((await fetch(path,'POST','{}',{authorization:'Bearer '+token,'x-mls-proof':p})).status,503);
+ await sql("UPDATE scheduler_leases SET updated_at=? WHERE lease_key=?",Date.now(),'sync:identity:'+fixture.genesis);
 });
 test('scope or user parameters are rejected and realtime requires an actual upgrade',async()=>{
  for(const body of ['[]','null','{"cid_number":"forged"}','{"device_id":"forged"}']){

@@ -7,8 +7,7 @@ use crate::{
 pub struct Permissions {
     max_attachment_bytes: u64,
     deadline: u64,
-    cid: String,
-    anchor_hash: String,
+    checked: u64,
 }
 impl Permissions {
     pub fn from_permit(
@@ -16,19 +15,22 @@ impl Permissions {
         identity: &Identity,
         now: u64,
     ) -> Result<Self> {
-        identity.require_current(now)?;
+        identity.matches(
+            &identity.cid_number,
+            &identity.account_id,
+            identity.binding_revision,
+        )?;
         if permit.cid() != identity.cid_number {
             return Err(Error::new(403, "membership_scope_mismatch"));
         }
         Ok(Self {
             max_attachment_bytes: permit.attachment_limit(now)?,
             deadline: permit.deadline(),
-            cid: identity.cid_number.clone(),
-            anchor_hash: identity.finalized_block_hash.clone(),
+            checked: now,
         })
     }
     pub fn require_current(&self, now: u64) -> Result<()> {
-        if now >= self.deadline {
+        if now < self.checked || now >= self.deadline {
             return Err(Error::new(403, "attachment_membership_required"));
         }
         Ok(())
@@ -38,11 +40,5 @@ impl Permissions {
     }
     pub fn deadline(&self) -> u64 {
         self.deadline
-    }
-    pub fn cid(&self) -> &str {
-        &self.cid
-    }
-    pub fn anchor_hash(&self) -> &str {
-        &self.anchor_hash
     }
 }

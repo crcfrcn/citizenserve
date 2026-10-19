@@ -114,8 +114,16 @@ pub async fn issue<R: Repository>(
     purpose: Purpose,
     entropy: [u8; 32],
     now: u64,
+    service_deadline: u64,
 ) -> Result<Challenge> {
-    identity.require_current(now)?;
+    if now >= service_deadline {
+        return Err(Error::new(503, "authentication_unavailable"));
+    }
+    identity.matches(
+        &identity.cid_number,
+        &identity.account_id,
+        identity.binding_revision,
+    )?;
     config.validate()?;
     if identity.chain_scope != config.chain_scope {
         return Err(Error::new(401, "cid_binding_changed"));
@@ -147,8 +155,16 @@ pub async fn verify<R: Repository>(
     input: &Signed,
     purpose: Purpose,
     now: u64,
+    service_deadline: u64,
 ) -> Result<Challenge> {
-    identity.require_current(now)?;
+    if now >= service_deadline {
+        return Err(Error::new(503, "authentication_unavailable"));
+    }
+    identity.matches(
+        &identity.cid_number,
+        &identity.account_id,
+        identity.binding_revision,
+    )?;
     config.validate()?;
     if !ids::hex(&input.challenge_id, 32, false) {
         return Err(Error::new(401, "account_deletion_challenge_invalid"));
@@ -295,6 +311,7 @@ mod tests {
             Purpose::Delete,
             [1; 32],
             now,
+            now + 60000,
         ))
         .unwrap();
         let signed = Signed {
@@ -317,7 +334,8 @@ mod tests {
             &identity,
             &signed,
             Purpose::Delete,
-            now
+            now,
+            now + 60000
         ))
         .is_ok());
         assert!(run(verify(
@@ -326,7 +344,8 @@ mod tests {
             &identity,
             &signed,
             Purpose::Status,
-            now
+            now,
+            now + 60000
         ))
         .is_err());
         repo.0.lock().unwrap().as_mut().unwrap().signing_payload_hex = "0x00".into();
@@ -336,7 +355,8 @@ mod tests {
             &identity,
             &signed,
             Purpose::Delete,
-            now
+            now,
+            now + 60000
         ))
         .is_err());
         *repo.0.lock().unwrap() = None;
@@ -346,7 +366,8 @@ mod tests {
             &identity,
             &signed,
             Purpose::Delete,
-            now
+            now,
+            now + 60000
         ))
         .is_err());
     }

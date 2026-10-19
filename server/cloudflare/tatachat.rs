@@ -7,10 +7,7 @@ use citizenserve::{
     },
     shared::{Error, Result},
     user::{
-        auth::session,
-        chat_access::Subject,
-        ports::{AuthRepository, IdentityRepository},
-        registration::protocol::Config,
+        auth::session, chat_access::Subject, ports::AuthRepository, registration::protocol::Config,
     },
 };
 use serde_json::{json, Value};
@@ -47,16 +44,67 @@ pub(crate) fn business(error: citizenserve::tatachat::Error) -> Error {
 #[derive(Clone)]
 pub(crate) struct D1Store {
     db: std::rc::Rc<worker::D1Database>,
+    attachment_resources: Option<citizenserve::membership::limits::ResourceLimits>,
+    env: Env,
+    cleanup: Option<(citizenserve::server::maintenance::Budget, u64)>,
+    cleanup_commit: bool,
 }
 impl D1Store {
     const CLOCK:&'static str="(CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER))";
     pub(crate) fn new(env: &Env) -> citizenserve::tatachat::Result<Self> {
         Ok(Self {
+            attachment_resources: None,
+            env: env.clone(),
+            cleanup: None,
+            cleanup_commit: false,
             db: std::rc::Rc::new(
                 env.d1("TATACHAT_DB")
                     .map_err(|_| citizenserve::tatachat::Error::StorageUnavailable)?,
             ),
         })
+    }
+    /// 此值只是资源上限，不授予身份/会员权限；附件仍须通过原Access和主库事务围栏。
+    pub(crate) fn with_attachment_resources(
+        mut self,
+        limits: Option<citizenserve::membership::limits::ResourceLimits>,
+    ) -> Self {
+        self.attachment_resources = limits;
+        self
+    }
+    /// 维护和注销共用原Budget，克隆不能重置额度；期限只限制本轮新I/O。
+    pub(crate) fn with_cleanup(
+        mut self,
+        budget: citizenserve::server::maintenance::Budget,
+        deadline: u64,
+    ) -> Self {
+        self.cleanup = Some((budget, deadline));
+        self
+    }
+    pub(crate) fn for_cleanup_commit(&self) -> Self {
+        let mut store = self.clone();
+        store.cleanup_commit = true;
+        store
+    }
+    pub(crate) fn cleanup_remaining(&self) -> u32 {
+        match &self.cleanup {
+            Some((budget, deadline)) if config::now() < *deadline => budget.remaining(),
+            Some(_) => 0,
+            None => u32::MAX,
+        }
+    }
+    pub(crate) fn spend_cleanup(&self) -> citizenserve::tatachat::Result<()> {
+        if let Some((budget, deadline)) = &self.cleanup {
+            if config::now() >= *deadline {
+                return Err(citizenserve::tatachat::Error::ResourceLimit);
+            }
+            let result = if self.cleanup_commit {
+                budget.commit(1)
+            } else {
+                budget.business(1)
+            };
+            result.map_err(|_| citizenserve::tatachat::Error::ResourceLimit)?;
+        }
+        Ok(())
     }
     fn values(args: Vec<Value>) -> citizenserve::tatachat::Result<Vec<wasm_bindgen::JsValue>> {
         use wasm_bindgen::JsValue;
@@ -79,6 +127,12 @@ impl D1Store {
     fn storage(error: worker::Error) -> citizenserve::tatachat::Error {
         use citizenserve::tatachat::Error as E;
         match error {
+            worker::Error::D1(e)
+                if e.cause()
+                    .contains("NOT NULL constraint failed: attachment_chunks.attachment_id") =>
+            {
+                E::ResourceLimit
+            }
             worker::Error::D1(e)
                 if e.cause().contains("constraint failed")
                     || e.cause().contains("chat_conflict") =>
@@ -108,10 +162,11 @@ impl D1Store {
             .last()
             .ok_or(citizenserve::tatachat::Error::StorageUnavailable)
     }
-    pub(crate) async fn transaction(
+    /// 所有调用共用一次验证/执行，维护从真实meta取删行数，不额外SELECT或返回千行占位。
+    async fn batch_results(
         &self,
         commands: Vec<(&str, Vec<Value>)>,
-    ) -> citizenserve::tatachat::Result<Vec<Vec<Value>>> {
+    ) -> citizenserve::tatachat::Result<Vec<worker::D1Result>> {
         if commands.is_empty() || commands.len() > 40 {
             return Err(citizenserve::tatachat::Error::ResourceLimit);
         }
@@ -133,16 +188,36 @@ impl D1Store {
                     .map_err(Self::storage)?,
             );
         }
+        self.spend_cleanup()?;
         let results = self.db.batch(statements).await.map_err(Self::storage)?;
-        results
+        if results.iter().any(|r| !r.success()) {
+            return Err(citizenserve::tatachat::Error::StorageUnavailable);
+        }
+        Ok(results.into_iter().skip(1).collect())
+    }
+    pub(crate) async fn transaction(
+        &self,
+        commands: Vec<(&str, Vec<Value>)>,
+    ) -> citizenserve::tatachat::Result<Vec<Vec<Value>>> {
+        self.batch_results(commands)
+            .await?
             .into_iter()
-            .skip(1)
+            .map(|r| r.results().map_err(Self::storage))
+            .collect()
+    }
+    pub(crate) async fn changes(
+        &self,
+        commands: Vec<(&str, Vec<Value>)>,
+    ) -> citizenserve::tatachat::Result<Vec<u64>> {
+        self.batch_results(commands)
+            .await?
+            .into_iter()
             .map(|r| {
-                if r.success() {
-                    r.results().map_err(Self::storage)
-                } else {
-                    Err(citizenserve::tatachat::Error::StorageUnavailable)
-                }
+                r.meta()
+                    .map_err(Self::storage)?
+                    .and_then(|m| m.changes)
+                    .map(|v| v as u64)
+                    .ok_or(citizenserve::tatachat::Error::StorageUnavailable)
             })
             .collect()
     }
@@ -169,74 +244,62 @@ impl D1Store {
     }
 }
 
-/// 聊天每次读取同一canonical块的真实CID；不占用投影刷新租约，避免多设备互相阻塞。
-/// 调用者仍须执行原D1单调投影、准入、设备及会话复核后才生成Authority。
-pub(crate) async fn fresh_identity<R:citizenserve::chain::ports::Rpc>(rpc:&R,cid:&str,genesis:&str,now:u64)->Result<citizenserve::user::identity::Identity> {
-    let anchor=citizenserve::chain::finalized::head(rpc,genesis).await?;
-    let metadata=citizenserve::chain::identity::metadata(rpc,&anchor).await?;
-    citizenserve::chain::identity::by_cid(rpc,&metadata,&anchor,cid,genesis,now).await?
-        .ok_or(Error::new(403,"cid_not_active"))
-}
-
 /// 同进程可信状态源。没有对应公网查询入口；通用模块仍须比对原凭证的主体和修订。
 pub struct Host {
     env: Env,
     config: Config,
+    cached: std::cell::RefCell<Option<(String, u64, citizenserve::user::ports::AuthContext)>>,
 }
 impl Host {
     pub fn new(env: Env, config: Config) -> Result<Self> {
         config.validate()?;
-        Ok(Self { env, config })
+        Ok(Self {
+            env,
+            config,
+            cached: std::cell::RefCell::new(None),
+        })
     }
     async fn facts(&self, session_hash: &str) -> Result<(Subject, Authority, u64)> {
         if !citizenserve::shared::ids::hex(session_hash, 32, false) {
             return Err(Error::new(401, "invalid_session"));
         }
-        let unavailable = || Error::new(503, "chat_access_unavailable");
-        let auth = super::repositories::auth::D1Auth {
-            db: self.env.d1("DB").map_err(|_| unavailable())?,
-        };
-        let original = auth
-            .session(session_hash)
-            .await?
-            .ok_or(Error::new(401, "invalid_session"))?;
-        let start = js_sys::Date::now() as u64;
-        if original.created_at > start || original.expires_at <= start {
-            return Err(Error::new(401, "session_expired"));
-        }
-        let rpc = super::chain::Chain::configured(&self.env)?;
-        // 每次聊天宿主复核取得真实canonical CID，链故障不能由缓存掩盖。
-        let identity=fresh_identity(&rpc,&original.cid_number,&self.config.chain_scope,start).await?;
-        // 使用已有原子投影撤销规则；不推动全局扫描游标，也不重建真人准入。
-        let identities = super::repositories::identity::D1Identities {
-            db: self.env.d1("DB").map_err(|_| unavailable())?,
-        };
-        identities
-            .project(std::slice::from_ref(&identity), None, None)
-            .await?;
-        // 链读取期间可能注销/换绑/撤销，所以不能继续沿用RPC之前的D1对象。
-        let s = auth
-            .session(session_hash)
-            .await?
-            .ok_or(Error::new(401, "invalid_session"))?;
-        let d = auth
-            .device(&s.cid_number, &s.device_id)
-            .await?
-            .ok_or(Error::new(401, "device_not_registered"))?;
-        let a = auth
-            .admission(&s.cid_number)
-            .await?
-            .ok_or(Error::new(403, "registration_required"))?;
         let now = js_sys::Date::now() as u64;
-        if now < start {
-            return Err(Error::new(503, "chat_clock_changed"));
-        }
-        let authority = gate::identity::session_authority(&identity, &a, &d, &s, &self.config, now)?;
-        lifecycle::admit(&self.env, &s.cid_number, a.human_verified_at_millis)
-            .await
-            .map_err(business)?;
-        let subject = Subject::verified(&authority, &d, &s, &self.config, now)?;
-        citizenserve::membership::gate::authorize(&authority,citizenserve::membership::policy::Operation::Chat,None,now)?;
+        let cached = self.cached.borrow().clone();
+        let context = if let Some((hash, checked, c)) = cached.filter(|(h, t, _)| {
+            h == session_hash && now >= *t && now - *t < gate::policy::SERVICE_AUTH_MILLIS
+        }) {
+            let _ = (hash, checked);
+            c
+        } else {
+            let auth = super::repositories::auth::D1Auth {
+                db: self
+                    .env
+                    .d1("DB")
+                    .map_err(|_| Error::new(503, "chat_access_unavailable"))?,
+            };
+            let context = auth
+                .context(
+                    citizenserve::user::ports::ContextKey::Session(session_hash),
+                    &self.config,
+                )
+                .await?
+                .ok_or(Error::new(401, "invalid_session"))?;
+            *self.cached.borrow_mut() = Some((session_hash.into(), now, context.clone()));
+            context
+        };
+        // I/O后重取时钟；读取前的时间可能早于仓库loaded_at，不能据此误拒合法请求。
+        let now = js_sys::Date::now() as u64;
+        // 聊天宿主只消费同次服务端上下文，缺失或过期不构造Chain或安排补查。
+        let authority = gate::identity::service_authority(&context, &self.config, now)?;
+        let d = context
+            .device
+            .as_ref()
+            .ok_or(Error::new(401, "device_not_registered"))?;
+        let s = context
+            .session
+            .as_ref()
+            .ok_or(Error::new(401, "invalid_session"))?;
+        let subject = Subject::verified(&authority, d, s, &self.config, now)?;
         Ok((subject, authority, d.issued_at))
     }
     async fn require(
@@ -256,10 +319,20 @@ impl Host {
     }
     /// 当前事实生成目标唤醒许可，供通用聊天Host端口使用；不延长原WSS凭证。
     pub async fn current_session(&self, session_hash: &str) -> Result<tatachat::Authorization> {
-        let (subject, _authority, issued_at) = self.facts(session_hash).await?;
+        let (subject, _authority, _issued_at) = self.facts(session_hash).await?;
         let permission = tatachat::authorize(&subject, js_sys::Date::now() as u64)?;
-        self.require(&subject, &permission, issued_at).await?;
         Ok(permission)
+    }
+    fn attachment_resources(&self) -> Option<citizenserve::membership::limits::ResourceLimits> {
+        self.cached
+            .borrow()
+            .as_ref()?
+            .2
+            .membership
+            .as_ref()?
+            .level(js_sys::Date::now() as u64)
+            .ok()
+            .map(citizenserve::membership::limits::resources)
     }
 }
 fn snapshot(permission: &tatachat::Authorization) -> citizenserve::tatachat::auth::HostAccess {
@@ -281,6 +354,7 @@ fn snapshot(permission: &tatachat::Authorization) -> citizenserve::tatachat::aut
 fn host_error(error: Error) -> citizenserve::tatachat::Error {
     match error.status {
         401 | 403 => citizenserve::tatachat::Error::Forbidden,
+        413 | 429 => citizenserve::tatachat::Error::ResourceLimit,
         _ => citizenserve::tatachat::Error::StorageUnavailable,
     }
 }
@@ -288,6 +362,83 @@ fn host_error(error: Error) -> citizenserve::tatachat::Error {
 impl citizenserve::tatachat::auth::ports::Host for Host {
     fn now_millis(&self) -> u64 {
         js_sys::Date::now() as u64
+    }
+    async fn consume(
+        &self,
+        previous: &citizenserve::tatachat::auth::HostAccess,
+        cost: citizenserve::tatachat::auth::ports::ResourceCost,
+    ) -> citizenserve::tatachat::Result<()> {
+        use citizenserve::tatachat::auth::ports::ResourceCost;
+        let (subject, authority, _) = self
+            .facts(&previous.session_id_digest)
+            .await
+            .map_err(host_error)?;
+        let current = snapshot(
+            &tatachat::authorize(&subject, js_sys::Date::now() as u64).map_err(host_error)?,
+        );
+        if current.actor != previous.actor
+            || current.authorization_revision != previous.authorization_revision
+            || current.session_id_digest != previous.session_id_digest
+        {
+            return Err(citizenserve::tatachat::Error::Forbidden);
+        }
+        // HTTP/升级在原authorize处只计一次CID；持久连接中的命令在这里独立计频率。
+        if let ResourceCost::Command { read_only, .. } = cost {
+            crate::subject_rate(
+                &self.env,
+                if read_only { "RATE_READ" } else { "RATE_WRITE" },
+                subject.user_id(),
+            )
+            .await
+            .map_err(host_error)?;
+        }
+        let member = matches!(
+            cost,
+            ResourceCost::Command {
+                begin_attachment: true,
+                ..
+            } | ResourceCost::AttachmentUpload { .. }
+                | ResourceCost::AttachmentDownload { .. }
+                | ResourceCost::AttachmentRecovery
+        ) || matches!(cost, ResourceCost::Command { .. })
+            && matches!(
+                previous.attachments,
+                citizenserve::tatachat::auth::AttachmentPermission::Allowed { .. }
+            );
+        let permit = if member {
+            let context = self
+                .cached
+                .borrow()
+                .as_ref()
+                .map(|(_, _, c)| c.clone())
+                .ok_or(citizenserve::tatachat::Error::Forbidden)?;
+            Some(
+                citizenserve::membership::gate::authorize(
+                    &authority,
+                    citizenserve::membership::policy::Operation::Attachment,
+                    context.membership.as_ref(),
+                    js_sys::Date::now() as u64,
+                )
+                .map_err(host_error)?,
+            )
+        } else {
+            None
+        };
+        let db = self
+            .env
+            .d1("DB")
+            .map_err(|_| citizenserve::tatachat::Error::StorageUnavailable)?;
+        crate::repositories::membership::reserve_chat_resources(
+            &db,
+            &subject,
+            &authority,
+            &self.config,
+            previous.expires_at_millis,
+            permit.as_ref(),
+            cost,
+        )
+        .await
+        .map_err(host_error)
     }
     async fn recheck(
         &self,
@@ -318,18 +469,47 @@ impl citizenserve::tatachat::auth::ports::Host for Host {
         }
         Ok(current)
     }
-    async fn attachment_limit(&self,previous:&citizenserve::tatachat::auth::HostAccess)->citizenserve::tatachat::Result<citizenserve::tatachat::auth::AttachmentGrant> {
-        let (subject,authority,issued_at)=self.facts(&previous.session_id_digest).await.map_err(host_error)?;
-        if subject.user_id()!=previous.actor.user_id || subject.device_id()!=previous.actor.device_id {return Err(citizenserve::tatachat::Error::Forbidden);}
-        let rpc=super::chain::Chain::configured(&self.env).map_err(host_error)?;
-        let facts=citizenserve::chain::subscription::for_authority(&rpc,&authority,js_sys::Date::now() as u64).await.map_err(host_error)?;
-        let permit=citizenserve::membership::gate::authorize(&authority,citizenserve::membership::policy::Operation::Attachment,Some(&facts),js_sys::Date::now() as u64).map_err(host_error)?;
-        let permissions=Permissions::from_permit(&permit,subject.identity(),js_sys::Date::now() as u64).map_err(host_error)?;
-        let basic=tatachat::authorize(&subject,js_sys::Date::now() as u64).map_err(host_error)?;
-        self.require(&subject,&basic,issued_at).await.map_err(host_error)?;
-        if basic.revision()!=previous.authorization_revision {return Err(citizenserve::tatachat::Error::Forbidden);}
-        permissions.require_current(js_sys::Date::now() as u64).map_err(host_error)?;
-        Ok(citizenserve::tatachat::auth::AttachmentGrant{max_bytes:permissions.max_attachment_bytes(),deadline_millis:permissions.deadline()})
+    async fn attachment_limit(
+        &self,
+        previous: &citizenserve::tatachat::auth::HostAccess,
+    ) -> citizenserve::tatachat::Result<citizenserve::tatachat::auth::AttachmentGrant> {
+        let (subject, authority, _issued_at) = self
+            .facts(&previous.session_id_digest)
+            .await
+            .map_err(host_error)?;
+        if subject.user_id() != previous.actor.user_id
+            || subject.device_id() != previous.actor.device_id
+        {
+            return Err(citizenserve::tatachat::Error::Forbidden);
+        }
+        let context = self
+            .cached
+            .borrow()
+            .as_ref()
+            .map(|(_, _, c)| c.clone())
+            .ok_or(citizenserve::tatachat::Error::Forbidden)?;
+        let permit = citizenserve::membership::gate::authorize(
+            &authority,
+            citizenserve::membership::policy::Operation::Attachment,
+            context.membership.as_ref(),
+            js_sys::Date::now() as u64,
+        )
+        .map_err(host_error)?;
+        let permissions =
+            Permissions::from_permit(&permit, subject.identity(), js_sys::Date::now() as u64)
+                .map_err(host_error)?;
+        let basic =
+            tatachat::authorize(&subject, js_sys::Date::now() as u64).map_err(host_error)?;
+        if basic.revision() != previous.authorization_revision {
+            return Err(citizenserve::tatachat::Error::Forbidden);
+        }
+        permissions
+            .require_current(js_sys::Date::now() as u64)
+            .map_err(host_error)?;
+        Ok(citizenserve::tatachat::auth::AttachmentGrant {
+            max_bytes: permissions.max_attachment_bytes(),
+            deadline_millis: permissions.deadline(),
+        })
     }
     async fn authorize_wake(
         &self,
@@ -354,6 +534,7 @@ pub async fn access(
     env: &Env,
     config: &Config,
     authority: &Authority,
+    context: &citizenserve::user::ports::AuthContext,
     token: &str,
     body: &[u8],
 ) -> Result<Value> {
@@ -368,20 +549,32 @@ pub async fn access(
         .map_err(|_| missing())?
         .to_string();
     tatachat::key_id(&kid)?;
-    let auth = super::repositories::auth::D1Auth {
-        db: env.d1("DB").map_err(|_| missing())?,
-    };
-    let s = auth
-        .session(&session::hash(token)?)
-        .await?
+    let s = context
+        .session
+        .as_ref()
         .ok_or(Error::new(401, "invalid_session"))?;
-    let d = auth
-        .device(&s.cid_number, &s.device_id)
-        .await?
+    let d = context
+        .device
+        .as_ref()
         .ok_or(Error::new(401, "device_not_registered"))?;
+    if s.session_token_hash != session::hash(token)? {
+        return Err(Error::new(401, "invalid_session"));
+    }
+    let admission = context
+        .admission
+        .as_ref()
+        .ok_or(Error::new(403, "registration_required"))?;
+    lifecycle::admit(env, &s.cid_number, admission.human_verified_at_millis)
+        .await
+        .map_err(business)?;
     let now = js_sys::Date::now() as u64;
-    let subject = Subject::verified(authority, &d, &s, config, now)?;
-    citizenserve::membership::gate::authorize(authority,citizenserve::membership::policy::Operation::Chat,None,now)?;
+    let subject = Subject::verified(authority, d, s, config, now)?;
+    citizenserve::membership::gate::authorize(
+        authority,
+        citizenserve::membership::policy::Operation::Chat,
+        None,
+        now,
+    )?;
     let permission = tatachat::authorize(&subject, now)?;
     let unsigned = tatachat::unsigned(&permission, &kid, now)?;
     let signed = super::runtime::chat_signature(&pem, &unsigned).await?;

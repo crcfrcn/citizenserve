@@ -906,7 +906,7 @@ impl membership::ports::Repository for NoticeRepository {
     async fn overview(
         &self,
         _: &citizenserve::user::profile_service::Authorization,
-        _: &subscription::Current,
+        _: &membership::Record,
     ) -> citizenserve::shared::Result<membership::creator::Overview> {
         unreachable!()
     }
@@ -991,35 +991,260 @@ fn membership_response_only_exposes_current_inactive_overage_notice() {
         created_at: 999999,
         expires_at: 2000000,
     };
-    let authority =
-        gate::identity::session_authority(&i, &admission, &device, &session, &config, 1000000).unwrap();
+    let mut context = citizenserve::user::ports::AuthContext {
+        loaded_at: 1000000,
+        identity: i.clone(),
+        admission: Some(admission.clone()),
+        device: Some(device.clone()),
+        session: Some(session.clone()),
+        membership: None,
+        identity_synced_at: 1000000,
+        membership_synced_at: Some(1000000),
+    };
+    let authority = gate::identity::service_authority(&context, &config, 1000000).unwrap();
     let auth = Authorization::new(&authority, &config, &token, 1000000).unwrap();
+    // 概览真实消费统一会员许可；只让会员同步失效，身份/会话仍然有效。
+    let calls = rpc.calls.lock().unwrap().len();
+    let member = record(&current).unwrap();
+    let overview = membership::policy::Operation::CreatorOverview;
+    let permit =
+        membership::gate::authorize(&authority, overview.clone(), Some(&member), 1000000).unwrap();
+    assert_eq!(permit.deadline(), 1060000);
+    assert_eq!(
+        membership::gate::authorize(&authority, overview.clone(), None, 1000000)
+            .unwrap_err()
+            .code,
+        "membership_required"
+    );
+    for health in [None, Some(0), Some(400000), Some(1000001)] {
+        context.membership_synced_at = health;
+        let current_authority =
+            gate::identity::service_authority(&context, &config, 1000000).unwrap();
+        let error = membership::gate::authorize(
+            &current_authority,
+            overview.clone(),
+            Some(&member),
+            1000000,
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.status, error.code),
+            (503, "membership_verification_unavailable")
+        );
+        for base in [
+            membership::policy::Operation::Membership,
+            membership::policy::Operation::Chat,
+        ] {
+            membership::gate::authorize(&current_authority, base, None, 1000000).unwrap();
+        }
+    }
+    for paid_until in [999999, 1000000] {
+        let mut expired = member.clone();
+        expired.paid_until = paid_until;
+        assert_eq!(
+            membership::gate::authorize(&authority, overview.clone(), Some(&expired), 1000000)
+                .unwrap_err()
+                .code,
+            "membership_required"
+        );
+    }
+    assert_eq!(rpc.calls.lock().unwrap().len(), calls, "概览鉴权不得查链");
     let mut repo = NoticeRepository {
         notice: Some(membership::cleanup::Notice::new(2000000, 1000000).unwrap()),
         used: 100000000001,
     };
-    assert!(
-        run(membership::service::current(&repo, &auth, &current)).unwrap()
-            ["storage_cleanup_notice"]
-            .is_null()
-    );
+    assert!(run(membership::service::current(
+        &repo,
+        &auth,
+        record(&current).as_ref(),
+        current.prices,
+        &current.anchor.hash
+    ))
+    .unwrap()["storage_cleanup_notice"]
+        .is_null());
     current.state.as_mut().unwrap().status = Status::Terminated;
     assert_eq!(
-        run(membership::service::current(&repo, &auth, &current)).unwrap()
-            ["storage_cleanup_notice"]["lapse_at"],
+        run(membership::service::current(
+            &repo,
+            &auth,
+            record(&current).as_ref(),
+            current.prices,
+            &current.anchor.hash
+        ))
+        .unwrap()["storage_cleanup_notice"]["lapse_at"],
         2000000
     );
     repo.used = 100000000000;
-    assert!(
-        run(membership::service::current(&repo, &auth, &current)).unwrap()
-            ["storage_cleanup_notice"]
-            .is_null()
-    );
+    assert!(run(membership::service::current(
+        &repo,
+        &auth,
+        record(&current).as_ref(),
+        current.prices,
+        &current.anchor.hash
+    ))
+    .unwrap()["storage_cleanup_notice"]
+        .is_null());
     repo.used += 1;
     repo.notice.as_mut().unwrap().lapse_at = 1999999;
-    assert!(
-        run(membership::service::current(&repo, &auth, &current)).unwrap()
-            ["storage_cleanup_notice"]
-            .is_null()
+    assert!(run(membership::service::current(
+        &repo,
+        &auth,
+        record(&current).as_ref(),
+        current.prices,
+        &current.anchor.hash
+    ))
+    .unwrap()["storage_cleanup_notice"]
+        .is_null());
+}
+
+fn record(current: &subscription::Current) -> Option<membership::Record> {
+    current.state.as_ref().map(|state| {
+        let mut v = state.wire().unwrap();
+        v["cid_number"] = serde_json::json!(CID);
+        v["finalized_block_number"] = serde_json::json!(current.anchor.number);
+        v["finalized_block_hash"] = serde_json::json!(current.anchor.hash);
+        serde_json::from_value(v).unwrap()
+    })
+}
+#[test]
+fn resource_limits_preserve_single_file_rights_and_plan_shape() {
+    use citizenserve::membership::{limits, Level};
+    // 固定已批准风控参数，防止误改后测试只验证“自洽”而遗漏额度漂移。
+    for (level, expected) in [
+        (
+            Level::Freedom,
+            (
+                1,
+                8,
+                32 * 1024 * 1024,
+                32,
+                64 * 1024 * 1024,
+                128 * 1024 * 1024,
+                512,
+            ),
+        ),
+        (
+            Level::Democracy,
+            (
+                2,
+                16,
+                512 * 1024 * 1024,
+                128,
+                1024 * 1024 * 1024,
+                2 * 1024 * 1024 * 1024,
+                4096,
+            ),
+        ),
+        (
+            Level::Spark,
+            (
+                3,
+                32,
+                12 * 1024 * 1024 * 1024,
+                256,
+                12 * 1024 * 1024 * 1024,
+                24 * 1024 * 1024 * 1024,
+                65536,
+            ),
+        ),
+    ] {
+        let r = limits::resources(level);
+        assert_eq!(
+            (
+                r.pending_attachments,
+                r.attachment_count,
+                r.attachment_bytes,
+                r.attachment_begins_day,
+                r.upload_bytes_day,
+                r.delivery_bytes_day,
+                r.chunk_operations_day
+            ),
+            expected
+        );
+    }
+    for level in [Level::Freedom, Level::Democracy, Level::Spark] {
+        let plan = limits::plan(level);
+        let resource = limits::resources(level);
+        let wire =
+            citizenserve::tatachat::attachment::mls_attachment_wire_limit(plan.chat_file_max_bytes)
+                .unwrap();
+        assert!(wire <= resource.attachment_bytes);
+        assert!(wire <= resource.upload_bytes_day);
+        assert!(wire <= resource.delivery_bytes_day);
+        assert!(resource.pending_attachments <= resource.attachment_count);
+        assert_eq!(resource.pending_attachments, u64::from(plan.active_uploads));
+        assert_eq!(resource.writing_chunks, resource.pending_attachments);
+        let value = serde_json::to_value(plan).unwrap();
+        assert!(value.get("pending_attachments").is_none());
+        assert!(value.get("upload_bytes_day").is_none());
+    }
+}
+
+#[test]
+fn cleanup_day_reservation_covers_the_shared_original_round_budget() {
+    use citizenserve::{membership::limits, server::maintenance::Budget};
+    let budget = Budget::default();
+    let shared = budget.clone();
+    budget.business(45).unwrap();
+    assert!(shared.business(1).is_err());
+    // 新日池每轮预扣必须覆盖真实共享Budget的全部提交余量，不能少扣。
+    shared.commit(limits::CLEANUP_RESERVE_IO - 45).unwrap();
+    assert_eq!(budget.used(), limits::CLEANUP_RESERVE_IO);
+    assert!(budget.commit(1).is_err());
+    assert_eq!(limits::CLEANUP_RESERVE_IO, 50);
+    assert_eq!(limits::CLEANUP_IO_DAY, 1_000_000);
+    assert_eq!(limits::CLEANUP_ROWS, 1000);
+    assert_eq!(limits::CLEANUP_ATTACHMENTS, 8);
+    assert_eq!(limits::HISTORY_MILLIS, 7 * limits::QUOTA_DAY_MILLIS);
+    assert_eq!(limits::HISTORY_DAY_OFFSET, 6 * limits::QUOTA_DAY_MILLIS);
+}
+
+#[test]
+fn profile_and_ping_caps_preserve_base_access_and_original_entitlements() {
+    use citizenserve::membership::{
+        limits as l,
+        policy::{Operation, Requirement},
+    };
+    use citizenserve::user::profile_assets::Kind;
+    assert_eq!(
+        (l::PROFILE_REQUESTS_DAY, l::PROFILE_READ_BYTES_DAY),
+        (1000, 64 * 1024 * 1024)
+    );
+    assert_eq!(
+        (
+            l::GLOBAL_PROFILE_REQUESTS_DAY,
+            l::GLOBAL_PROFILE_READ_BYTES_DAY
+        ),
+        (100000, 10 * 1024 * 1024 * 1024)
+    );
+    assert_eq!((l::DEVICE_PINGS_MINUTE, l::DEVICE_PING_BYTES), (16, 64));
+    assert_eq!(
+        (l::DEVICE_FRAMES_MINUTE, l::DEVICE_FRAME_BYTES_MINUTE),
+        (240, 8 * 1024 * 1024)
+    );
+    assert_eq!(
+        (Kind::Avatar.limit(), Kind::Banner.limit()),
+        (512 * 1024, 1536 * 1024)
+    );
+    assert_eq!(l::PROFILE_READ_BYTES_DAY / Kind::Avatar.limit() as u64, 128);
+    assert_eq!(
+        Operation::CardAvatar("other".into()).requirement("self"),
+        Requirement::Base
+    );
+    assert_eq!(
+        Operation::ProfileAsset {
+            target: "self".into(),
+            kind: "banner".into()
+        }
+        .requirement("self"),
+        Requirement::Base
+    );
+    assert_eq!(
+        Operation::ProfileAsset {
+            target: "other".into(),
+            kind: "banner".into()
+        }
+        .requirement("self"),
+        Requirement::Member
     );
 }

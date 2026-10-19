@@ -309,7 +309,21 @@ fn authorization() -> Authorization {
         chain_scope: i.chain_scope.clone(),
         institution: i.institution,
     };
-    let authority = gate::identity::session_authority(&i, &a, &d, &s, &config, 1000001).unwrap();
+    let authority = gate::identity::service_authority(
+        &citizenserve::user::ports::AuthContext {
+            loaded_at: 1000001,
+            identity: i.clone(),
+            admission: Some(a.clone()),
+            device: Some(d.clone()),
+            session: Some(s.clone()),
+            membership: None,
+            identity_synced_at: 1000000,
+            membership_synced_at: Some(1000000),
+        },
+        &config,
+        1000001,
+    )
+    .unwrap();
     Authorization::new(&authority, &config, &token, 1000001).unwrap()
 }
 struct Assets {
@@ -505,7 +519,7 @@ impl citizenserve::square::uploads::Repository for Deletion {
         &self,
         _a: &Authorization,
         _u: &citizenserve::square::uploads::Upload,
-        _c: &citizenserve::chain::subscription::Facts,
+        _c: &citizenserve::membership::gate::Permit,
     ) -> Result<()> {
         panic!("unused")
     }
@@ -527,7 +541,7 @@ impl citizenserve::square::uploads::Repository for Deletion {
         &self,
         _a: &Authorization,
         _u: &citizenserve::square::uploads::Upload,
-        _c: &citizenserve::chain::subscription::Facts,
+        _c: &citizenserve::membership::gate::Permit,
     ) -> Result<()> {
         panic!("unused")
     }

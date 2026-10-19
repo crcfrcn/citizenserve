@@ -35,7 +35,10 @@ pub async fn advance<S: Store, O: Objects>(
             return Err(Error::StorageUnavailable);
         }
         // 未知写入、对象删除或元数据提交失败保持待处理，不能凭超时报完成。
-        objects.delete(&item).await?;
+        let progress = objects.delete(&item).await?;
+        if !progress.complete {
+            return Ok(false);
+        }
         store.finalize(&item).await?;
     }
     Ok(!store.remaining(user).await?)

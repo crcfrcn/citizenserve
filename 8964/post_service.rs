@@ -4,8 +4,9 @@ use super::{
     storage::Storage,
     uploads::{self, Upload},
 };
+use crate::membership::gate::Permit;
 use crate::{
-    chain::{ports::Rpc, subscription::Facts, transaction::Confirm},
+    chain::{ports::Rpc, transaction::Confirm},
     shared::{Error, Result},
     user::profile_service::Authorization,
 };
@@ -41,7 +42,7 @@ pub trait Repository {
         u: &Upload,
         fact: &crate::chain::post::Fact,
         m: &super::manifest::Manifest,
-        current: &Facts,
+        current: &Permit,
     ) -> impl Future<Output = Result<()>> + Send;
 }
 pub fn anchors(p: &Post, u: &Upload) -> Result<()> {
@@ -75,6 +76,32 @@ pub async fn detail<R: Repository, S: Storage>(
     let (m, _) = uploads::read_manifest(storage, &u).await?;
     Ok(json!({"ok":true,"post":p,"manifest":m}))
 }
+/// HTTP入口先查同主体的已完成事实；未完成时才构造有预算的Chain。
+pub async fn confirmed<R: Repository>(
+    repo: &R,
+    auth: &Authorization,
+    input: &ConfirmPost,
+    current: &Permit,
+) -> Result<Option<Value>> {
+    if !super::routes::identifier(&input.post_id) {
+        return Err(Error::new(400, "invalid_post_id"));
+    }
+    let Some((p, u)) = repo.get(auth, &input.post_id).await? else {
+        return Ok(None);
+    };
+    anchors(&p, &u)?;
+    u.owner(auth)?;
+    if p.account_id != auth.account()
+        || p.tx_hash != input.tx_hash
+        || p.chain_block_hash != input.block_hash
+    {
+        return Err(Error::new(409, "post_confirmation_conflict"));
+    }
+    current.require_current(auth.now())?;
+    Ok(Some(
+        json!({"ok":true,"post_id":p.post_id,"content_hash":p.content_hash,"post_category":p.post_category}),
+    ))
+}
 pub async fn confirm<R: Repository, S: Storage, C: Rpc>(
     repo: &R,
     storage: &S,
@@ -82,7 +109,7 @@ pub async fn confirm<R: Repository, S: Storage, C: Rpc>(
     genesis: &str,
     auth: &Authorization,
     input: ConfirmPost,
-    current: &Facts,
+    current: &Permit,
 ) -> Result<Value> {
     if !super::routes::identifier(&input.post_id) {
         return Err(Error::new(400, "invalid_post_id"));

@@ -2,6 +2,8 @@
 import concurrent.futures
 import copy
 import json
+import re
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -36,6 +38,11 @@ def enrollment():
 def seed(db):
     db.executescript(SCHEMA)
     project(db)
+    # 独立同步已追平的夹具；目标身份投影本身不能生成健康标记。
+    for table in ['user_projection_cursor','membership_projection_cursor']:
+        db.execute(f"INSERT INTO {table} VALUES(1,?,?,?)",(IDENTITY['finalized_block_number'],IDENTITY['finalized_block_hash'],1000000))
+    for stream in ['identity','membership']:
+        db.execute("INSERT INTO scheduler_leases(lease_key,last_slot,updated_at) VALUES(?,?,?)",('sync:'+stream+':'+FIXTURE['chain_scope'],IDENTITY['finalized_block_number'],1000000))
     row = enrollment()
     db.execute("INSERT INTO registration_enrollments VALUES(?,?,?,?,?,?,?,?)",
                (row["enrollment_id"], row["registration_context_hash"], row["state"], row["version"], row["created_at_millis"], row["expires_at_millis"], row["attempt"]["verification_id"], json.dumps(row)))
@@ -61,18 +68,32 @@ def activate(db, cmd=None):
             db.execute(statement, (json.dumps(cmd or command()),))
 
 
-def challenge(db, nonce="0x" + "7" * 64, purpose="registration", target="/api/user/devices", now=1000001, session_hash=None):
+def challenge(db, nonce="0x" + "7" * 64, purpose="registration", target="/api/user/devices", now=1000001, session_hash=None, device_id=None):
+    if purpose=="request" and session_hash:
+        row=db.execute("SELECT created_at FROM square_sessions WHERE session_token_hash=?",(session_hash,)).fetchone()
+        if row:now=max(now,row[0])
     proof = {"challenge": nonce, "user_id": IDENTITY["cid_number"], "device_id": FIXTURE["public_key"][2:],
              "public_key": FIXTURE["public_key"], "account_id": IDENTITY["account_id"], "binding_revision": 1,
              "service_origin": FIXTURE["service_origin"], "method": "POST", "request_target": target,
              "body_sha256": "0x" + "d" * 64, "expires_at_millis": now + 300000}
-    count = db.execute((SQL / "issue_mls_challenge.sql").read_text(), (json.dumps(proof), purpose, session_hash, now)).rowcount
-    db.commit()
+    if device_id:
+        proof.update(device_id=device_id, public_key="0x"+device_id)
+    if purpose == "session":
+        proof["body_sha256"] = "0x"+hashlib.sha256(json.dumps({"account_id":proof["account_id"]},separators=(",",":")).encode()).hexdigest()
+    insert, read = (SQL / "issue_mls_challenge.sql").read_text().split("-- session read")
+    args = (json.dumps(proof), purpose, session_hash, now, 600000)
+    # 与生产同一事务：插入0行时也必须通过SELECT的当前授权围栏才能交付原nonce。
+    with db:
+        count = db.execute(insert, args).rowcount
+        if purpose == "session":
+            row = db.execute(read, args).fetchone()
+            proof = json.loads(row[0]) if row else None
+            if proof: proof.pop("ok")
     return proof, count
 
 
 def consume(db, proof, purpose="registration", now=1000002):
-    row = {"proof": proof, "purpose": purpose, "session_token_hash": None, "now": now}
+    row = {"proof": proof, "purpose": purpose, "session_token_hash": None, "now": now,"sync_health_millis":600000}
     count = db.execute((SQL / "consume_mls_challenge.sql").read_text(), (json.dumps(row),)).rowcount
     db.commit()
     return count
@@ -84,7 +105,7 @@ def issue_session(db, token, now=1000002):
          "account_id": IDENTITY["account_id"], "device_id": FIXTURE["public_key"][2:], "created_at": now, "expires_at": now + 86400000}
     with db:
         for statement in statements("issue_session.sql"):
-            db.execute(statement, (json.dumps({"session": s, "config": c["config"], "now": now}),))
+            db.execute(statement, (json.dumps({"session": s, "config": {**c["config"],"sync_health_millis":600000}, "now": now}),))
 
 
 class AuthStorageContract(unittest.TestCase):
@@ -252,6 +273,95 @@ class AuthStorageContract(unittest.TestCase):
         self.assertEqual(consume(self.db, proof, purpose="session"), 0)
         self.assertEqual(consume(self.db, proof), 1)
 
+    def test_session_reuses_original_nonce_expiry_then_consumes_once(self):
+        activate(self.db)
+        first, count = challenge(self.db, purpose="session", target="/api/user/sessions")
+        self.assertEqual(count, 1)
+        for n in range(70):
+            again, count = challenge(self.db, f"0x{n:064x}", purpose="session", target="/api/user/sessions", now=1000002+n)
+            self.assertEqual(count, 0)
+            self.assertEqual(again, first)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM mls_authentication_challenges").fetchone()[0], 1)
+        self.assertEqual(consume(self.db, first, "session", now=1000072), 1)
+        self.assertEqual(consume(self.db, first, "session", now=1000072), 0)
+        next_proof, count = challenge(self.db, "0x"+"e"*64, purpose="session", target="/api/user/sessions", now=1000073)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(next_proof["challenge"], first["challenge"])
+        self.assertEqual(next_proof["expires_at_millis"], 1300073)
+
+    def test_legacy_session_hashes_duplicates_and_other_devices_do_not_take_slot(self):
+        activate(self.db)
+        first, _ = challenge(self.db, purpose="session", target="/api/user/sessions")
+        # 模拟上线前遗留的64条不同摘要，不经过本步API规范摘要校验。
+        self.db.execute("UPDATE mls_authentication_challenges SET body_sha256=?", ("0x"+"a"*64,))
+        for n in range(63):
+            self.db.execute("INSERT INTO mls_authentication_challenges SELECT ?,purpose,cid_number,device_id,binding_revision,account_id,service_origin,method,request_target,body_sha256,session_token_hash,created_at,expires_at_millis FROM mls_authentication_challenges WHERE challenge=?", (f"0x{n:064x}", first["challenge"]))
+        self.db.commit()
+        valid, count = challenge(self.db, "0x"+"e"*64, purpose="session", target="/api/user/sessions")
+        self.assertEqual(count, 1)
+        again, count = challenge(self.db, "0x"+"f"*64, purpose="session", target="/api/user/sessions", now=1000002)
+        self.assertEqual((again, count), (valid, 0))
+        # 旧规范重复行可稳定选回最早行，但不能再新增或写回延长旧期限。
+        self.db.execute("UPDATE mls_authentication_challenges SET body_sha256=?", (valid["body_sha256"],))
+        self.db.commit()
+        old, count = challenge(self.db, "0x"+"b"*64, purpose="session", target="/api/user/sessions", now=1000002)
+        self.assertEqual(count,0)
+        self.assertEqual(old["expires_at_millis"],1300001)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM mls_authentication_challenges").fetchone()[0],65)
+        other = "f"*64
+        self.db.execute("INSERT INTO mls_devices SELECT cid_number,?,binding_revision,account_id,?,active,issued_at,created_at,updated_at FROM mls_devices LIMIT 1", (other,"0x"+other))
+        self.db.commit()
+        distinct, count = challenge(self.db, "0x"+"c"*64, purpose="session", target="/api/user/sessions", device_id=other)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(distinct["challenge"], valid["challenge"])
+        self.assertEqual(distinct["device_id"], other)
+        self.db.execute("UPDATE mls_devices SET active=0 WHERE device_id=?", (other,))
+        self.db.commit()
+        self.assertEqual(challenge(self.db, "0x"+"b"*64, purpose="session", target="/api/user/sessions", device_id=other), (None,0))
+        self.assertEqual(challenge(self.db, "0x"+"b"*64, purpose="session", target="/api/user/sessions", device_id="b"*64), (None,0))
+
+    def test_session_exact_expiry_health_and_query_plan(self):
+        activate(self.db)
+        first, _ = challenge(self.db, purpose="session", target="/api/user/sessions")
+        before, count = challenge(self.db, "0x"+"e"*64, purpose="session", target="/api/user/sessions", now=1300000)
+        self.assertEqual((before, count), (first,0))
+        after, count = challenge(self.db, "0x"+"f"*64, purpose="session", target="/api/user/sessions", now=1300001)
+        self.assertEqual(count, 1)
+        self.assertNotEqual(after["challenge"], first["challenge"])
+        insert, read = (SQL / "issue_mls_challenge.sql").read_text().split("-- session read")
+        args = (json.dumps(after), "session", None, 1300002, 600000)
+        plan = " ".join(str(row) for row in self.db.execute("EXPLAIN QUERY PLAN "+read,args))
+        self.assertIn("idx_mls_authentication_challenges_cid", plan)
+        for health in [0, 1300003, 700002]:
+            self.db.execute("UPDATE scheduler_leases SET updated_at=? WHERE lease_key LIKE 'sync:identity:%'",(health,))
+            self.db.commit()
+            self.assertIsNone(self.db.execute(read,args).fetchone())
+        self.db.execute("UPDATE scheduler_leases SET updated_at=1300000")
+        self.db.execute("DELETE FROM cid_admissions")
+        self.db.commit()
+        self.assertIsNone(self.db.execute(read,args).fetchone())
+
+    def test_session_concurrent_issuers_return_single_nonce_without_renewal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"auth.sqlite"
+            db = sqlite3.connect(path)
+            seed(db); activate(db); db.close()
+            def issue(n):
+                local = sqlite3.connect(path,timeout=10)
+                try:
+                    return challenge(local, f"0x{n:064x}", purpose="session", target="/api/user/sessions")
+                finally: local.close()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(issue,range(16)))
+            self.assertEqual(sum(count for _,count in results),1)
+            self.assertEqual(len({proof["challenge"] for proof,_ in results}),1)
+            self.assertEqual({proof["expires_at_millis"] for proof,_ in results},{1300001})
+
+    def test_request_challenge_keeps_original_64_slots(self):
+        activate(self.db); issue_session(self.db,1)
+        for n in range(65):
+            self.assertEqual(challenge(self.db,f"0x{n:064x}",purpose="request",target="/api/user/profiles/me",session_hash=f"{1:064x}")[1],int(n<64))
+
     def test_session_limit_keeps_new_token_and_failure_does_not_evict_existing(self):
         activate(self.db)
         for token in range(12):
@@ -259,7 +369,7 @@ class AuthStorageContract(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM square_sessions").fetchone()[0], 8)
         self.assertIsNotNone(self.db.execute("SELECT 1 FROM square_sessions WHERE session_token_hash=?", (f"{11:064x}",)).fetchone())
         with self.assertRaises(sqlite3.IntegrityError):
-            issue_session(self.db, 99, now=1060000)
+            issue_session(self.db, 99, now=1600000)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM square_sessions").fetchone()[0], 8)
 
     def test_refresh_lease_coalesces_and_never_extends_deadline(self):
@@ -460,3 +570,31 @@ class AccountDeletionStorage(unittest.TestCase):
         for table in tables:
             self.assertEqual(self.db.execute("SELECT * FROM " + table).fetchall(), before[table], table)
 
+
+
+    def test_profile_current_quota_survives_real_deletion_template_and_readmission(self):
+        source=(ROOT/'server/cloudflare/repositories/deletion.rs').read_text()
+        guard=re.search(r'const CURRENT_QUOTA_EXCLUSION: &str = "([^"\n]+)";',source)[1]
+        templates=[json.loads('"'+t+'"') for t in re.findall(r'format!\(\s*"((?:\\.|[^"\\])*)"\s*\)',source)]
+        condition=next(t for t in templates if t.startswith('{column}=')).format(column='cid_number',guard=guard)
+        delete=next(t for t in templates if 'DELETE FROM {table} WHERE rowid' in t).format(LOCK='',table='membership_usage',condition=condition).split('-- statement')[1]
+        pending=next(t for t in templates if t.startswith('SELECT 1 AS pending FROM {table}')).format(table='membership_usage',condition=condition)
+        day=20*86400000;cid=IDENTITY['cid_number'];args=(json.dumps({'job':{'cid_number':cid},'quota_day':day}),)
+        for owner in [cid,'other-cid']:
+            for metric in ['profile_requests','profile_read_bytes']:
+                for period in [day-86400000,day]:
+                    self.db.execute('INSERT INTO membership_usage VALUES(?,?,?,7,?)',(owner,metric,period,day))
+        self.db.execute("INSERT INTO membership_usage VALUES(?,'detail',?,1,?)",(cid,day,day));self.db.commit()
+        # 删除和剩余探测直接来自生产格式串；原锁/撤销由真实Worker注销整体验证。
+        with self.db:self.assertEqual(self.db.execute(delete,args).rowcount,3)
+        self.assertIsNone(self.db.execute(pending,args).fetchone())
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM membership_usage WHERE cid_number=?',(cid,)).fetchone()[0],2)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM membership_usage WHERE cid_number='other-cid'").fetchone()[0],4)
+        self.db.execute('DELETE FROM cid_admissions');self.db.execute('DELETE FROM registration_enrollments')
+        row=enrollment()
+        self.db.execute('INSERT INTO registration_enrollments VALUES(?,?,?,?,?,?,?,?)',
+            (row['enrollment_id'],row['registration_context_hash'],row['state'],row['version'],row['created_at_millis'],row['expires_at_millis'],row['attempt']['verification_id'],json.dumps(row)))
+        self.db.commit();activate(self.db)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM cid_admissions').fetchone()[0],1)
+        self.assertEqual(self.db.execute('SELECT metric,amount,period_start FROM membership_usage WHERE cid_number=? ORDER BY metric',(cid,)).fetchall(),
+            [('profile_read_bytes',7,day),('profile_requests',7,day)])

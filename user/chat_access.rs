@@ -16,6 +16,8 @@ pub struct Subject {
     device_id: String,
     session_hash: String,
     session_deadline: u64,
+    deadline: u64,
+    checked: u64,
     service_origin: String,
     revision: String,
 }
@@ -29,7 +31,7 @@ impl Subject {
     ) -> Result<Self> {
         let identity = authority.identity();
         config.validate()?;
-        identity.require_current(now)?;
+        authority.require_current(now)?;
         device.require(identity, &device.public_key)?;
         if identity.chain_scope != config.chain_scope
             || device.device_id != authority.device_id()
@@ -68,12 +70,16 @@ impl Subject {
             device_id: device.device_id.clone(),
             session_hash: session.session_token_hash.clone(),
             session_deadline: session.expires_at,
+            deadline: authority.recheck_deadline(),
+            checked: now,
             service_origin: config.service_origin.clone(),
             revision: crypto::sha256_hex(&material),
         })
     }
     pub fn require_current(&self, now: u64) -> Result<()> {
-        self.identity.require_current(now)?;
+        if now < self.checked || now >= self.deadline {
+            return Err(Error::new(401, "chat_recheck_required"));
+        }
         if self.session_deadline <= now {
             return Err(Error::new(401, "session_expired"));
         }
@@ -101,6 +107,6 @@ impl Subject {
         &self.revision
     }
     pub fn recheck_deadline(&self) -> u64 {
-        self.identity.verification_deadline_millis
+        self.deadline
     }
 }

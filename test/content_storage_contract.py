@@ -20,7 +20,7 @@ def command(number=1,images=1):
     for index in range(images):
         prefix=f"square/{u['cid_number']}/posts/{u['post_id']}/media/{index}"
         assets.append({**{k:u[k] for k in ('upload_id','post_id','cid_number','account_id')},"media_index":index,"media_kind":"image","object_key":prefix+"/source.webp","upload_method":"r2_put","resource_key":"square_image_freedom","content_type":"image/webp","byte_size":100,"sha256":"b"*64,"derivative_kind":"thumbnail","derivative_object_key":prefix+"/thumbnail.webp","derivative_content_type":"image/webp","derivative_byte_size":50,"derivative_sha256":"c"*64,"asset_state":"prepared","width":100,"height":100,"duration_seconds":None,"created_at":auth()["now"],"updated_at":auth()["now"]})
-    return {"auth":auth(),"upload":u,"assets":assets,"membership_checked":1000000,"membership_deadline":1060000,"period_start":900000,"paid_until":2000000,"chain_time":1000000,"image_count":images,"video_seconds":0,"limits":{"active_uploads":1,"monthly_images":300,"monthly_video_seconds":18000,"storage_bytes":100000000000}}
+    return {"auth":auth(),"upload":u,"assets":assets,"membership_level":"freedom","membership_status":"active","membership_block":0,"membership_checked":1000000,"membership_deadline":1060000,"period_start":900000,"paid_until":2000000,"chain_time":1000000,"image_count":images,"video_seconds":0,"limits":{"active_uploads":1,"monthly_images":300,"monthly_video_seconds":18000,"storage_bytes":100000000000}}
 
 
 def run(db,file,cmd):
@@ -147,6 +147,13 @@ class ContentStorageContract(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):self.reserve(c)
         c=command();c['chain_time']=c['paid_until']
         with self.assertRaises(sqlite3.IntegrityError):self.reserve(c)
+    def test_latest_member_state_and_health_fence_reject_stale_permit(self):
+        for mutation in ["UPDATE square_memberships SET membership_level='spark'","UPDATE square_memberships SET subscription_status='terminated'","UPDATE square_memberships SET paid_until=3000000","UPDATE square_memberships SET last_charged_at=900001","UPDATE square_memberships SET finalized_block_number=1","UPDATE scheduler_leases SET updated_at=400000 WHERE lease_key LIKE 'sync:membership:%'","DELETE FROM square_memberships"]:
+            db=sqlite3.connect(':memory:');ready(db);db.execute(mutation);db.commit()
+            with self.assertRaises(sqlite3.IntegrityError):run(db,'reserve_upload.sql',command())
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM resource_reservations').fetchone()[0],0);db.close()
+        # 历史扣款账户不替代当前CID身份；换绑不丢失已经付费的权益。
+        self.db.execute('UPDATE square_memberships SET account_id=?',('0x'+'ee'*32,));self.db.commit();self.reserve()
     def test_publish_needs_completed_ready_upload_and_strict_transaction_fact(self):
         c=self.reserve()
         with self.assertRaises(sqlite3.IntegrityError):self.confirm(c)
@@ -192,6 +199,7 @@ class ContentStorageContract(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT creator_plans_block_number FROM square_memberships').fetchone()[0],10)
     def test_background_cursor_cas_and_whole_block_rollback(self):
         c=projection(0,1);c['background']=True;c['expected']=None;c['projection']['evidence']=None
+        self.db.execute('DELETE FROM membership_projection_cursor');self.db.commit()
         run(self.db,'project_subscription.sql',c)
         c2=projection(1,2);c2['background']=True;c2['expected']=c['projection']['anchor'];c2['projection']['evidence']=None
         run(self.db,'project_subscription.sql',c2)

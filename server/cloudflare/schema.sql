@@ -208,7 +208,7 @@ CREATE TABLE IF NOT EXISTS contact_mls_messages (
 CREATE INDEX IF NOT EXISTS idx_contact_mls_delivery
   ON contact_mls_messages(cid_number, device_id, sequence);
 
--- 只保存必须跨 PoP 精确一致的低频上传与外部 RPC 硬顶；普通请求走原生 RateLimit binding。
+-- 跨PoP精确一致的RPC/资源全站硬顶；普通请求先走原生RateLimit，CID汇总仍归membership_usage。
 CREATE TABLE IF NOT EXISTS rate_windows (
   rate_key TEXT PRIMARY KEY,
   request_count INTEGER NOT NULL,
@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS square_memberships (
   started_at INTEGER NOT NULL,
   last_charged_at INTEGER NOT NULL,
   last_charged_price_fen INTEGER NOT NULL,
+  authorized_price_fen INTEGER CHECK(authorized_price_fen IS NULL OR (authorized_price_fen>=0 AND authorized_price_fen<=9007199254740991)),
   paid_until INTEGER NOT NULL,
   subscription_status TEXT NOT NULL CHECK(subscription_status IN ('active', 'cancelled', 'terminated', 'suspended', 'issuerPaused')),
   finalized_block_number INTEGER NOT NULL,
@@ -275,6 +276,7 @@ CREATE TABLE IF NOT EXISTS square_creator_subscriptions (
   started_at INTEGER NOT NULL,
   last_charged_at INTEGER NOT NULL,
   last_charged_price_fen INTEGER NOT NULL,
+  authorized_price_fen INTEGER CHECK(authorized_price_fen IS NULL OR (authorized_price_fen>=0 AND authorized_price_fen<=9007199254740991)),
   paid_until INTEGER NOT NULL,
   subscription_status TEXT NOT NULL CHECK(subscription_status IN ('active', 'cancelled', 'terminated', 'suspended', 'issuerPaused')),
   finalized_block_number INTEGER NOT NULL,
@@ -672,15 +674,22 @@ CREATE TABLE IF NOT EXISTS account_deletions(
 );
 CREATE INDEX IF NOT EXISTS deletion_due ON account_deletions(state,io_started,lease_until,updated_at);
 
-CREATE VIEW IF NOT EXISTS authorized_business_sessions AS
+-- 服务端授权使用连续投影的共享健康时间，原链事实时间继续保留在原表。
+-- 更新现有库时只在事务中替换本视图；不删除用户、会话或业务数据。
+DROP VIEW IF EXISTS authorized_business_sessions;
+CREATE VIEW authorized_business_sessions AS
 SELECT s.session_token_hash,s.cid_number,s.account_id,s.binding_revision,s.device_id,
- s.created_at,s.expires_at,c.checked_at_millis,c.verification_deadline_millis,
+ s.created_at,s.expires_at,h.updated_at identity_synced_at,CASE WHEN mc.finalized_block_number IS NOT NULL THEN m.updated_at END membership_synced_at,
  a.registration_scope,a.service_origin,a.chain_scope,a.institution
 FROM square_sessions s
 JOIN users u ON u.cid_number=s.cid_number AND u.account_id=s.account_id AND u.binding_revision=s.binding_revision AND u.cid_status='active'
 JOIN mls_devices d ON d.cid_number=s.cid_number AND d.device_id=s.device_id AND d.account_id=s.account_id AND d.binding_revision=s.binding_revision AND d.active=1
 JOIN cid_admissions a ON a.cid_number=s.cid_number AND a.institution=u.institution AND a.source='turnstile'
-JOIN user_identity_checks c ON c.cid_number=s.cid_number AND json_extract(c.row_json,'$.authoritative_current')=1 AND json_extract(c.row_json,'$.chain_scope')=a.chain_scope AND c.account_id=s.account_id AND c.binding_revision=s.binding_revision
+JOIN user_identity_checks c ON c.cid_number=s.cid_number AND json_extract(c.row_json,'$.chain_scope')=a.chain_scope AND c.account_id=s.account_id AND c.binding_revision=s.binding_revision
+JOIN scheduler_leases h ON h.lease_key='sync:identity:'||a.chain_scope
+JOIN user_projection_cursor i ON i.cursor_id=1 AND i.finalized_block_number>=h.last_slot
+LEFT JOIN scheduler_leases m ON m.lease_key='sync:membership:'||a.chain_scope
+LEFT JOIN membership_projection_cursor mc ON mc.cursor_id=1 AND mc.finalized_block_number>=m.last_slot
 WHERE NOT EXISTS(SELECT 1 FROM account_deletions x WHERE x.cid_number=s.cid_number AND x.state='pending');
 
 -- 同一CID资料对象只有一个代际；writing的凭据在完成/明确恢复前禁止下一代覆盖。
@@ -793,3 +802,8 @@ CREATE TABLE IF NOT EXISTS membership_usage (
  amount INTEGER NOT NULL CHECK(amount>=0 AND amount<=9007199254740991),updated_at INTEGER NOT NULL,
  PRIMARY KEY(cid_number,metric,period_start)
 );
+
+-- 按固定指标/期限有界回收历史；不扫描金融或当前有效周期。
+CREATE INDEX IF NOT EXISTS idx_membership_operations_cleanup ON membership_operations(metric,created_at);
+CREATE INDEX IF NOT EXISTS idx_membership_usage_cleanup ON membership_usage(metric,period_start);
+CREATE INDEX IF NOT EXISTS idx_square_browse_days_cleanup ON square_browse_days(browse_day);

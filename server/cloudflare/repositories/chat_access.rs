@@ -10,7 +10,7 @@ pub struct D1ChatAccess {
     pub db: D1Database,
 }
 /// 使用原授权view和当前设备issued_at，换绑/注销/重新授权发生在签名期间也不能交付旧凭证。
-pub const CURRENT_SQL: &str = "SELECT a.session_token_hash FROM authorized_business_sessions a JOIN mls_devices d ON d.cid_number=a.cid_number AND d.device_id=a.device_id WHERE a.session_token_hash=?1 AND a.cid_number=?2 AND a.device_id=?3 AND a.account_id=?4 AND a.binding_revision=?5 AND a.registration_scope=?6 AND a.service_origin=?7 AND a.chain_scope=?8 AND a.institution=?9 AND a.created_at<=?10 AND a.expires_at>?10 AND a.checked_at_millis<=?10 AND a.verification_deadline_millis>?10 AND d.issued_at=?11";
+pub const CURRENT_SQL: &str = "SELECT a.session_token_hash FROM authorized_business_sessions a JOIN mls_devices d ON d.cid_number=a.cid_number AND d.device_id=a.device_id WHERE a.session_token_hash=?1 AND a.cid_number=?2 AND a.device_id=?3 AND a.account_id=?4 AND a.binding_revision=?5 AND a.registration_scope=?6 AND a.service_origin=?7 AND a.chain_scope=?8 AND a.institution=?9 AND a.created_at<=?10 AND a.expires_at>?10 AND a.identity_synced_at>0 AND a.identity_synced_at<=?10 AND a.identity_synced_at+?12>?10 AND d.issued_at=?11";
 impl D1ChatAccess {
     pub async fn require(
         &self,
@@ -45,6 +45,9 @@ impl D1ChatAccess {
             ),
             wasm_bindgen::JsValue::from_f64(now as f64),
             wasm_bindgen::JsValue::from_f64(issued_at as f64),
+            wasm_bindgen::JsValue::from_f64(
+                citizenserve::server::gate::policy::SYNC_HEALTH_MILLIS as f64,
+            ),
         ];
         let row: Option<Row> = super::first(&self.db, CURRENT_SQL, &args).await?;
         if row.is_none_or(|r| r.session_token_hash != subject.session_hash()) {

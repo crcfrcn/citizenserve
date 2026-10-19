@@ -1,6 +1,19 @@
+-- 最新会员行和独立同步健康在原写事务复核；旧许可不能跨越降档、撤销或续费。
+-- statement
+INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT EXISTS(
+ SELECT 1 FROM square_memberships m
+ JOIN scheduler_leases h ON h.lease_key='sync:membership:'||json_extract(?1,'$.auth.chain_scope')
+ JOIN membership_projection_cursor c ON c.cursor_id=1 AND c.finalized_block_number>=h.last_slot
+ WHERE m.cid_number=json_extract(?1,'$.auth.cid_number')
+ AND m.membership_level=json_extract(?1,'$.membership_level')
+ AND m.subscription_status=json_extract(?1,'$.membership_status') AND m.subscription_status IN ('active','cancelled')
+ AND m.paid_until=json_extract(?1,'$.paid_until') AND m.paid_until>json_extract(?1,'$.auth.now')
+ AND m.last_charged_at=json_extract(?1,'$.period_start') AND m.finalized_block_number=json_extract(?1,'$.membership_block')
+ AND h.updated_at>0 AND h.updated_at<=json_extract(?1,'$.auth.now')
+ AND h.updated_at+json_extract(?1,'$.auth.sync_health_millis')>json_extract(?1,'$.auth.now'));
+-- statement
 -- 预留+上传+全部媒体索引一次提交；配额判定在 SQLite 写事务内。
 -- CID 每小时30次跨PoP硬顶复用原rate_windows；失败的预留整体回滚，不消耗成功上传名额。
--- statement
 INSERT INTO rate_windows(rate_key,request_count,expires_at) VALUES('upload:cid_number:'||json_extract(?1,'$.auth.cid_number'),1,json_extract(?1,'$.auth.now')+3600000) ON CONFLICT(rate_key) DO UPDATE SET request_count=CASE WHEN rate_windows.expires_at<=json_extract(?1,'$.auth.now') THEN 1 ELSE rate_windows.request_count+1 END,expires_at=CASE WHEN rate_windows.expires_at<=json_extract(?1,'$.auth.now') THEN excluded.expires_at ELSE rate_windows.expires_at END WHERE rate_windows.expires_at<=json_extract(?1,'$.auth.now') OR rate_windows.request_count<30;
 -- statement
 INSERT INTO rate_windows(rate_key,request_count,expires_at) SELECT 'upload-limit',NULL,0 WHERE NOT (changes()=1 AND json_type(?1)='object');

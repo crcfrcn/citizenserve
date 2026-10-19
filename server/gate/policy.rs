@@ -1,8 +1,13 @@
 //! 所有访问的唯一准入分类。开放规则和公民号规则均须精确登记，未登记即拒绝。
 use super::request::{ChainRoute, Endpoint, Route};
-use crate::{topup::routes::TopupRoute, user::routes::{UserRoute,ProtectedUserRoute},
-    membership::routes::MembershipRoute,notifications::routes::NotificationRoute,
-    square::routes::{SquareRoute,FeedKind},server::tatachat_routes::Route as ChatAccessRoute};
+use crate::{
+    membership::routes::MembershipRoute,
+    notifications::routes::NotificationRoute,
+    server::tatachat_routes::Route as ChatAccessRoute,
+    square::routes::{FeedKind, SquareRoute},
+    topup::routes::TopupRoute,
+    user::routes::{ProtectedUserRoute, UserRoute},
+};
 
 pub const NETWORK_ORIGIN: &str = "https://nrcrpc.crcfrcn.com";
 pub const MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024;
@@ -90,17 +95,48 @@ pub const fn api(route: Route) -> Rule {
             Rule::Cid(CidRule::Recovery)
         }
         Route::ProtectedUser(ProtectedUserRoute::CardAvatar) => Rule::Cid(CidRule::Avatar),
-        Route::Membership(MembershipRoute::Current|MembershipRoute::Confirm|MembershipRoute::Plans
-            |MembershipRoute::ConfirmPlans|MembershipRoute::Overview|MembershipRoute::ConfirmCreator)
-        |Route::ProtectedUser(ProtectedUserRoute::Card|ProtectedUserRoute::Profile|ProtectedUserRoute::UpdateProfile|ProtectedUserRoute::Contacts
-            |ProtectedUserRoute::PrepareAsset|ProtectedUserRoute::UploadAsset|ProtectedUserRoute::Asset
-            |ProtectedUserRoute::DeletionChallenge|ProtectedUserRoute::Delete)
-        |Route::Square(SquareRoute::Feed(FeedKind::Recommended|FeedKind::Following|FeedKind::Campaign)
-            |SquareRoute::Posts|SquareRoute::Follows|SquareRoute::Follow|SquareRoute::Unfollow|SquareRoute::Notify
-            |SquareRoute::PrepareUpload|SquareRoute::Manifest|SquareRoute::CompleteUpload|SquareRoute::CancelUpload
-            |SquareRoute::ConfirmPost|SquareRoute::SelfPosts|SquareRoute::Post|SquareRoute::DeletePost)
-        |Route::Notifications(NotificationRoute::Unread|NotificationRoute::Read|NotificationRoute::RegisterEndpoint|NotificationRoute::DeleteEndpoint)
-        |Route::TataChat(ChatAccessRoute::Access) => Rule::Cid(CidRule::Business),
+        Route::Membership(
+            MembershipRoute::Current
+            | MembershipRoute::Confirm
+            | MembershipRoute::Plans
+            | MembershipRoute::ConfirmPlans
+            | MembershipRoute::Overview
+            | MembershipRoute::ConfirmCreator,
+        )
+        | Route::ProtectedUser(
+            ProtectedUserRoute::Card
+            | ProtectedUserRoute::Profile
+            | ProtectedUserRoute::UpdateProfile
+            | ProtectedUserRoute::Contacts
+            | ProtectedUserRoute::PrepareAsset
+            | ProtectedUserRoute::UploadAsset
+            | ProtectedUserRoute::Asset
+            | ProtectedUserRoute::DeletionChallenge
+            | ProtectedUserRoute::Delete,
+        )
+        | Route::Square(
+            SquareRoute::Feed(FeedKind::Recommended | FeedKind::Following | FeedKind::Campaign)
+            | SquareRoute::Posts
+            | SquareRoute::Follows
+            | SquareRoute::Follow
+            | SquareRoute::Unfollow
+            | SquareRoute::Notify
+            | SquareRoute::PrepareUpload
+            | SquareRoute::Manifest
+            | SquareRoute::CompleteUpload
+            | SquareRoute::CancelUpload
+            | SquareRoute::ConfirmPost
+            | SquareRoute::SelfPosts
+            | SquareRoute::Post
+            | SquareRoute::DeletePost,
+        )
+        | Route::Notifications(
+            NotificationRoute::Unread
+            | NotificationRoute::Read
+            | NotificationRoute::RegisterEndpoint
+            | NotificationRoute::DeleteEndpoint,
+        )
+        | Route::TataChat(ChatAccessRoute::Access) => Rule::Cid(CidRule::Business),
     }
 }
 pub fn classify(endpoint: &Endpoint, preflight: bool) -> Rule {
@@ -109,8 +145,14 @@ pub fn classify(endpoint: &Endpoint, preflight: bool) -> Rule {
     }
     match endpoint {
         Endpoint::Api(route) => api(*route),
-        Endpoint::Network(super::request::NetworkRoute::Install|super::request::NetworkRoute::Icon|super::request::NetworkRoute::Rpc) => Rule::Open(OpenRule::Network),
-        Endpoint::Chat(super::request::ChatRoute::Realtime|super::request::ChatRoute::Attachment{..}) => Rule::Cid(CidRule::Chat),
+        Endpoint::Network(
+            super::request::NetworkRoute::Install
+            | super::request::NetworkRoute::Icon
+            | super::request::NetworkRoute::Rpc,
+        ) => Rule::Open(OpenRule::Network),
+        Endpoint::Chat(
+            super::request::ChatRoute::Realtime | super::request::ChatRoute::Attachment { .. },
+        ) => Rule::Cid(CidRule::Chat),
         Endpoint::Media(_) => Rule::Cid(CidRule::Media),
     }
 }
@@ -126,18 +168,35 @@ pub const fn system(operation: super::open::SystemOperation) -> Rule {
 }
 
 /// 只批准现有十二种客户端命令；服务端响应帧和未知类型直接拒绝。
-pub fn chat(frame:&crate::tatachat::protocol::ChatFrame)->Rule {
+pub fn chat(frame: &crate::tatachat::protocol::ChatFrame) -> Rule {
     use crate::tatachat::protocol::chat_frame::Body;
     match frame.body.as_ref() {
-        Some(Body::Ping(_)|Body::PublishKeyPackage(_)|Body::ResolveKeyPackages(_)|Body::SendMessage(_)
-            |Body::SyncMessages(_)|Body::AcknowledgeMessages(_)|Body::BeginAttachment(_)
-            |Body::CompleteAttachment(_)|Body::AcknowledgeAttachment(_)|Body::AbortAttachment(_)
-            |Body::RegisterPush(_)|Body::RemovePush(_))=>Rule::Cid(CidRule::Chat),
-        _=>Rule::Reject,
+        Some(
+            Body::Ping(_)
+            | Body::PublishKeyPackage(_)
+            | Body::ResolveKeyPackages(_)
+            | Body::SendMessage(_)
+            | Body::SyncMessages(_)
+            | Body::AcknowledgeMessages(_)
+            | Body::BeginAttachment(_)
+            | Body::CompleteAttachment(_)
+            | Body::AcknowledgeAttachment(_)
+            | Body::AbortAttachment(_)
+            | Body::RegisterPush(_)
+            | Body::RemovePush(_),
+        ) => Rule::Cid(CidRule::Chat),
+        _ => Rule::Reject,
     }
 }
 
 /// 凭据条件与三路分类使用同一规则来源，业务模块仅查询该结果。
-pub const fn requires_mls(rule:Rule)->bool {
-    matches!(rule,Rule::Cid(CidRule::Business|CidRule::Device|CidRule::Session))
+pub const fn requires_mls(rule: Rule) -> bool {
+    matches!(
+        rule,
+        Rule::Cid(CidRule::Business | CidRule::Device | CidRule::Session)
+    )
 }
+
+/// 服务端许可与独立后台同步期限；链事实的原60秒期限不在此改写。
+pub const SERVICE_AUTH_MILLIS: u64 = 60_000;
+pub const SYNC_HEALTH_MILLIS: u64 = 600_000;

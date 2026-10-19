@@ -27,12 +27,16 @@ pub(crate) async fn upgrade(request: &Request, env: &Env, host: &super::Host) ->
     if !protocols.split(',').any(|p| p.trim() == "tatachat") {
         return Err(Error::InvalidRequest);
     }
-    let access = super::routes::authorize(request, env, host).await?;
+    let verified = super::routes::verify(request, env, host).await?;
+    let actor = Device {
+        user_id: verified.claims().sub.clone(),
+        device_id: verified.claims().device_id.clone(),
+    };
     let namespace = env
         .durable_object("TATACHAT_DEVICES")
         .map_err(|_| Error::StorageUnavailable)?;
     namespace
-        .id_from_name(&name(access.actor())?)
+        .id_from_name(&name(&actor)?)
         .map_err(|_| Error::StorageUnavailable)?
         .get_stub()
         .map_err(|_| Error::StorageUnavailable)?

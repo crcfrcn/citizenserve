@@ -130,7 +130,7 @@ fn metadata() -> Vec<u8> {
     .encode()
 }
 struct Chain {
-    cid:String,
+    cid: String,
     value: Option<Vec<u8>>,
     fault: bool,
     clock: u64,
@@ -173,7 +173,7 @@ impl Rpc for Chain {
 fn entitlement(s: Option<State>, clock: u64) -> subscription::Entitlement {
     run(subscription::current(
         &Chain {
-            cid:"CID1".into(),
+            cid: "CID1".into(),
             value: s.map(|v| v.encode()),
             fault: false,
             clock,
@@ -215,7 +215,7 @@ fn absent_and_inactive_are_free_but_unknown_rpc_is_an_error() {
     }
     assert!(run(subscription::current(
         &Chain {
-            cid:"CID1".into(),
+            cid: "CID1".into(),
             value: None,
             fault: true,
             clock: 0
@@ -231,7 +231,7 @@ fn suspend_reason_and_plan_must_match_actual_state() {
     let mut s = state(Status::Suspended);
     assert!(run(subscription::current(
         &Chain {
-            cid:"CID1".into(),
+            cid: "CID1".into(),
             value: Some(s.encode()),
             fault: false,
             clock: 0
@@ -254,7 +254,7 @@ fn suspend_reason_and_plan_must_match_actual_state() {
     s.plan = Plan::Creator { tier_id: [0; 16] };
     assert!(run(subscription::current(
         &Chain {
-            cid:"CID1".into(),
+            cid: "CID1".into(),
             value: Some(s.encode()),
             fault: false,
             clock: 0
@@ -289,7 +289,7 @@ fn malformed_scale_tail_cannot_be_ignored() {
     raw.push(0);
     assert!(run(subscription::current(
         &Chain {
-            cid:"CID1".into(),
+            cid: "CID1".into(),
             value: Some(raw),
             fault: false,
             clock: 0
@@ -306,9 +306,30 @@ fn utc_dates_page_size_and_remaining_budget_match_golden() {
     for row in f["days"].as_array().unwrap() {
         assert_eq!(feed::utc_day(row[0].as_u64().unwrap()), row[1]);
     }
-    assert_eq!(citizenserve::membership::usage::page_budget(20,95,citizenserve::membership::usage::Limit::Bounded(100)).unwrap(), 5);
-    assert!(citizenserve::membership::usage::page_budget(20,100,citizenserve::membership::usage::Limit::Bounded(100)).is_err());
-    assert_eq!(citizenserve::membership::usage::page_budget(50,100,citizenserve::membership::usage::Limit::Unlimited).unwrap(), 50);
+    assert_eq!(
+        citizenserve::membership::usage::page_budget(
+            20,
+            95,
+            citizenserve::membership::usage::Limit::Bounded(100)
+        )
+        .unwrap(),
+        5
+    );
+    assert!(citizenserve::membership::usage::page_budget(
+        20,
+        100,
+        citizenserve::membership::usage::Limit::Bounded(100)
+    )
+    .is_err());
+    assert_eq!(
+        citizenserve::membership::usage::page_budget(
+            50,
+            100,
+            citizenserve::membership::usage::Limit::Unlimited
+        )
+        .unwrap(),
+        50
+    );
     for q in f["query_invalid"].as_array().unwrap() {
         assert!(api::protected_target(
             "GET",
@@ -339,7 +360,10 @@ fn required_author_and_follow_type_cannot_be_defaulted() {
     );
 }
 
-fn profile_context() -> (citizenserve::server::gate::identity::Authority,citizenserve::user::profile_service::Authorization) {
+fn profile_context() -> (
+    citizenserve::server::gate::identity::Authority,
+    citizenserve::user::profile_service::Authorization,
+) {
     use citizenserve::{
         server::gate,
         user::{
@@ -390,18 +414,53 @@ fn profile_context() -> (citizenserve::server::gate::identity::Authority,citizen
         created_at: 1000000,
         expires_at: 2000000,
     };
-    let authority =
-        gate::identity::session_authority(&identity, &admission, &device, &session, &config, 1000001)
-            .unwrap();
-    let auth=Authorization::new(&authority, &config, &token, 1000001).unwrap();
-    (authority,auth)
+    let authority = gate::identity::service_authority(
+        &citizenserve::user::ports::AuthContext {
+            loaded_at: 1_000_000,
+            identity: identity.clone(),
+            device: Some(device.clone()),
+            admission: Some(admission.clone()),
+            session: Some(session.clone()),
+            membership: None,
+            identity_synced_at: 1000000,
+            membership_synced_at: Some(1000000),
+        },
+        &config,
+        1000001,
+    )
+    .unwrap();
+    let auth = Authorization::new(&authority, &config, &token, 1000001).unwrap();
+    (authority, auth)
 }
-fn authorization()->citizenserve::user::profile_service::Authorization {profile_context().1}
-fn feed_permit()->citizenserve::membership::gate::Permit {
-    let (authority,auth)=profile_context();
-    let chain=Chain {cid:authority.identity().cid_number.clone(),value:Some(state(Status::Active).encode()),fault:false,clock:authority.identity().finalized_timestamp_millis};
-    let facts=run(subscription::for_authority(&chain,&authority,auth.now())).unwrap();
-    citizenserve::membership::gate::authorize(&authority,citizenserve::membership::policy::Operation::Square(citizenserve::square::routes::SquareRoute::Feed(FeedKind::Recommended)),Some(&facts),auth.now()).unwrap()
+fn authorization() -> citizenserve::user::profile_service::Authorization {
+    profile_context().1
+}
+fn feed_permit() -> citizenserve::membership::gate::Permit {
+    let (authority, auth) = profile_context();
+    let facts = citizenserve::membership::Record {
+        cid_number: authority.identity().cid_number.clone(),
+        membership_level: Some(citizenserve::membership::Level::Spark),
+        creator_cid_number: None,
+        tier_id: None,
+        billing_period: None,
+        subscription_status: citizenserve::membership::Status::Active,
+        started_at: 900000,
+        last_charged_at: 1000000,
+        paid_until: 2000000,
+        last_charged_price_fen: 5999900,
+        authorized_price_fen: Some(5999900),
+        finalized_block_number: 9,
+        finalized_block_hash: authority.identity().finalized_block_hash.clone(),
+    };
+    citizenserve::membership::gate::authorize(
+        &authority,
+        citizenserve::membership::policy::Operation::Square(
+            citizenserve::square::routes::SquareRoute::Feed(FeedKind::Recommended),
+        ),
+        Some(&facts),
+        auth.now(),
+    )
+    .unwrap()
 }
 struct Feed {
     fail_charge: bool,

@@ -29,6 +29,8 @@ impl D1Deletion {
     ) -> Result<Vec<worker::D1Result>> {
         let now = js_sys::Date::now() as u64;
         command["now"] = json!(now);
+        command["sync_health_millis"] =
+            json!(citizenserve::server::gate::policy::SYNC_HEALTH_MILLIS);
         if auth {
             command["auth"]["now"] = json!(now);
         }
@@ -95,7 +97,7 @@ const CURRENT: &str = r#"
 -- statement
 INSERT INTO account_deletion_assert(value) SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM users u JOIN user_identity_checks i USING(cid_number)
  WHERE u.cid_number=json_extract(?1,'$.challenge.cid_number') AND u.account_id=json_extract(?1,'$.challenge.account_id') AND u.binding_revision=json_extract(?1,'$.challenge.binding_revision') AND u.cid_status='active'
- AND i.account_id=u.account_id AND i.binding_revision=u.binding_revision AND json_extract(i.row_json,'$.authoritative_current')=1 AND json_extract(i.row_json,'$.chain_scope')=json_extract(?1,'$.challenge.chain_scope') AND i.checked_at_millis<=json_extract(?1,'$.now') AND i.verification_deadline_millis>json_extract(?1,'$.now'));
+ AND i.account_id=u.account_id AND i.binding_revision=u.binding_revision AND json_extract(i.row_json,'$.chain_scope')=json_extract(?1,'$.challenge.chain_scope') AND EXISTS(SELECT 1 FROM scheduler_leases h JOIN user_projection_cursor cur ON cur.cursor_id=1 AND cur.finalized_block_number>=h.last_slot WHERE h.lease_key='sync:identity:'||json_extract(i.row_json,'$.chain_scope') AND h.updated_at>0 AND h.updated_at<=json_extract(?1,'$.now') AND h.updated_at+json_extract(?1,'$.sync_health_millis')>json_extract(?1,'$.now')));
 "#;
 impl Repository for D1Deletion {
     fn issue(
@@ -437,11 +439,25 @@ UPDATE account_deletions SET io_started=1,keys_json=json_extract(?1,'$.job.keys_
         return Ok(Some(false));
     }
     if job.phase == 3 {
+        let now = js_sys::Date::now() as u64;
+        if let Err(error) = super::maintenance::reserve_cleanup(&repo.db, budget, now).await {
+            if error.code != "cleanup_budget_exceeded" {
+                return Err(error);
+            }
+            let next = (now / citizenserve::membership::limits::QUOTA_DAY_MILLIS + 1)
+                * citizenserve::membership::limits::QUOTA_DAY_MILLIS;
+            // 尚未开始对象I/O，持原租约延期到下一日；不能清空日顶后立即重领。
+            let sql=format!("{LOCK}\n-- statement\nUPDATE account_deletions SET lease_token=NULL,lease_until=json_extract(?1,'$.next'),updated_at=json_extract(?1,'$.now') WHERE deletion_id=json_extract(?1,'$.job.deletion_id') AND io_started=0;");
+            repo.transaction(json!({"job":job,"token":token,"next":next}), &sql, false)
+                .await?;
+            return Ok(Some(false));
+        }
         if crate::tatachat::lifecycle::advance(
             env,
             &job.cid_number,
             &job.deletion_id,
             job.created_at,
+            budget,
         )
         .await
         .map_err(crate::tatachat::business)?
@@ -455,12 +471,19 @@ UPDATE account_deletions SET io_started=1,keys_json=json_extract(?1,'$.job.keys_
         return Err(bad());
     }
     if let Some((table, column)) = ROWS.get(job.rows_phase) {
-        // 表名/列名只来自上面的固定白名单，绝不接收请求参数。
-        let sql=format!("{LOCK}\n-- statement\nDELETE FROM {table} WHERE rowid IN(SELECT rowid FROM {table} WHERE {column}=json_extract(?1,'$.job.cid_number') LIMIT 100);");
-        repo.transaction(json!({"job":job,"token":token}), &sql, false)
-            .await?;
-        let sql = format!("SELECT 1 AS pending FROM {table} WHERE {column}=?1 LIMIT 1");
-        if first::<Value>(&repo.db, &sql, &[string(&job.cid_number)])
+        // 当前UTC日风控行独立于可删除资料；重注册仍使用同CID剩余额度。
+        let guard = if *table == "membership_usage" {
+            CURRENT_QUOTA_EXCLUSION
+        } else {
+            ""
+        };
+        let now = js_sys::Date::now() as u64;
+        let command = json!({"job":job,"token":token,"quota_day":now/citizenserve::membership::limits::QUOTA_DAY_MILLIS*citizenserve::membership::limits::QUOTA_DAY_MILLIS});
+        let condition = format!("{column}=json_extract(?1,'$.job.cid_number'){guard}");
+        let sql=format!("{LOCK}\n-- statement\nDELETE FROM {table} WHERE rowid IN(SELECT rowid FROM {table} WHERE {condition} LIMIT 100);");
+        repo.transaction(command.clone(), &sql, false).await?;
+        let sql = format!("SELECT 1 AS pending FROM {table} WHERE {condition} LIMIT 1");
+        if first::<Value>(&repo.db, &sql, &[string(&command.to_string())])
             .await?
             .is_none()
         {
@@ -482,3 +505,6 @@ DELETE FROM registration_enrollments WHERE enrollment_id=json_extract(?1,'$.job.
 -- statement
 DELETE FROM account_deletion_challenges WHERE cid_number=json_extract(?1,'$.job.cid_number');
 "#;
+
+// DELETE与剩余探测必须使用同一条件，保留当日原指标及资料媒体两项计数又不阻塞资料注销完成。
+const CURRENT_QUOTA_EXCLUSION: &str = " AND NOT (metric IN('chat_connections','chat_commands','chat_frame_bytes','chat_deliveries','attachment_begins','chat_chunk_operations','upload_bytes','delivery_bytes','media_requests','profile_requests','profile_read_bytes') AND period_start=json_extract(?1,'$.quota_day'))";

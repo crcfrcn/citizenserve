@@ -1,12 +1,48 @@
-name: citizenserve.cloudflare
+name: 公民服务端·Cloudflare
+run-name: 公民服务端·Cloudflare·v${{ inputs.version }}
 'on':
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 产品 Build 计算的候选版本
+        required: true
+        type: string
 concurrency:
   group: citizenserve-cloudflare-release
   cancel-in-progress: false
 permissions:
   contents: write
+  actions: write
 jobs:
+  test:
+    name: 公民服务端·Cloudflare·v${{ inputs.version }}
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: "${{ github.sha }}"
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 25.2.1
+      - name: 恢复本产品官方工具、依赖及编译缓存
+        id: compiler_cache
+        continue-on-error: true
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: |
+            ~/.local/share/product-resources/tools/archives
+            ~/.local/share/product-resources/tools/shared
+            ~/.local/share/product-resources/tools/parsers
+            ~/.local/share/product-resources/rely/archives
+            ~/.local/share/product-resources/rely/objects
+            ${{ runner.temp }}/citizenserve-cargo
+          key: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'package-lock.json', 'test/worker/package-lock.json', 'rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-
+      - name: 本产品完整测试
+        run: node scripts/build.mjs ci-test cloudflare
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -19,155 +55,36 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 25.2.1
+      - name: 恢复本产品官方工具、依赖及编译缓存
+        id: compiler_cache
+        continue-on-error: true
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: |
+            ~/.local/share/product-resources/tools/archives
+            ~/.local/share/product-resources/tools/shared
+            ~/.local/share/product-resources/tools/parsers
+            ~/.local/share/product-resources/rely/archives
+            ~/.local/share/product-resources/rely/objects
+            ${{ runner.temp }}/citizenserve-cargo
+          key: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'package-lock.json', 'test/worker/package-lock.json', 'rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-
       - name: 调用产品编译并保存本次 Runner 输出
-        run: |
-          node --input-type=module <<'NODE'
-          import {execFileSync} from 'node:child_process';
-          import {mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
-          import {basename,join} from 'node:path';
-          import {buildOutputDigest,contract,executeBuild,fixedWork} from './scripts/build.mjs';
-          if(process.version!=='v'+contract.resources.bootstrap.node_version)throw Error('产品Node版本无效');
-          const integer=value=>{if(!/^[1-9]\d*$/u.test(value||'')||!Number.isSafeInteger(Number(value)))throw Error('GitHub运行编号无效');return value;};
-          const run=integer(process.env.GITHUB_RUN_ID),attempt=integer(process.env.GITHUB_RUN_ATTEMPT);
-          if(process.env.GITHUB_ACTIONS!=='true'||process.env.GITHUB_REPOSITORY!=='crcfrcn/citizenserve'
-            ||process.env.GITHUB_REF!=='refs/heads/main'||process.env.GITHUB_EVENT_NAME!=='workflow_dispatch'
-            ||process.env.GITHUB_WORKFLOW_REF!=='crcfrcn/citizenserve/.github/workflows/cloudflare.yml@refs/heads/main'
-            ||execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()!==process.env.GITHUB_SHA)throw Error('GitHub源码身份无效');
-          const work=fixedWork('build/cloudflare'),task=join(process.env.RUNNER_TEMP,'citizenserve','cloudflare',run,attempt);
-          const output=join(task,'output');await mkdir(output,{recursive:true});
-          if((await readdir(output)).length)throw Error('本次Runner输出目录非空');
-          const runId=run+'-'+attempt;
-          const result=await executeBuild({schema:1,product_id:'citizenserve',platform:'cloudflare',work,run_id:runId},
-            {toolRoot:join(task,'tools'),dependencyRoot:join(task,'rely'),consume:async built=>{
-              if(built?.completion!=='compile-only'||built.run_id!==runId||built.work!==work||built.files?.length!==2)throw Error('产品编译回执无效');
-              const names=built.files.map(file=>basename(file.path)).sort();
-              if(names.join(',')!=='index.js,index_bg.wasm')throw Error('Worker输出集合无效');
-              for(const file of built.files){
-                if(file.path!==join(work,'worker',basename(file.path))||await buildOutputDigest(file.path)!==file.sha256)throw Error('Worker输出漂移');
-                const bytes=await readFile(file.path);if(!bytes.length)throw Error('Worker输出为空');
-                await writeFile(join(output,basename(file.path)),bytes,{flag:'wx',mode:0o600});
-              }
-            }});
-          if(result.run_id!==runId||result.completion!=='compile-only')throw Error('产品编译未成功');
-          NODE
+        run: node scripts/build.mjs ci-build cloudflare
       - name: 创建并回读 GitHub 正式产物
         env:
           GH_TOKEN: "${{ github.token }}"
-        run: |
-          node --input-type=module <<'NODE'
-          import {createHash} from 'node:crypto';
-          import {readFile,rm} from 'node:fs/promises';
-          import {join} from 'node:path';
-          import {gzipSync} from 'node:zlib';
-          const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
-          const integer=value=>{if(!/^[1-9]\d*$/u.test(value||'')||!Number.isSafeInteger(Number(value)))throw Error('GitHub运行编号无效');return Number(value);};
-          const run=integer(process.env.GITHUB_RUN_ID),attempt=integer(process.env.GITHUB_RUN_ATTEMPT),number=integer(process.env.GITHUB_RUN_NUMBER);
-          const sha=process.env.GITHUB_SHA,token=process.env.GH_TOKEN;
-          if(process.env.GITHUB_ACTIONS!=='true'||process.env.GITHUB_REPOSITORY!=='crcfrcn/citizenserve'
-            ||process.env.GITHUB_REF!=='refs/heads/main'||process.env.GITHUB_EVENT_NAME!=='workflow_dispatch'
-            ||process.env.GITHUB_WORKFLOW_REF!=='crcfrcn/citizenserve/.github/workflows/cloudflare.yml@refs/heads/main'
-            ||!/^[a-f0-9]{40}$/u.test(sha||'')||!token||/[\s\x00-\x1f\x7f]/u.test(token))throw Error('GitHub正式产物身份无效');
-          async function api(path,{method='GET',body,raw=false}={}){
-            const url=new URL(path,'https://api.github.com/repos/crcfrcn/citizenserve/');
-            if(url.protocol!=='https:'||!['api.github.com','uploads.github.com'].includes(url.hostname)
-              ||!url.pathname.startsWith('/repos/crcfrcn/citizenserve/')||url.username||url.password)throw Error('GitHub接口越界');
-            const headers={Authorization:'Bearer '+token,Accept:raw?'application/octet-stream':'application/vnd.github+json',
-              'X-GitHub-Api-Version':'2026-03-10','User-Agent':'citizenserve'};
-            if(body!==undefined){headers['Content-Type']=Buffer.isBuffer(body)?'application/octet-stream':'application/json';
-              if(Buffer.isBuffer(body))headers['Content-Length']=String(body.length);}
-            let response=await fetch(url,{method,headers,redirect:raw?'manual':'error',signal:AbortSignal.timeout(300000),
-              ...(body===undefined?{}:{body:Buffer.isBuffer(body)?body:JSON.stringify(body)})});
-            if(raw&&response.status===302){const target=new URL(response.headers.get('location'));
-              if(target.protocol!=='https:'||!['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(target.hostname)
-                ||target.username||target.password)throw Error('正式资产回读越界');
-              response=await fetch(target,{method:'GET',redirect:'error',credentials:'omit',signal:AbortSignal.timeout(300000)});
-            }
-            if(method==='GET'&&response.status===404)return null;
-            if(!response.ok)throw Error('GitHub接口失败：'+response.status);
-            return raw?response:response.status===204?{}:response.json();
-          }
-          const cargo=await readFile('Cargo.toml','utf8');
-          const seed=/^version = "(\d+\.\d+\.\d+)"$/mu.exec(cargo)?.[1];
-          const membersText=/^release_members = '''([^']+)'''$/mu.exec(cargo)?.[1];
-          if(!seed||!membersText)throw Error('产品版本或正式包成员声明缺失');
-          const members=JSON.parse(membersText);
-          if(!Array.isArray(members)||members.length!==9||new Set(members).size!==9
-            ||!members.includes('index.js')||!members.includes('index_bg.wasm'))throw Error('正式包成员声明无效');
-          const ordinal=value=>{const match=/^(0|[1-9]\d*)\.(0|[1-9]\d?)\.(0|[1-9]\d?)$/u.exec(value);
-            if(!match)throw Error('软件版本无效');return BigInt(match[1])*10000n+BigInt(match[2])*100n+BigInt(match[3]);};
-          let next=ordinal(seed)+BigInt(number-1);
-          const tagPattern=/^citizenserve-cloudflare-v(\d+\.\d+\.\d+)-r[1-9]\d*-a[1-9]\d*$/u;
-          for(let page=1;page<=10000;page++){
-            const rows=await api('releases?per_page=100&page='+page);
-            if(!Array.isArray(rows)||rows.length>100)throw Error('Release分页无效');
-            for(const row of rows){const match=tagPattern.exec(row?.tag_name||'');if(match){const candidate=ordinal(match[1])+1n;if(candidate>next)next=candidate;}}
-            if(rows.length<100)break;
-            if(page===10000)throw Error('Release分页超限');
-          }
-          const major=Number(next/10000n);if(!Number.isSafeInteger(major))throw Error('软件版本越界');
-          const version=`${major}.${Number(next/100n%100n)}.${Number(next%100n)}`;
-          const task=join(process.env.RUNNER_TEMP,'citizenserve','cloudflare',String(run),String(attempt));
-          const source=join(task,'output'),archiveEntries=[],manifestEntries=[];
-          for(const name of members){
-            if(typeof name!=='string'||!name||name.startsWith('/')||!/^[-A-Za-z0-9._/]+$/u.test(name)
-              ||name.split('/').some(part=>!part||part==='.'||part==='..'))throw Error('正式包路径无效');
-            const path=name==='index.js'||name==='index_bg.wasm'?join(source,name):name;
-            const data=await readFile(path);if(!data.length||data.length>128*1024**2)throw Error('正式包成员为空或超限');
-            archiveEntries.push([name,data]);manifestEntries.push({path:name,bytes:data.length,sha256:hash(data)});
-          }
-          const blocks=[];
-          for(const [name,data] of archiveEntries.sort(([a],[b])=>a<b?-1:a>b?1:0)){
-            if(Buffer.byteLength(name)>100)throw Error('正式包路径过长');
-            const header=Buffer.alloc(512),field=(at,size,value)=>header.write(value,at,size,'ascii');
-            field(0,100,name);field(100,8,'0000644\0');field(108,8,'0000000\0');field(116,8,'0000000\0');
-            field(124,12,data.length.toString(8).padStart(11,'0')+'\0');field(136,12,'00000000000\0');
-            header.fill(32,148,156);header[156]=48;field(257,6,'ustar\0');field(263,2,'00');
-            field(148,8,[...header].reduce((sum,byte)=>sum+byte,0).toString(8).padStart(6,'0')+'\0 ');
-            blocks.push(header,data,Buffer.alloc((512-data.length%512)%512));
-          }
-          blocks.push(Buffer.alloc(1024));
-          const archive=gzipSync(Buffer.concat(blocks),{level:9,mtime:0});
-          const manifest=Buffer.from(JSON.stringify({schema:1,product_id:'citizenserve',platform:'cloudflare',software_version:version,
-            source_sha:sha,producer_run_id:run,producer_run_attempt:attempt,assets:manifestEntries},null,2)+'\n');
-          const sums=Buffer.from(hash(archive)+'  citizenserve-cloudflare-release.tgz\n'+hash(manifest)+'  release-manifest.json\n');
-          const files=[{name:'citizenserve-cloudflare-release.tgz',bytes:archive},{name:'release-manifest.json',bytes:manifest},{name:'SHA256SUMS',bytes:sums}];
-          if(archive.length>256*1024**2||manifest.length>1024**2)throw Error('正式资产超限');
-          await rm(task,{recursive:true});
-          const tag=`citizenserve-cloudflare-v${version}-r${run}-a${attempt}`;
-          if(await api('git/ref/tags/'+encodeURIComponent(tag))!==null)throw Error('本次Tag已存在');
-          let createdReleaseId=null;
-          try{
-            const ref=await api('git/refs',{method:'POST',body:{ref:'refs/tags/'+tag,sha}});
-            if(ref?.ref!=='refs/tags/'+tag||ref.object?.sha!==sha)throw Error('正式Tag创建未确认');
-            const release=await api('releases',{method:'POST',body:{tag_name:tag,target_commitish:sha,
-              name:`citizenserve · cloudflare · ${version}`,draft:true,prerelease:false,make_latest:'false',
-              body:`citizenserve · cloudflare · ${version}\nSource: ${sha}\nRun: ${run} / ${attempt}`}});
-            if(!Number.isSafeInteger(release?.id)||release.id<1||!release.upload_url||release.tag_name!==tag)throw Error('Release创建未确认');
-            createdReleaseId=release.id;
-            for(const file of files){
-              const url=new URL(release.upload_url.replace(/\{.*$/u,''));url.searchParams.set('name',file.name);
-              const uploaded=await api(url.href,{method:'POST',body:file.bytes});
-              if(uploaded?.name!==file.name||uploaded.size!==file.bytes.length||uploaded.state!=='uploaded')throw Error('正式资产上传未确认：'+file.name);
-              const downloaded=await api(uploaded.url,{raw:true});if(!downloaded?.body)throw Error('正式资产回读失败：'+file.name);
-              const actual=createHash('sha256');let size=0;
-              for await(const chunk of downloaded.body){size+=chunk.length;if(size>file.bytes.length)throw Error('正式资产回读超限：'+file.name);actual.update(chunk);}
-              if(size!==file.bytes.length||actual.digest('hex')!==hash(file.bytes))throw Error('正式资产回读不一致：'+file.name);
-            }
-            const published=await api('releases/'+release.id,{method:'PATCH',body:{draft:false,prerelease:false}});
-            if(published?.draft!==false||published.tag_name!==tag)throw Error('正式Release发布未确认');
-            const current=await api('releases/'+release.id),tagRef=await api('git/ref/tags/'+encodeURIComponent(tag));
-            if(current?.draft||current?.prerelease||current?.tag_name!==tag||current?.target_commitish!==sha
-              ||tagRef?.object?.type!=='commit'||tagRef.object.sha!==sha||current.assets?.length!==files.length)throw Error('正式Release身份回查失败');
-            for(const file of files){const asset=current.assets.find(value=>value.name===file.name);
-              if(!asset||asset.state!=='uploaded'||asset.size!==file.bytes.length||asset.digest!=='sha256:'+hash(file.bytes))throw Error('正式资产证明回查失败：'+file.name);}
-            console.log(JSON.stringify({tag,release_id:release.id,assets:files.map(file=>file.name)}));
-          }catch(error){
-            let cleanupError;
-            try{const release=createdReleaseId?await api('releases/'+createdReleaseId):await api('releases/tags/'+encodeURIComponent(tag));
-              if(release?.tag_name===tag&&release.target_commitish===sha)await api('releases/'+release.id,{method:'DELETE'});
-              const ref=await api('git/ref/tags/'+encodeURIComponent(tag));
-              if(ref?.ref==='refs/tags/'+tag&&ref.object?.sha===sha)await api('git/refs/tags/'+encodeURIComponent(tag),{method:'DELETE'});
-            }catch(failure){cleanupError=failure;}
-            throw cleanupError?new Error(error.message+'；本次Tag/Release撤销未确认：'+cleanupError.message):error;
-          }
-          NODE
+        run: node scripts/build.mjs ci-release cloudflare
+      - name: 保存本产品最新缓存
+        if: success() || failure()
+        continue-on-error: true
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        with:
+          path: |
+            ~/.local/share/product-resources/tools/archives
+            ~/.local/share/product-resources/tools/shared
+            ~/.local/share/product-resources/tools/parsers
+            ~/.local/share/product-resources/rely/archives
+            ~/.local/share/product-resources/rely/objects
+            ${{ runner.temp }}/citizenserve-cargo
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}

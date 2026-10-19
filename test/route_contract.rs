@@ -9,132 +9,310 @@ use citizenserve::{
     },
 };
 
-fn gate_input<'a>(method:&'a str,url:&'a str)->citizenserve::server::gate::request::Incoming<'a> {
+fn gate_input<'a>(
+    method: &'a str,
+    url: &'a str,
+) -> citizenserve::server::gate::request::Incoming<'a> {
     citizenserve::server::gate::request::Incoming {
-        method,url,service_origin:Some("https://registration.example.test"),
-        media_origin:Some("https://media.example.test"),browser_origin:None,
-        preflight_method:None,preflight_headers:None,content_length:Some("0"),authorization:None,mls_proof:None,internal_header:false,upgrade:None,websocket_protocol:None,
+        method,
+        url,
+        service_origin: Some("https://registration.example.test"),
+        media_origin: Some("https://media.example.test"),
+        browser_origin: None,
+        preflight_method: None,
+        preflight_headers: None,
+        content_length: Some("0"),
+        authorization: None,
+        mls_proof: None,
+        internal_header: false,
+        upgrade: None,
+        websocket_protocol: None,
     }
+}
+
+#[test]
+fn creator_overview_alone_requires_member_among_membership_entry_routes() {
+    use citizenserve::membership::policy::{self, Operation, Requirement};
+    for (method, path, expected) in [
+        (
+            "GET",
+            "/api/membership/creator/overview",
+            Operation::CreatorOverview,
+        ),
+        ("GET", "/api/membership", Operation::Membership),
+        ("POST", "/api/membership/confirm", Operation::Membership),
+    ] {
+        let operation = policy::api(route(method, path).unwrap(), path).unwrap();
+        assert_eq!(operation, expected);
+        assert_eq!(
+            operation.requirement("CID1"),
+            if expected == Operation::CreatorOverview {
+                Requirement::Member
+            } else {
+                Requirement::Base
+            }
+        );
+    }
+    assert_eq!(
+        Operation::CreatorOverview.denial().code,
+        "membership_required"
+    );
+    assert_eq!(Operation::CreatorOverview.denial().status, 403);
+    assert!(route("GET", "/api/membership/creator/overview/other").is_err());
 }
 
 #[test]
 fn unified_gate_has_exact_open_cid_and_reject_paths_before_business_io() {
-    use citizenserve::server::gate::{self,Classification};
-    let open=gate::classify(gate_input("POST","https://registration.example.test/api/user/registration"));
-    let Classification::Open(entry)=open else {panic!("真人注册准备必须走明确开放分支")};
-    let scope=entry.open().unwrap();
-    scope.require_api(Route::User(UserRoute::Registration)).unwrap();
-    assert!(scope.require_api(Route::ProtectedUser(citizenserve::user::routes::ProtectedUserRoute::Contacts)).is_err());
-    let mut cid=gate_input("POST","https://registration.example.test/api/user/devices");
-    cid.mls_proof=Some("synthetic-shape-only");
-    let Classification::Cid(entry)=gate::classify(cid) else {panic!("取得CID后的激活必须走公民号分支")};
+    use citizenserve::server::gate::{self, Classification};
+    let open = gate::classify(gate_input(
+        "POST",
+        "https://registration.example.test/api/user/registration",
+    ));
+    let Classification::Open(entry) = open else {
+        panic!("真人注册准备必须走明确开放分支")
+    };
+    let scope = entry.open().unwrap();
+    scope
+        .require_api(Route::User(UserRoute::Registration))
+        .unwrap();
+    assert!(scope
+        .require_api(Route::ProtectedUser(
+            citizenserve::user::routes::ProtectedUserRoute::Contacts
+        ))
+        .is_err());
+    let mut cid = gate_input("POST", "https://registration.example.test/api/user/devices");
+    cid.mls_proof = Some("synthetic-shape-only");
+    let Classification::Cid(entry) = gate::classify(cid) else {
+        panic!("取得CID后的激活必须走公民号分支")
+    };
     entry.require_cid(gate::policy::CidRule::Device).unwrap();
     assert!(entry.open().is_err());
-    let mut business_io=0;
-    for url in ["https://registration.example.test/api/unknown","https://registration.example.test/api/api/user/devices",
-        "https://other.example.test/api/health","https://registration.example.test/api/user/../user/devices"] {
-        let mut input=gate_input("GET",url);
-        input.authorization=Some("Bearer sqs_12121212121212121212121212121212");input.mls_proof=Some("synthetic-shape-only");
+    let mut business_io = 0;
+    for url in [
+        "https://registration.example.test/api/unknown",
+        "https://registration.example.test/api/api/user/devices",
+        "https://other.example.test/api/health",
+        "https://registration.example.test/api/user/../user/devices",
+    ] {
+        let mut input = gate_input("GET", url);
+        input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+        input.mls_proof = Some("synthetic-shape-only");
         match gate::classify(input) {
-            Classification::Reject(_)=>{},
-            _=>{business_io+=1;},
+            Classification::Reject(_) => {}
+            _ => {
+                business_io += 1;
+            }
         }
     }
-    assert_eq!(business_io,0,"未知请求不得触发数据库、RPC或存储处理器");
+    assert_eq!(business_io, 0, "未知请求不得触发数据库、RPC或存储处理器");
 }
 
 #[test]
 fn missing_or_malformed_business_credentials_are_rejected_without_io() {
-    use citizenserve::server::gate::{self,Classification};
-    for value in [None,Some("Bearer arbitrary"),Some("Bearer sqs_short")] {
-        let mut input=gate_input("GET","https://registration.example.test/api/8964/feed/recommended");
-        input.authorization=value;
-        assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    use citizenserve::server::gate::{self, Classification};
+    for value in [None, Some("Bearer arbitrary"), Some("Bearer sqs_short")] {
+        let mut input = gate_input(
+            "GET",
+            "https://registration.example.test/api/8964/feed/recommended",
+        );
+        input.authorization = value;
+        assert!(matches!(gate::classify(input), Classification::Reject(_)));
     }
-    let mut input=gate_input("GET","https://registration.example.test/api/8964/feed/recommended");
-    input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
-    assert!(matches!(gate::classify(input),Classification::Reject(_)),"缺请求证明也必须提前拒绝");
+    let mut input = gate_input(
+        "GET",
+        "https://registration.example.test/api/8964/feed/recommended",
+    );
+    input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+    assert!(
+        matches!(gate::classify(input), Classification::Reject(_)),
+        "缺请求证明也必须提前拒绝"
+    );
 }
 
 #[test]
 fn network_and_chat_no_longer_bypass_gate_classification() {
-    use citizenserve::server::gate::{self,Classification};
-    assert!(matches!(gate::classify(gate_input("POST","https://nrcrpc.crcfrcn.com/")),Classification::Open(_)));
-    assert!(matches!(gate::classify(gate_input("GET","https://nrcrpc.crcfrcn.com/api/user/profile")),Classification::Reject(_)));
-    assert!(matches!(gate::classify(gate_input("GET","https://registration.example.test/api/tatachat/realtime")),Classification::Reject(_)));
-    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
-    input.authorization=Some("Bearer synthetic-chat-credential");
-    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachat");
-    let Classification::Cid(entry)=gate::classify(input) else {panic!("聊天必须走CID分支")};
+    use citizenserve::server::gate::{self, Classification};
+    assert!(matches!(
+        gate::classify(gate_input("POST", "https://nrcrpc.crcfrcn.com/")),
+        Classification::Open(_)
+    ));
+    assert!(matches!(
+        gate::classify(gate_input(
+            "GET",
+            "https://nrcrpc.crcfrcn.com/api/user/profile"
+        )),
+        Classification::Reject(_)
+    ));
+    assert!(matches!(
+        gate::classify(gate_input(
+            "GET",
+            "https://registration.example.test/api/tatachat/realtime"
+        )),
+        Classification::Reject(_)
+    ));
+    let mut input = gate_input(
+        "GET",
+        "https://registration.example.test/api/tatachat/realtime",
+    );
+    input.authorization = Some("Bearer synthetic-chat-credential");
+    input.upgrade = Some("websocket");
+    input.websocket_protocol = Some("tatachat");
+    let Classification::Cid(entry) = gate::classify(input) else {
+        panic!("聊天必须走CID分支")
+    };
     entry.require_cid(gate::policy::CidRule::Chat).unwrap();
 }
 
 #[test]
 fn chat_upgrade_shape_keeps_original_bad_request_and_forbidden_boundaries() {
-    use citizenserve::server::gate::{self,Classification};
-    let status=|input| match gate::classify(input) {
-        Classification::Reject(error)=>error.status,
-        _=>panic!("无效升级不得接入业务"),
+    use citizenserve::server::gate::{self, Classification};
+    let status = |input| match gate::classify(input) {
+        Classification::Reject(error) => error.status,
+        _ => panic!("无效升级不得接入业务"),
     };
-    assert_eq!(status(gate_input("GET","https://registration.example.test/api/tatachat/realtime")),400);
-    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
-    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachatserver");
-    assert_eq!(status(input),400);
-    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");
-    input.upgrade=Some("websocket");input.websocket_protocol=Some("tatachat");
-    assert_eq!(status(input),403);
-    let mut input=gate_input("GET","https://registration.example.test/api/tatachat/realtime");input.internal_header=true;
-    assert_eq!(status(input),400);
+    assert_eq!(
+        status(gate_input(
+            "GET",
+            "https://registration.example.test/api/tatachat/realtime"
+        )),
+        400
+    );
+    let mut input = gate_input(
+        "GET",
+        "https://registration.example.test/api/tatachat/realtime",
+    );
+    input.upgrade = Some("websocket");
+    input.websocket_protocol = Some("tatachatserver");
+    assert_eq!(status(input), 400);
+    let mut input = gate_input(
+        "GET",
+        "https://registration.example.test/api/tatachat/realtime",
+    );
+    input.upgrade = Some("websocket");
+    input.websocket_protocol = Some("tatachat");
+    assert_eq!(status(input), 403);
+    let mut input = gate_input(
+        "GET",
+        "https://registration.example.test/api/tatachat/realtime",
+    );
+    input.internal_header = true;
+    assert_eq!(status(input), 400);
 }
 
 #[test]
 fn media_head_range_targets_require_cid_and_cannot_expose_other_bucket_keys() {
-    use citizenserve::server::gate::{self,Classification};
-    for method in ["GET","HEAD"] {
-        let mut input=gate_input(method,"https://media.example.test/square/CID1/posts/p1/media/0/source.webp");
-        assert!(matches!(gate::classify(input),Classification::Reject(_)));
-        input=gate_input(method,"https://media.example.test/square/CID1/posts/p1/media/0/source.webp");
-        input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
-        let Classification::Cid(entry)=gate::classify(input) else {panic!("媒体必须验证CID")};
+    use citizenserve::server::gate::{self, Classification};
+    for method in ["GET", "HEAD"] {
+        let mut input = gate_input(
+            method,
+            "https://media.example.test/square/CID1/posts/p1/media/0/source.webp",
+        );
+        assert!(matches!(gate::classify(input), Classification::Reject(_)));
+        input = gate_input(
+            method,
+            "https://media.example.test/square/CID1/posts/p1/media/0/source.webp",
+        );
+        input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+        let Classification::Cid(entry) = gate::classify(input) else {
+            panic!("媒体必须验证CID")
+        };
         entry.require_cid(gate::policy::CidRule::Media).unwrap();
     }
-    for path in ["/square/CID1/posts/p1/manifest.json","/square/CID1/posts/p1/media/00/source.webp",
-        "/square/CID1/posts/p1/media/0/unknown.webp","/square/CID1/posts/p1/media/0/source.webp?bypass=1"] {
-        let url=format!("https://media.example.test{path}");
-        let mut input=gate_input("GET",&url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
-        assert!(matches!(gate::classify(input),Classification::Reject(_)),"{path}");
+    for path in [
+        "/square/CID1/posts/p1/manifest.json",
+        "/square/CID1/posts/p1/media/00/source.webp",
+        "/square/CID1/posts/p1/media/0/unknown.webp",
+        "/square/CID1/posts/p1/media/0/source.webp?bypass=1",
+    ] {
+        let url = format!("https://media.example.test{path}");
+        let mut input = gate_input("GET", &url);
+        input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+        assert!(
+            matches!(gate::classify(input), Classification::Reject(_)),
+            "{path}"
+        );
     }
 }
 
 #[test]
 fn preflight_is_open_only_for_a_real_registered_target() {
-    use citizenserve::server::gate::{self,Classification};
-    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
-    input.preflight_method=Some("POST");
-    let Classification::Open(entry)=gate::classify(input) else {panic!("预检不执行账户业务")};
-    assert!(entry.preflight());assert_eq!(entry.method(),"POST");
-    assert!(entry.open().unwrap().require_api(Route::ProtectedUser(citizenserve::user::routes::ProtectedUserRoute::Contacts)).is_err());
-    let input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
-    assert!(matches!(gate::classify(input),Classification::Reject(_)),"预检缺少目标方法必须拒绝");
-    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");input.preflight_method=Some("TRACE");
-    assert!(matches!(gate::classify(input),Classification::Reject(_)),"未登记方法不能通过预检");
-    let mut input=gate_input("OPTIONS","https://registration.example.test/api/unknown");input.preflight_method=Some("POST");
-    assert!(matches!(gate::classify(input),Classification::Reject(_)));
-    let mut input=gate_input("OPTIONS","https://registration.example.test/api/user/contacts");
-    input.preflight_method=Some("POST");input.preflight_headers=Some("x-tatachat-internal");
-    assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    use citizenserve::server::gate::{self, Classification};
+    let mut input = gate_input(
+        "OPTIONS",
+        "https://registration.example.test/api/user/contacts",
+    );
+    input.preflight_method = Some("POST");
+    let Classification::Open(entry) = gate::classify(input) else {
+        panic!("预检不执行账户业务")
+    };
+    assert!(entry.preflight());
+    assert_eq!(entry.method(), "POST");
+    assert!(entry
+        .open()
+        .unwrap()
+        .require_api(Route::ProtectedUser(
+            citizenserve::user::routes::ProtectedUserRoute::Contacts
+        ))
+        .is_err());
+    let input = gate_input(
+        "OPTIONS",
+        "https://registration.example.test/api/user/contacts",
+    );
+    assert!(
+        matches!(gate::classify(input), Classification::Reject(_)),
+        "预检缺少目标方法必须拒绝"
+    );
+    let mut input = gate_input(
+        "OPTIONS",
+        "https://registration.example.test/api/user/contacts",
+    );
+    input.preflight_method = Some("TRACE");
+    assert!(
+        matches!(gate::classify(input), Classification::Reject(_)),
+        "未登记方法不能通过预检"
+    );
+    let mut input = gate_input("OPTIONS", "https://registration.example.test/api/unknown");
+    input.preflight_method = Some("POST");
+    assert!(matches!(gate::classify(input), Classification::Reject(_)));
+    let mut input = gate_input(
+        "OPTIONS",
+        "https://registration.example.test/api/user/contacts",
+    );
+    input.preflight_method = Some("POST");
+    input.preflight_headers = Some("x-tatachat-internal");
+    assert!(matches!(gate::classify(input), Classification::Reject(_)));
 }
 
 #[test]
 fn internal_open_rules_cannot_be_selected_by_client_headers_or_wrong_queue() {
-    use citizenserve::server::gate::{self,Classification,open::{self,SystemOperation}};
-    let mut input=gate_input("GET","https://registration.example.test/api/health");input.internal_header=true;
-    assert!(matches!(gate::classify(input),Classification::Reject(_)));
-    assert!(open::system(SystemOperation::Notifications,"other","citizenserve").is_err());
-    assert!(open::system(SystemOperation::ChatQueue,"citizenserve-tatachat","citizenserve-tatachat").is_ok());
-    assert!(open::system(SystemOperation::ChatAlarm,"cloudflare.tatachat.alarm","cloudflare.tatachat.alarm").is_ok());
-    assert!(open::system(SystemOperation::ChatAlarm,"client-header","cloudflare.tatachat.alarm").is_err());
-    assert!(open::system(SystemOperation::ChatAlarm,"","").is_err());
+    use citizenserve::server::gate::{
+        self,
+        open::{self, SystemOperation},
+        Classification,
+    };
+    let mut input = gate_input("GET", "https://registration.example.test/api/health");
+    input.internal_header = true;
+    assert!(matches!(gate::classify(input), Classification::Reject(_)));
+    assert!(open::system(SystemOperation::Notifications, "other", "citizenserve").is_err());
+    assert!(open::system(
+        SystemOperation::ChatQueue,
+        "citizenserve-tatachat",
+        "citizenserve-tatachat"
+    )
+    .is_ok());
+    assert!(open::system(
+        SystemOperation::ChatAlarm,
+        "cloudflare.tatachat.alarm",
+        "cloudflare.tatachat.alarm"
+    )
+    .is_ok());
+    assert!(open::system(
+        SystemOperation::ChatAlarm,
+        "client-header",
+        "cloudflare.tatachat.alarm"
+    )
+    .is_err());
+    assert!(open::system(SystemOperation::ChatAlarm, "", "").is_err());
 }
 #[test]
 fn registration_auth_and_wallet_recovery_routes_remain_exact() {
@@ -261,6 +439,9 @@ fn purpose_cannot_sign_another_route_or_query_alias() {
     }
     r.purpose = Purpose::Session;
     r.request_target = UserRoute::Sessions.external();
+    assert!(challenge::target(&r).is_err());
+    let body = serde_json::to_vec(&serde_json::json!({"account_id":r.account_id})).unwrap();
+    r.body_sha256 = format!("0x{}", citizenserve::shared::crypto::sha256_hex(&body));
     assert!(challenge::target(&r).is_ok());
     r.purpose = Purpose::Request;
     assert!(challenge::target(&r).is_err());
@@ -301,11 +482,22 @@ fn seventeen_step4_routes_are_exact_protected_and_budgeted() {
 
 #[test]
 fn step5_exact_tools_cannot_obtain_account_service_permissions() {
-    use citizenserve::server::gate::{request::protected_target, policy::{Rule, OpenRule}};
+    use citizenserve::server::gate::{
+        policy::{OpenRule, Rule},
+        request::protected_target,
+    };
     let id = format!("top_{}", "ab".repeat(16));
     let mut list = vec![
-        ("GET", "/api/topup/config".into(), Rule::Open(OpenRule::Public)),
-        ("POST", "/api/topup/intent".into(), Rule::Open(OpenRule::Public)),
+        (
+            "GET",
+            "/api/topup/config".into(),
+            Rule::Open(OpenRule::Public),
+        ),
+        (
+            "POST",
+            "/api/topup/intent".into(),
+            Rule::Open(OpenRule::Public),
+        ),
         (
             "POST",
             "/api/topup/confirm".into(),
@@ -341,7 +533,11 @@ fn step5_exact_tools_cannot_obtain_account_service_permissions() {
         ("GET", "runtime-target"),
         ("POST", "extrinsics"),
     ] {
-        list.push((method, format!("/api/chain/{p}"), Rule::Open(OpenRule::Public)));
+        list.push((
+            method,
+            format!("/api/chain/{p}"),
+            Rule::Open(OpenRule::Public),
+        ));
     }
     assert_eq!(list.len(), 14);
     for (m, p, permission) in list {
@@ -409,7 +605,10 @@ fn push_endpoint_exact_actual_api_targets_and_budgets() {
 
 #[test]
 fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority() {
-    use citizenserve::server::gate::{request::protected_target, policy::{Rule, CidRule}};
+    use citizenserve::server::gate::{
+        policy::{CidRule, Rule},
+        request::protected_target,
+    };
     use citizenserve::user::routes::ProtectedUserRoute;
     assert_eq!(
         route("POST", "/api/user/deletion/challenges").unwrap(),
@@ -441,18 +640,37 @@ fn account_deletion_submit_and_readonly_wallet_recovery_have_distinct_authority(
 
 #[test]
 fn card_avatar_is_exact_authenticated_media_and_never_anonymous_or_a_full_profile_alias() {
-    use citizenserve::server::gate::{self,Classification,policy::CidRule};
-    let url="https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/avatar";
-    assert!(matches!(gate::classify(gate_input("GET",url)),Classification::Reject(_)));
-    let mut input=gate_input("GET",url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
-    let Classification::Cid(entry)=gate::classify(input) else {panic!("名片头像须为当前会话媒体")};
-    entry.require_cid(CidRule::Avatar).unwrap();assert!(entry.require_cid(CidRule::Business).is_err());assert!(entry.open().is_err());
+    use citizenserve::server::gate::{self, policy::CidRule, Classification};
+    let url = "https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/avatar";
+    assert!(matches!(
+        gate::classify(gate_input("GET", url)),
+        Classification::Reject(_)
+    ));
+    let mut input = gate_input("GET", url);
+    input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+    let Classification::Cid(entry) = gate::classify(input) else {
+        panic!("名片头像须为当前会话媒体")
+    };
+    entry.require_cid(CidRule::Avatar).unwrap();
+    assert!(entry.require_cid(CidRule::Business).is_err());
+    assert!(entry.open().is_err());
     assert!(entry.api().unwrap().protected());
     assert!(!gate::policy::requires_mls(entry.rule()));
     let old="https://registration.example.test/api/user/profiles/CN220-CTZN2-100000002-2026/assets/avatar";
-    let mut input=gate_input("GET",old);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");
-    assert!(matches!(gate::classify(input),Classification::Reject(e) if e.code=="invalid_mls_proof"));
-    for (method,url) in [("GET","https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/banner"),("POST",url)] {
-        let mut input=gate_input(method,url);input.authorization=Some("Bearer sqs_12121212121212121212121212121212");assert!(matches!(gate::classify(input),Classification::Reject(_)));
+    let mut input = gate_input("GET", old);
+    input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+    assert!(
+        matches!(gate::classify(input),Classification::Reject(e) if e.code=="invalid_mls_proof")
+    );
+    for (method, url) in [
+        (
+            "GET",
+            "https://registration.example.test/api/user/cards/CN220-CTZN2-100000002-2026/banner",
+        ),
+        ("POST", url),
+    ] {
+        let mut input = gate_input(method, url);
+        input.authorization = Some("Bearer sqs_12121212121212121212121212121212");
+        assert!(matches!(gate::classify(input), Classification::Reject(_)));
     }
 }

@@ -545,11 +545,17 @@ fn membership_is_independent_from_identity_and_chat_deadline_is_clipped() {
         created_at: 900_000,
         expires_at: 1_080_000,
     };
-    let authority = citizenserve::server::gate::identity::session_authority(
-        &identity,
-        &admission,
-        &device,
-        &session,
+    let authority = citizenserve::server::gate::identity::service_authority(
+        &citizenserve::user::ports::AuthContext {
+            loaded_at: 1_000_000,
+            identity: identity.clone(),
+            admission: Some(admission.clone()),
+            device: Some(device.clone()),
+            session: Some(session.clone()),
+            membership: None,
+            identity_synced_at: 1_000_000,
+            membership_synced_at: Some(1_000_000),
+        },
         &config(),
         1_000_000,
     )

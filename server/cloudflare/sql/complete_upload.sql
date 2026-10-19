@@ -1,5 +1,18 @@
--- usage 不因删除返还；预留状态保证并发 complete 只消费一次。
+-- 最新会员行和独立同步健康在原写事务复核；旧许可不能跨越降档、撤销或续费。
 -- statement
+INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT EXISTS(
+ SELECT 1 FROM square_memberships m
+ JOIN scheduler_leases h ON h.lease_key='sync:membership:'||json_extract(?1,'$.auth.chain_scope')
+ JOIN membership_projection_cursor c ON c.cursor_id=1 AND c.finalized_block_number>=h.last_slot
+ WHERE m.cid_number=json_extract(?1,'$.auth.cid_number')
+ AND m.membership_level=json_extract(?1,'$.membership_level')
+ AND m.subscription_status=json_extract(?1,'$.membership_status') AND m.subscription_status IN ('active','cancelled')
+ AND m.paid_until=json_extract(?1,'$.paid_until') AND m.paid_until>json_extract(?1,'$.auth.now')
+ AND m.last_charged_at=json_extract(?1,'$.period_start') AND m.finalized_block_number=json_extract(?1,'$.membership_block')
+ AND h.updated_at>0 AND h.updated_at<=json_extract(?1,'$.auth.now')
+ AND h.updated_at+json_extract(?1,'$.auth.sync_health_millis')>json_extract(?1,'$.auth.now'));
+-- statement
+-- usage 不因删除返还；预留状态保证并发 complete 只消费一次。
 INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT (json_extract(?1,'$.membership_checked')<=json_extract(?1,'$.auth.now') AND json_extract(?1,'$.auth.now')<json_extract(?1,'$.membership_deadline') AND json_extract(?1,'$.paid_until')>MAX(json_extract(?1,'$.auth.now'),json_extract(?1,'$.chain_time')) AND json_extract(?1,'$.period_start')<=json_extract(?1,'$.paid_until'));
 -- statement
 INSERT INTO square_uploads(upload_id) SELECT NULL WHERE NOT (EXISTS(SELECT 1 FROM square_uploads u WHERE u.upload_id=json_extract(?1,'$.upload.upload_id') AND u.cid_number=json_extract(?1,'$.auth.cid_number') AND u.post_id=json_extract(?1,'$.upload.post_id') AND u.manifest_hash=json_extract(?1,'$.upload.manifest_hash') AND (u.status='completed' OR (u.status IN ('prepared','uploading') AND u.expires_at>json_extract(?1,'$.auth.now')))));

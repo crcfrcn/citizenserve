@@ -247,25 +247,34 @@ fn authorization_checks_all_current_facts() {
         attempts: 1,
     };
     assert!(
-        AuthorizedEndpoint::from_facts(&i, &d, e.clone(), true, true, 1_000_001)
+        AuthorizedEndpoint::from_facts(&i, &d, e.clone(), true, true, 1_000_001, 1_060_000)
             .unwrap()
             .is_some()
     );
     for (admission, source) in [(false, true), (true, false)] {
-        assert!(
-            AuthorizedEndpoint::from_facts(&i, &d, e.clone(), admission, source, 1_000_001)
-                .unwrap()
-                .is_none()
-        );
+        assert!(AuthorizedEndpoint::from_facts(
+            &i,
+            &d,
+            e.clone(),
+            admission,
+            source,
+            1_000_001,
+            1_060_000
+        )
+        .unwrap()
+        .is_none());
     }
     e.endpoint_revision = 2;
     assert!(
-        AuthorizedEndpoint::from_facts(&i, &d, e, true, true, 1_000_001)
+        AuthorizedEndpoint::from_facts(&i, &d, e.clone(), true, true, 1_000_001, 1_060_000)
             .unwrap()
             .is_none()
     );
     i.authoritative_current = false;
-    assert!(AuthorizedEndpoint::from_facts(&i, &d, endpoint(), true, true, 1_000_001).is_err());
+    assert!(
+        AuthorizedEndpoint::from_facts(&i, &d, e.clone(), true, true, 1_000_001, 1_060_000).is_ok()
+    );
+    assert!(AuthorizedEndpoint::from_facts(&i, &d, e, true, true, 1_060_000, 1_060_000).is_err());
 }
 #[test]
 fn payload_public_and_size_limit() {

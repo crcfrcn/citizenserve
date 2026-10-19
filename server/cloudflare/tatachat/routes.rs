@@ -75,7 +75,11 @@ async fn public_key(env: &Env) -> Result<[u8; 32]> {
         .try_into()
         .map_err(|_| Error::StorageUnavailable)
 }
-pub(crate) async fn authorize(request: &Request, env: &Env, host: &Host) -> Result<Access> {
+pub(crate) async fn verify(
+    request: &Request,
+    env: &Env,
+    host: &Host,
+) -> Result<citizenserve::tatachat::auth::VerifiedCredential> {
     let header = request
         .headers()
         .get("authorization")
@@ -94,10 +98,32 @@ pub(crate) async fn authorize(request: &Request, env: &Env, host: &Host) -> Resu
         config::now(),
     )
     .map_err(super::host_error)?;
-    verified.authorize(host).await
+    Ok(verified)
 }
-pub(crate) async fn handle(request: &mut Request, env: &Env, entry: &citizenserve::server::gate::Entry) -> Result<Response> {
-    entry.require_cid(citizenserve::server::gate::policy::CidRule::Chat).map_err(super::host_error)?;
+pub(crate) async fn authorize(request: &Request, env: &Env, host: &Host) -> Result<Access> {
+    let access = verify(request, env, host).await?.authorize(host).await?;
+    // 属主先由原门禁确认；CID键独立于IP，幂等分块也必须受此快速挡板约束。
+    crate::subject_rate(
+        env,
+        if request.path() == "/api/tatachat/realtime" {
+            "RATE_WRITE"
+        } else {
+            "RATE_READ"
+        },
+        &access.actor().user_id,
+    )
+    .await
+    .map_err(super::host_error)?;
+    Ok(access)
+}
+pub(crate) async fn handle(
+    request: &mut Request,
+    env: &Env,
+    entry: &citizenserve::server::gate::Entry,
+) -> Result<Response> {
+    entry
+        .require_cid(citizenserve::server::gate::policy::CidRule::Chat)
+        .map_err(super::host_error)?;
     if !config::available(env) {
         return Err(Error::StorageUnavailable);
     }

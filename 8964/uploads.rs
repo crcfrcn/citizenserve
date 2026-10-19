@@ -5,7 +5,7 @@ use super::{
     upload_validation::{self, Item, PostType},
 };
 use crate::{
-    chain::subscription::Facts,
+    membership::gate::Permit,
     shared::{crypto, Error, Result},
     user::profile_service::Authorization,
 };
@@ -76,7 +76,7 @@ pub trait Repository {
         &self,
         auth: &Authorization,
         upload: &Upload,
-        current: &Facts,
+        current: &Permit,
     ) -> impl Future<Output = Result<()>> + Send;
     fn get(
         &self,
@@ -92,7 +92,7 @@ pub trait Repository {
         &self,
         auth: &Authorization,
         upload: &Upload,
-        current: &Facts,
+        current: &Permit,
     ) -> impl Future<Output = Result<()>> + Send;
     fn start_delete(
         &self,
@@ -122,7 +122,7 @@ pub async fn prepare<R: Repository, S: Storage>(
     storage: &S,
     auth: &Authorization,
     input: Prepare,
-    current: &Facts,
+    current: &Permit,
     entropy: [u8; 32],
 ) -> Result<Value> {
     let level = current.level(auth.now())?;
@@ -188,7 +188,7 @@ pub async fn put_manifest<R: Repository, S: Storage>(
     auth: &Authorization,
     id: &str,
     raw: Vec<u8>,
-    current: &Facts,
+    current: &Permit,
 ) -> Result<Value> {
     let u = get(repo, auth, id).await?;
     u.writable(auth.now())?;
@@ -255,7 +255,7 @@ pub async fn complete<R: Repository, S: Storage>(
     auth: &Authorization,
     id: &str,
     input: Complete,
-    current: &Facts,
+    current: &Permit,
 ) -> Result<Value> {
     let u = get(repo, auth, id).await?;
     let level = current.level(auth.now())?;

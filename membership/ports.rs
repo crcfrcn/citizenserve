@@ -1,4 +1,4 @@
-use crate::{chain::subscription::Current, shared::Result, user::profile_service::Authorization};
+use crate::{shared::Result, user::profile_service::Authorization};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -12,6 +12,27 @@ pub struct Usage {
     pub active_uploads: u32,
 }
 pub trait Repository {
+    fn current(&self, _cid: &str) -> impl Future<Output = Result<Option<super::Record>>> + Send {
+        async {
+            Err(crate::shared::Error::new(
+                503,
+                "membership_verification_unavailable",
+            ))
+        }
+    }
+    fn creator_plans(
+        &self,
+        _auth: &Authorization,
+        _cid: &str,
+    ) -> impl Future<Output = Result<serde_json::Value>> + Send {
+        async {
+            Err(crate::shared::Error::new(
+                503,
+                "membership_verification_unavailable",
+            ))
+        }
+    }
+
     fn cleanup_notice(
         &self,
         auth: &Authorization,
@@ -29,7 +50,7 @@ pub trait Repository {
     fn overview(
         &self,
         auth: &Authorization,
-        current: &Current,
+        current: &super::Record,
     ) -> impl Future<Output = Result<super::creator::Overview>> + Send;
     fn cursor(
         &self,

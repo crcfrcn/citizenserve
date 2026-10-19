@@ -1,7 +1,10 @@
 //! 十二类命令的唯一通用执行入口，返回提交后的响应和可丢失实时加速事件。
 use super::{
     attachment,
-    auth::{ports::Host, Device},
+    auth::{
+        ports::{Host, ResourceCost},
+        Device,
+    },
     key, mailbox,
     protocol::{
         self,
@@ -40,25 +43,59 @@ where
         self.limits.validate()?;
         session.check(self.host).await?;
         let actor = session.access().actor().clone();
-        let frame=protocol::decode_chat_frame(bytes,self.limits.max_frame_bytes)?;
-        let attachment=matches!(frame.body.as_ref(),Some(protocol::chat_frame::Body::BeginAttachment(_)|protocol::chat_frame::Body::CompleteAttachment(_)));
-        let scoped=if attachment {
-            let maximum=self.host.attachment_limit(session.access().snapshot()).await?;
-            Some(session.access().for_attachments(maximum,self.host.now_millis())?)
-        }else{None};
+        let frame = protocol::decode_chat_frame(bytes, self.limits.max_frame_bytes)?;
+        let attachment = matches!(
+            frame.body.as_ref(),
+            Some(
+                protocol::chat_frame::Body::BeginAttachment(_)
+                    | protocol::chat_frame::Body::CompleteAttachment(_)
+            )
+        );
+        let scoped = if attachment {
+            let maximum = self
+                .host
+                .attachment_limit(session.access().snapshot())
+                .await?;
+            Some(
+                session
+                    .access()
+                    .for_attachments(maximum, self.host.now_millis())?,
+            )
+        } else {
+            None
+        };
         // 独立持有权限快照，解析限速器时不借用整个可变会话。
-        let base=session.access().clone();
-        let access=scoped.as_ref().unwrap_or(&base);
-        let maximum=if attachment {access.effective_max_attachment_bytes(self.limits.max_attachment_bytes)?}else{self.limits.max_attachment_bytes};
+        let base = session.access().clone();
+        let access = scoped.as_ref().unwrap_or(&base);
+        let maximum = if attachment {
+            access.effective_max_attachment_bytes(self.limits.max_attachment_bytes)?
+        } else {
+            self.limits.max_attachment_bytes
+        };
         // 会员I/O之后读取执行时钟；不把旧的请求开始时间传入新派生许可。
         let now = self.host.now_millis();
-        let command = parse_control_command(
-            frame,
-            &actor,
-            now,
-            maximum,
-            &mut session.limits,
-        )?;
+        let command = parse_control_command(frame, &actor, now, maximum, &mut session.limits)?;
+        if !matches!(&command, Command::Ping { .. }) {
+            let deliveries = match &command {
+                Command::SendMessage(message) => message.deliveries.len() as u64,
+                _ => 0,
+            };
+            // 原帧已包含各设备密文，不再次加算；附件正文另扣传输预算。
+            self.host
+                .consume(
+                    access.snapshot(),
+                    ResourceCost::Command {
+                        frame_bytes: bytes.len() as u64,
+                        deliveries,
+                        begin_attachment: matches!(&command, Command::BeginAttachment(_)),
+                        read_only: matches!(
+                            &command,
+                            Command::ResolveKeyPackages { .. } | Command::SyncMessages { .. }
+                        ),
+                    },
+                )
+                .await?;
+        }
         let mut notifications = Vec::new();
         let frame = match command {
             Command::Ping { sent_at_millis } => protocol::pong_frame(sent_at_millis, now),

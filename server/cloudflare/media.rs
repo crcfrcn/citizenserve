@@ -77,85 +77,182 @@ impl R2Storage {
 /// 业务媒体在统一门禁的CID分支内读取；HEAD/Range/条件请求同样先验身份，禁止裸域直出。
 /// 正文直接交给运行时流式交付，不把整段视频读入Rust内存。
 pub(crate) async fn serve(
-    request: &worker::Request, env: &worker::Env,
-    entry: &citizenserve::server::gate::Entry, key: &str,
+    request: &worker::Request,
+    env: &worker::Env,
+    entry: &citizenserve::server::gate::Entry,
+    key: &str,
 ) -> Result<worker::Response> {
     use citizenserve::{
         server::gate,
-        user::{auth::session, ports::AuthRepository, profile_service, projection},
+        user::{auth::session, ports::AuthRepository, profile_service},
     };
     entry.require_cid(gate::policy::CidRule::Media)?;
     if entry.endpoint() != &gate::request::Endpoint::Media(key.into()) {
-        return Err(Error::new(403,"gate_scope_mismatch"));
+        return Err(Error::new(403, "gate_scope_mismatch"));
     }
-    crate::external_rate(request,env,"RATE_READ").await?;
+    crate::external_rate(request, env, "RATE_READ").await?;
     let token = crate::bearer(request)?;
     let hash = session::hash(&token)?;
-    let db = env.d1("DB").map_err(|_|fail())?;
-    let auth = crate::repositories::auth::D1Auth { db:env.d1("DB").map_err(|_|fail())? };
-    let current = auth.session(&hash).await?.ok_or(Error::new(401,"invalid_session"))?;
+    let db = env.d1("DB").map_err(|_| fail())?;
+    let auth = crate::repositories::auth::D1Auth {
+        db: env.d1("DB").map_err(|_| fail())?,
+    };
     let config = crate::config(env)?;
-    let rpc = crate::chain::Chain::configured(env)?;
-    let identities = crate::repositories::identity::D1Identities { db:env.d1("DB").map_err(|_|fail())? };
-    let identity = projection::current(&rpc,&identities,&current.account_id,&config.chain_scope,js_sys::Date::now() as u64,false).await?;
-    let device = auth.device(&identity.cid_number,&current.device_id).await?.ok_or(Error::new(401,"device_not_registered"))?;
-    let admission = auth.admission(&identity.cid_number).await?.ok_or(Error::new(403,"registration_required"))?;
-    let authority = gate::identity::session_authority(&identity,&admission,&device,&current,&config,js_sys::Date::now() as u64)?;
-    let authorization = profile_service::Authorization::new(&authority,&config,&token,js_sys::Date::now() as u64)?;
-    let facts=citizenserve::chain::subscription::for_authority(&rpc,&authority,js_sys::Date::now() as u64).await?;
-    let operation=citizenserve::membership::policy::Operation::Media(key.into());
-    let permit=citizenserve::membership::gate::authorize(&authority,operation.clone(),Some(&facts),js_sys::Date::now() as u64)?;
-    let parts:Vec<_>=key.split('/').collect();
-    #[derive(serde::Deserialize)] struct Published { post_id:String }
+    let context = auth
+        .context(
+            citizenserve::user::ports::ContextKey::Session(&hash),
+            &config,
+        )
+        .await?
+        .ok_or(Error::new(401, "invalid_session"))?;
+    let identity = &context.identity;
+    let authority =
+        gate::identity::service_authority(&context, &config, js_sys::Date::now() as u64)?;
+    let authorization = profile_service::Authorization::new(
+        &authority,
+        &config,
+        &token,
+        js_sys::Date::now() as u64,
+    )?;
+    let operation = citizenserve::membership::policy::Operation::Media(key.into());
+    let permit = citizenserve::membership::gate::authorize(
+        &authority,
+        operation.clone(),
+        context.membership.as_ref(),
+        js_sys::Date::now() as u64,
+    )?;
+    crate::subject_rate(env, "RATE_READ", authorization.cid()).await?;
+    let parts: Vec<_> = key.split('/').collect();
+    #[derive(serde::Deserialize)]
+    struct Published {
+        post_id: String,
+    }
     let post:Option<Published> = crate::repositories::first(&db,
         "SELECT post_id FROM square_posts WHERE cid_number=?1 AND post_id=?2 AND post_state='published'",
         &[JsValue::from_str(parts[1]),JsValue::from_str(parts[3])]).await?;
-    if post.is_none_or(|p|p.post_id!=parts[3]) { return Err(Error::new(404,"post_not_found")); }
-    let bucket = env.bucket("SQUARE_PUBLIC_MEDIA").map_err(|_|fail())?;
-    let meta = bucket.head(key).await.map_err(|_|fail())?.ok_or(Error::new(404,"media_not_found"))?;
-    if meta.size()==0 {return Err(Error::new(404,"media_not_found"));}
-    let content_type=meta.http_metadata().content_type.ok_or_else(fail)?;
-    if content_type != if key.ends_with(".mp4") {"video/mp4"} else {"image/webp"} {return Err(fail());}
-    let etag=meta.http_etag();
-    let header=|name|request.headers().get(name).map_err(|_|fail());
-    let if_range=header("if-range")?;
-    let raw_range=header("range")?;
-    let partial=raw_range.is_some()&&if_range.as_deref().is_none_or(|v|v==etag);
-    let range=media::range(if partial {raw_range.as_deref()} else {None},meta.size())?;
-    let unchanged=header("if-none-match")?.is_some_and(|v|v.split(',').any(|s|s.trim()==etag||s.trim()=="*"));
-    let mut response=if unchanged {worker::Response::empty().map_err(|_|fail())?.with_status(304)}
-        else if request.method()==Method::Head {worker::Response::empty().map_err(|_|fail())?}
-        else {
-            let mut get=bucket.get(key);
-            if partial {get=get.range(Range::OffsetWithLength{offset:range.offset,length:range.length});}
-            let object=get.execute().await.map_err(|_|fail())?.ok_or(Error::new(404,"media_not_found"))?;
-            if object.etag()!=meta.etag() {return Err(Error::new(409,"media_object_changed"));}
-            worker::Response::from_body(object.body().ok_or_else(fail)?.response_body().map_err(|_|fail())?).map_err(|_|fail())?
-        };
+    if post.is_none_or(|p| p.post_id != parts[3]) {
+        return Err(Error::new(404, "post_not_found"));
+    }
+    let budgets = crate::repositories::membership::D1Membership {
+        db: env.d1("DB").map_err(|_| fail())?,
+    };
+    // 请求与字节分开：HEAD/304也可能触及R2，先扣请求；只有正文GET再扣字节。
+    budgets.reserve_media(&authorization, &permit, None).await?;
+    let bucket = env.bucket("SQUARE_PUBLIC_MEDIA").map_err(|_| fail())?;
+    let meta = bucket
+        .head(key)
+        .await
+        .map_err(|_| fail())?
+        .ok_or(Error::new(404, "media_not_found"))?;
+    if meta.size() == 0 {
+        return Err(Error::new(404, "media_not_found"));
+    }
+    let content_type = meta.http_metadata().content_type.ok_or_else(fail)?;
+    if content_type
+        != if key.ends_with(".mp4") {
+            "video/mp4"
+        } else {
+            "image/webp"
+        }
+    {
+        return Err(fail());
+    }
+    let etag = meta.http_etag();
+    let header = |name| request.headers().get(name).map_err(|_| fail());
+    let if_range = header("if-range")?;
+    let raw_range = header("range")?;
+    let partial = raw_range.is_some() && if_range.as_deref().is_none_or(|v| v == etag);
+    let range = media::range(
+        if partial { raw_range.as_deref() } else { None },
+        meta.size(),
+    )?;
+    let unchanged = header("if-none-match")?
+        .is_some_and(|v| v.split(',').any(|s| s.trim() == etag || s.trim() == "*"));
+    let mut response = if unchanged {
+        worker::Response::empty()
+            .map_err(|_| fail())?
+            .with_status(304)
+    } else if request.method() == Method::Head {
+        worker::Response::empty().map_err(|_| fail())?
+    } else {
+        budgets
+            .reserve_media(&authorization, &permit, Some(range.length))
+            .await?;
+        let mut get = bucket.get(key);
+        if partial {
+            get = get.range(Range::OffsetWithLength {
+                offset: range.offset,
+                length: range.length,
+            });
+        }
+        let object = get
+            .execute()
+            .await
+            .map_err(|_| fail())?
+            .ok_or(Error::new(404, "media_not_found"))?;
+        if object.etag() != meta.etag() {
+            return Err(Error::new(409, "media_object_changed"));
+        }
+        worker::Response::from_body(
+            object
+                .body()
+                .ok_or_else(fail)?
+                .response_body()
+                .map_err(|_| fail())?,
+        )
+        .map_err(|_| fail())?
+    };
     // 对象I/O期间仍可能注销或换绑；使用原授权view在交付前复核当前事实。
-    let now=js_sys::Date::now() as u64;
-    identity.require_current(now)?;
-    let institution=serde_json::to_value(identity.institution).map_err(|_|fail())?;
-    #[derive(serde::Deserialize)] struct Live { session_token_hash:String }
+    let now = js_sys::Date::now() as u64;
+    authority.require_current(now)?;
+    let institution = serde_json::to_value(identity.institution).map_err(|_| fail())?;
+    #[derive(serde::Deserialize)]
+    struct Live {
+        session_token_hash: String,
+    }
     let live:Option<Live>=crate::repositories::first(&db,
-        "SELECT session_token_hash FROM authorized_business_sessions WHERE session_token_hash=?1 AND cid_number=?2 AND account_id=?3 AND binding_revision=?4 AND device_id=?5 AND registration_scope=?6 AND service_origin=?7 AND chain_scope=?8 AND institution=?9 AND created_at<=?10 AND expires_at>?10 AND checked_at_millis<=?10 AND verification_deadline_millis>?10",
+        "SELECT session_token_hash FROM authorized_business_sessions WHERE session_token_hash=?1 AND cid_number=?2 AND account_id=?3 AND binding_revision=?4 AND device_id=?5 AND registration_scope=?6 AND service_origin=?7 AND chain_scope=?8 AND institution=?9 AND created_at<=?10 AND expires_at>?10 AND identity_synced_at>0 AND identity_synced_at<=?10 AND identity_synced_at+?11>?10",
         &[JsValue::from_str(&hash),JsValue::from_str(authorization.cid()),JsValue::from_str(authorization.account()),
         JsValue::from_f64(authorization.revision() as f64),JsValue::from_str(authorization.device()),
         JsValue::from_str(&config.registration_scope),JsValue::from_str(&config.service_origin),JsValue::from_str(&config.chain_scope),
-        JsValue::from_str(institution.as_str().ok_or_else(fail)?),JsValue::from_f64(now as f64)]).await?;
-    if live.is_none_or(|v|v.session_token_hash!=hash) {return Err(Error::new(401,"invalid_session"));}
-    permit.require(&authorization,&operation,js_sys::Date::now() as u64)?;
-    if !unchanged && request.method()!=Method::Head {
-        let id=crypto::hex(&crate::runtime::random::<16>()?);
-        crate::repositories::membership::D1Membership{db:env.d1("DB").map_err(|_|fail())?}.meter(&authorization,&permit,"delivery_bytes",range.length,key,&id).await?;
+        JsValue::from_str(institution.as_str().ok_or_else(fail)?),JsValue::from_f64(now as f64),JsValue::from_f64(gate::policy::SYNC_HEALTH_MILLIS as f64)]).await?;
+    if live.is_none_or(|v| v.session_token_hash != hash) {
+        return Err(Error::new(401, "invalid_session"));
     }
-    if partial&&!unchanged {response=response.with_status(206);}
-    for (name,value) in [("content-type",content_type),("etag",etag),("accept-ranges","bytes".into()),("cache-control","private, no-store".into())] {
-        response.headers_mut().set(name,&value).map_err(|_|fail())?;
+    permit.require(&authorization, &operation, js_sys::Date::now() as u64)?;
+    if partial && !unchanged {
+        response = response.with_status(206);
+    }
+    for (name, value) in [
+        ("content-type", content_type),
+        ("etag", etag),
+        ("accept-ranges", "bytes".into()),
+        ("cache-control", "private, no-store".into()),
+    ] {
+        response
+            .headers_mut()
+            .set(name, &value)
+            .map_err(|_| fail())?;
     }
     if !unchanged {
-        response.headers_mut().set("content-length",&range.length.to_string()).map_err(|_|fail())?;
-        if partial {response.headers_mut().set("content-range",&format!("bytes {}-{}/{}",range.offset,range.offset+range.length-1,meta.size())).map_err(|_|fail())?;}
+        response
+            .headers_mut()
+            .set("content-length", &range.length.to_string())
+            .map_err(|_| fail())?;
+        if partial {
+            response
+                .headers_mut()
+                .set(
+                    "content-range",
+                    &format!(
+                        "bytes {}-{}/{}",
+                        range.offset,
+                        range.offset + range.length - 1,
+                        meta.size()
+                    ),
+                )
+                .map_err(|_| fail())?;
+        }
     }
     Ok(response)
 }
