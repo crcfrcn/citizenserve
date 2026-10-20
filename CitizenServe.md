@@ -752,3 +752,5 @@ begin、upload、complete、download均比较整份密文与当前原明文上�
 
 
 第二步构建约定：缓存原子领取，持有时使用固定源码投影和原文件时间戳，以复用Cargo实际产物；缓存占用立即使用本轮独占目录。所有原锁不变。控制台所属接入先经宿主执行本仓构建回归与本接入回归，再派发所属工作流。完整SDK含Rust/Dart、Android原生与Flutter、Apple Core/Flutter XCTest以及桌面Host和独立消费者回归。SDK内部传递Artifact已获准增加目标后缀，最终完整包/Release/Tag仍为产品·SDK·版本。当前尚未实际验收。
+
+新正式版上传并回读后才删除旧正式版与对应Tag；旧版本清理失败必须使本轮失败，不能只打印告警后报告整体成功。
