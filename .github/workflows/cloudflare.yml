@@ -195,7 +195,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" | jq -e '.object.type=="commit" and .object.sha==env.GITHUB_SHA' >/dev/null
           trap - ERR
           # 新正式版本完整确认后才清理同一SDK命名空间的旧版本；失败明确保留重试。
-          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|.tag_name|select(startswith("公民服务端·Cloudflare·v"))' > "$RUNNER_TEMP/sdk-old-tags.txt"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|.tag_name|select(startswith("公民服务端·Cloudflare·v") or startswith("citizenserve-cloudflare-v"))' > "$RUNNER_TEMP/sdk-old-tags.txt"
           while IFS= read -r old; do
             if [ "$old" != "$SDK_NAME" ]; then gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || printf '旧版本清理未完成：%s\n' "$old" >&2; fi
           done < "$RUNNER_TEMP/sdk-old-tags.txt"

@@ -77,9 +77,11 @@ const cargo=readFileSync(new URL('../Cargo.toml',import.meta.url),'utf8');
 export const releaseMembers=Object.freeze(JSON.parse(/^release_members = '''([^']+)'''/mu.exec(cargo)[1]));
 export function automationDisplayName(platform,version){if(platform!=='cloudflare'||typeof version!=='string'||version.length>64||!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version))throw Error('服务端平台或版本无效');return '公民服务端·Cloudflare·v'+version;}
 export function releaseIdentity(){return {prefix:'公民服务端·Cloudflare·v'};}
+// 首次采用准确显示名时承接已核实正式版本v1.0.14，候选为v1.0.15；Rust包与原锁身份不变。
+export const initialVersion='1.0.15';
 export function nextVersion(runs){
- const latest=[...runs].filter(run=>run.status==='completed'&&run.conclusion==='success').sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at)||b.id-a.id)[0];
- if(!latest)return /^version = "([^"\n]+)"$/mu.exec(cargo)[1];
+ const latest=[...runs].filter(run=>run.status==='completed'&&run.conclusion==='success'&&run.display_title?.startsWith(releaseIdentity().prefix)).sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at)||b.id-a.id)[0];
+ if(!latest)return initialVersion;
  const prefix=releaseIdentity().prefix,version=latest.display_title?.startsWith(prefix)?latest.display_title.slice(prefix.length):'';automationDisplayName('cloudflare',version);
  const parts=version.split('.');parts[2]=String(BigInt(parts[2])+1n);const next=parts.join('.');automationDisplayName('cloudflare',next);return next;
 }

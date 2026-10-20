@@ -8,6 +8,7 @@ import {nextVersion,retainedRuns,automationDisplayName,releaseMembers} from '../
 function fixture(t){const base=join(root,'target/test');mkdirSync(base,{recursive:true});const work=mkdtempSync(join(base,'regression-'));t.after(()=>rmSync(work,{recursive:true,force:true}));return work;}
 test('只从最新成功版本加0.0.1，失败和活动任务不占版本',()=>{
  const row=(id,version,conclusion,status='completed')=>({id,display_title:'公民服务端·Cloudflare·v'+version,conclusion,status,updated_at:new Date(id*1000).toISOString()});
+ assert.equal(nextVersion([{id:38522208943,display_title:'公民服务端·Cloudflare',status:'completed',conclusion:'success'}]),'1.0.15');
  const rows=[row(1,'1.0.9','success'),row(2,'1.0.10','failure'),row(3,'1.0.10',null,'in_progress')];assert.equal(nextVersion(rows),'1.0.10');assert.deepEqual([...retainedRuns([...rows,row(0,'1.0.8','success')])].sort(),[1,2,3]);
  for(const version of ['1.0','01.0.0','1.0.0\n','-1.0.0'])assert.throws(()=>automationDisplayName('cloudflare',version));assert.throws(()=>automationDisplayName('sdk','1.0.0'));
 });
