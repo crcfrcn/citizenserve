@@ -6,11 +6,11 @@
 
 `.github/workflows/cloudflare.yml` 直接准备官方工具、执行本仓入口，并保留Cargo元数据声明的九件部署成员：Worker JS/WASM、两份SQL、Wrangler配置及原始Cargo/npm工具链声明和锁。正式附件保持 `citizenserve-cloudflare-release.tgz`、`release-manifest.json`、`SHA256SUMS`，官方附件标签、Run、Job、Artifact、Tag和Release统一为“公民服务端·Cloudflare·vX.Y.Z”，固定工作流为“公民服务端·Cloudflare”。三件附件上传后逐件下载对拍，Tag须指向本次SHA，正式Release不得为草稿或预发布。
 
-版本只按最新成功Run加0.0.1，失败不增加。首次采用准确显示名时，候选种子为v1.0.15，承接既有正式版v1.0.14；原Rust包和依赖锁身份不改。新正式包验收完成后，同平台旧命名Release与Tag一并清理。控制台调度、前检、观察、取消和原Run恢复仅归 `tata/citizenserve.mjs`；前检通过通用宿主执行本仓构建与接入回归，不改控制台通用模块。仅保留最新成功和失败Run，活动Run不删除。缓存失败、超时和占用不阻塞真实编译；原锁缺件由官方工具下载，真实失败仍须失败。所有本轮现场退出静止后清理。
+版本只按最新成功Run加0.0.1，失败不增加。首次采用准确显示名时，候选种子为v1.0.15，承接既有正式版v1.0.14；原Rust包和依赖锁身份不改。新正式包验收完成后，同平台旧命名Release与Tag一并清理。控制台调度、前检、观察、取消和原Run恢复仅归 `tata/citizenserve.mjs`；前检通过通用宿主执行本仓构建与接入回归，不改控制台通用模块。仅保留最新成功和失败Run，活动Run不删除。Worker工具直接按官方Cargo完整安装目录缓存，不把单个二进制存在与Cargo安装元数据混用；缺件使用锁定版本的官方cargo install --locked --force重建。缓存失败、超时和占用不阻塞真实编译；原锁缺件由官方工具下载，真实失败仍须失败。所有本轮现场退出静止后清理。
 
 `scripts/publish.mjs` 继续独立只读验真正式资产并生成现有Cloudflare部署候选；只调整纯命名函数的导入位置。实际部署仍需单独授权，本轮不部署。配置、对账开关与聊天云资源功能不改。LinuxARM仍为既有未实现展示入口，不新增执行流程。
 
-当前验收状态：旧入口已物理删除并原路径重建；代码与工作流完成静态检查，尚未运行本轮真实自动化，不宣称新Release、Tag或Worker正式包已生成。
+验收必须同时确认成功Run、准确Tag、非草稿非预发布Release和完整附件，并使用产品公开接口核验真实内容；任务与版本运行证据仅记唯一任务卡。
 
 ## 当前构建合同
 
