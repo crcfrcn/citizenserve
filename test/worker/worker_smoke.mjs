@@ -9,14 +9,15 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,generateKeyPairSync,sign,randomBytes} from 'node:crypto';
 import {testKeys,verifyJwt} from './push_crypto.mjs';
 const root=fileURLToPath(new URL('../../',import.meta.url));
-// 本机测试只加载本仓固定test资源视图；正式/既有入口继续按原模块解析。
-const require=createRequire(process.env.CITIZENSERVE_TEST_WORKER_DIR===join(root,'target/test/worker')?join(root,'target/test/npm/package.json'):import.meta.url);
+// npm依赖在本轮独立源码工程内按原锁安装。
+const require=createRequire(import.meta.url);
 const {Miniflare,convertV4MiniflareOptions}=require('miniflare');
-// 临时宿主仅接受本次源码快照内target/test/worker准确目录，禁止链接或外部产物。
+// 临时宿主只接受同一独占任务的Worker目录，禁止链接或外部产物。
 const testWorker=process.env.CITIZENSERVE_TEST_WORKER_DIR;
 const workerRoot=testWorker??join(root,'target/build/cloudflare/worker');
 if(testWorker!==undefined){
- if(testWorker!==join(root,'target/test/worker')||await realpath(testWorker)!==testWorker)throw Error('临时Worker宿主目录越界');
+ const work=process.env.CITIZENSERVE_TEST_WORK_DIR;
+ if(!work?.startsWith('/')||root!==process.env.CITIZENSERVE_TEST_PROJECT_DIR+'/'||testWorker!==join(work,'worker')||await realpath(testWorker)!==testWorker)throw Error('临时Worker宿主目录越界');
  for(const name of ['index.js','index_bg.wasm']){
   const file=join(testWorker,name),info=await lstat(file);
   if(!info.isFile()||info.isSymbolicLink()||await realpath(file)!==file)throw Error('临时Worker宿主文件无效');

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 公民服务发布独立消费成功自动化资产，执行既有Worker上传与部署回读；不创建Release或重建云资源。
 import {createHash} from 'node:crypto';
-import {automationDisplayName} from './build.mjs';
+import {automationDisplayName} from './config.mjs';
 import {gunzipSync} from 'node:zlib';
 import {spawn} from 'node:child_process';
 import {mkdir,mkdtemp,rm,writeFile,realpath,lstat,readFile} from 'node:fs/promises';

@@ -1,90 +1,210 @@
+# 公民服务端正式Worker；部署仍由独立授权入口执行。
 name: 公民服务端·Cloudflare
 run-name: 公民服务端·Cloudflare·v${{ inputs.version }}
 'on':
   workflow_dispatch:
     inputs:
       version:
-        description: 产品 Build 计算的候选版本
+        description: 从最新成功Run计算的候选版本
         required: true
         type: string
 concurrency:
-  group: citizenserve-cloudflare-release
+  group: ${{ github.repository }}-sdk
   cancel-in-progress: false
 permissions:
   contents: write
   actions: write
+env:
+  SDK_VERSION: ${{ inputs.version }}
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
 jobs:
-  test:
+  sdk:
     name: 公民服务端·Cloudflare·v${{ inputs.version }}
-    runs-on: xcode-27
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          ref: "${{ github.sha }}"
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        with:
-          node-version: 25.2.1
-      - name: 恢复本产品官方工具、依赖及编译缓存
-        id: compiler_cache
-        continue-on-error: true
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57
-        with:
-          path: |
-            ~/.local/share/product-resources/tools/archives
-            ~/.local/share/product-resources/tools/shared
-            ~/.local/share/product-resources/tools/parsers
-            ~/.local/share/product-resources/rely/archives
-            ~/.local/share/product-resources/rely/objects
-            ${{ runner.temp }}/citizenserve-cargo
-          key: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'package-lock.json', 'test/worker/package-lock.json', 'rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-
-      - name: 本产品完整测试
-        run: node scripts/build.mjs ci-test cloudflare
-  build:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: "${{ github.sha }}"
-          fetch-depth: 0
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - id: tools
+        name: 读取本产品工具声明
+        run: |
+          node --input-type=module -e 'import {tools} from "./scripts/config.mjs";for(const [name,value] of Object.entries(tools))console.log(name+"="+value)' >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: 25.2.1
-      - name: 恢复本产品官方工具、依赖及编译缓存
-        id: compiler_cache
+          node-version: ${{ steps.tools.outputs.node }}
+      - name: 恢复官方增量缓存
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809
         continue-on-error: true
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        timeout-minutes: 2
         with:
           path: |
-            ~/.local/share/product-resources/tools/archives
-            ~/.local/share/product-resources/tools/shared
-            ~/.local/share/product-resources/tools/parsers
-            ~/.local/share/product-resources/rely/archives
-            ~/.local/share/product-resources/rely/objects
-            ${{ runner.temp }}/citizenserve-cargo
-          key: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'package-lock.json', 'test/worker/package-lock.json', 'rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: citizenserve-cloudflare-${{ runner.os }}-${{ runner.arch }}-
-      - name: 调用产品编译并保存本次 Runner 输出
-        run: node scripts/build.mjs ci-build cloudflare
-      - name: 创建并回读 GitHub 正式产物
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/cache/rust
+            target/cache/protoc
+            target/cache/protocol
+            ~/.cache/.wasm-pack
+            ~/.cargo/bin/worker-build
+          key: sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.tools.outputs.rust }}-${{ hashFiles('Cargo.lock', 'scripts/config.mjs', 'test/worker/package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.tools.outputs.rust }}-${{ hashFiles('Cargo.lock', 'scripts/config.mjs', 'test/worker/package-lock.json') }}-
+          fail-on-cache-miss: false
+      - name: 准备官方工具和锁定SDK协议
         env:
-          GH_TOKEN: "${{ github.token }}"
-        run: node scripts/build.mjs ci-release cloudflare
-      - name: 保存本产品最新缓存
-        if: success() || failure()
+          PRODUCT_RUST: ${{ steps.tools.outputs.rust }}
+          PRODUCT_PROTOC: ${{ steps.tools.outputs.protoc }}
+          PRODUCT_WORKER: ${{ steps.tools.outputs.worker }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$PRODUCT_RUST" --profile minimal --target wasm32-unknown-unknown
+          mkdir -p target/cache
+          if ! worker-build --version 2>/dev/null | grep -Fxq "worker-build $PRODUCT_WORKER"; then cargo +"$PRODUCT_RUST" install worker-build --version "$PRODUCT_WORKER" --locked; fi
+          if [ ! -x target/cache/protoc/bin/protoc ]; then
+            curl --fail --location --proto '=https' --tlsv1.2 "https://github.com/protocolbuffers/protobuf/releases/download/v$PRODUCT_PROTOC/protoc-$PRODUCT_PROTOC-linux-x86_64.zip" -o "$RUNNER_TEMP/protoc.zip"
+            unzip -q "$RUNNER_TEMP/protoc.zip" -d target/cache/protoc
+          fi
+          node --input-type=module -e 'import {protocol} from "./scripts/config.mjs";console.log("repository="+protocol.repository);console.log("commit="+protocol.commit)' > "$RUNNER_TEMP/protocol.txt"
+          protocol_repo="$(sed -n 's/^repository=//p' "$RUNNER_TEMP/protocol.txt")"
+          protocol_commit="$(sed -n 's/^commit=//p' "$RUNNER_TEMP/protocol.txt")"
+          if [ ! -d target/cache/protocol/.git ]; then git init target/cache/protocol; fi
+          if ! git -C target/cache/protocol cat-file -e "$protocol_commit^{commit}"; then git -C target/cache/protocol fetch "https://github.com/$protocol_repo.git" "$protocol_commit"; fi
+          git -C target/cache/protocol checkout --detach --force "$protocol_commit"
+          printf 'PROTOC=%s/target/cache/protoc/bin/protoc\nTATACHATSDK_PROTOCOL_DIR=%s/target/cache/protocol/lib/protocol\nPYTHON=%s\n' "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" "$(command -v python3)" >> "$GITHUB_ENV"
+      - name: 核对候选版本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare.yml/runs?branch=main&event=workflow_dispatch&per_page=100" > "$RUNNER_TEMP/sdk-runs.json"
+          node --input-type=module - "$RUNNER_TEMP/sdk-runs.json" <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {nextVersion,automationDisplayName} from './scripts/config.mjs';
+          const rows=JSON.parse(readFileSync(process.argv[2],'utf8')).flatMap(page=>page.workflow_runs);
+          if(nextVersion(rows)!==process.env.SDK_VERSION)throw Error('候选版本已变化');
+          automationDisplayName('cloudflare',process.env.SDK_VERSION);
+          NODE
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: 运行本仓构建回归
+        run: node --test test/build.test.mjs
+      - name: 真实Rust与Worker测试、编译和完整正式包
+        id: build
+        run: |
+          set -euo pipefail
+          result="$(node scripts/build.mjs test)"
+          work="$(printf '%s' "$result" | jq -r .work)"
+          project="$(printf '%s' "$result" | jq -r .output)"
+          [[ "${work%/*}" = "$GITHUB_WORKSPACE/target/test" && "${work##*/}" =~ ^cloudflare-[A-Za-z0-9]+$ && "$project" = "$work/output" ]]
+          printf 'work=%s\n' "$work" >> "$GITHUB_OUTPUT"
+          name="公民服务端·Cloudflare·v$SDK_VERSION"
+          artifact="$RUNNER_TEMP/worker-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$artifact"
+          node --input-type=module - "$project" "$artifact" <<'NODE'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          import {join} from 'node:path';
+          import {createHash} from 'node:crypto';
+          import {releaseMembers,automationDisplayName} from './scripts/config.mjs';
+          const [project,artifact]=process.argv.slice(2),hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+          const manifest={schema:1,product_id:'citizenserve',platform:'cloudflare',software_version:process.env.SDK_VERSION,source_sha:process.env.GITHUB_SHA,producer_run_id:Number(process.env.GITHUB_RUN_ID),producer_run_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),assets:releaseMembers.map(path=>{const bytes=readFileSync(join(project,path));return {path,bytes:bytes.length,sha256:hash(bytes)};})};
+          writeFileSync(join(artifact,'release-manifest.json'),JSON.stringify(manifest)+'\n');
+          writeFileSync(process.env.RUNNER_TEMP+'/worker-members.txt',releaseMembers.join('\n')+'\n');
+          const proof={product_id:'citizenserve',platform:'cloudflare',software_version:process.env.SDK_VERSION,version:process.env.SDK_VERSION,producer_run_id:manifest.producer_run_id,producer_run_attempt:manifest.producer_run_attempt,run_id:manifest.producer_run_id,run_attempt:manifest.producer_run_attempt,git_commit_sha:process.env.GITHUB_SHA};
+          writeFileSync(process.env.RUNNER_TEMP+'/worker-notes.txt','<!-- automation:'+JSON.stringify(proof)+' -->\n');
+          NODE
+          tar --format=ustar -czf "$artifact/citizenserve-cloudflare-release.tgz" -C "$project" -T "$RUNNER_TEMP/worker-members.txt"
+          (cd "$artifact" && sha256sum citizenserve-cloudflare-release.tgz release-manifest.json > SHA256SUMS)
+          printf 'path=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+          printf 'SDK_NAME=%s\n' "$name" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 公民服务端·Cloudflare·v${{ inputs.version }}
+          path: ${{ steps.build.outputs.path }}
+          if-no-files-found: error
+          compression-level: 0
+      - name: 保存官方增量缓存
+        if: ${{ always() && steps.tools.outcome == 'success' }}
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809
         continue-on-error: true
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57
+        timeout-minutes: 2
         with:
           path: |
-            ~/.local/share/product-resources/tools/archives
-            ~/.local/share/product-resources/tools/shared
-            ~/.local/share/product-resources/tools/parsers
-            ~/.local/share/product-resources/rely/archives
-            ~/.local/share/product-resources/rely/objects
-            ${{ runner.temp }}/citizenserve-cargo
-          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/cache/rust
+            target/cache/protoc
+            target/cache/protocol
+            ~/.cache/.wasm-pack
+            ~/.cargo/bin/worker-build
+          key: sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.tools.outputs.rust }}-${{ hashFiles('Cargo.lock', 'scripts/config.mjs', 'test/worker/package-lock.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: 生成并核对正式Release与Tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_ARTIFACT_DIRECTORY: ${{ steps.build.outputs.path }}
+        run: |
+          set -euo pipefail
+          encoded="$(jq -rn --arg name "$SDK_NAME" '$name|@uri')"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/sdk-releases.json"
+          previous="$(jq '[.[][]|select(.tag_name==env.SDK_NAME)]' "$RUNNER_TEMP/sdk-releases.json")"
+          test "$(printf '%s' "$previous" | jq length)" -le 1
+          if [ "$(printf '%s' "$previous" | jq length)" -eq 1 ]; then
+            proof="$(printf '%s' "$previous" | jq '.[0].body|capture("<!-- automation:(?<proof>[^\\n]+) -->").proof|fromjson')"
+            old_run="$(printf '%s' "$proof" | jq -r .producer_run_id)"
+            old_attempt="$(printf '%s' "$proof" | jq -r .producer_run_attempt)"
+            old_sha="$(printf '%s' "$proof" | jq -r .git_commit_sha)"
+            printf '%s' "$proof" | jq -e '.product_id=="citizenserve" and .platform=="cloudflare" and .software_version==env.SDK_VERSION' >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$old_run/attempts/$old_attempt" | jq -e --arg sha "$old_sha" '.status=="completed" and .conclusion!="success" and .head_sha==$sha and .path==".github/workflows/cloudflare.yml"' >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" | jq -e --arg sha "$old_sha" '.object.type=="commit" and .object.sha==$sha' >/dev/null
+            gh release delete "$SDK_NAME" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          fi
+          # GraphQL变量由gh参数传入，查询字符串必须保持原文。
+          # shellcheck disable=SC2016
+          ref="$(gh api graphql -f query='query($owner:String!,$repo:String!,$tag:String!){repository(owner:$owner,name:$repo){ref(qualifiedName:$tag){target{oid}}}}' -f owner="$GITHUB_REPOSITORY_OWNER" -f repo="${GITHUB_REPOSITORY#*/}" -f tag="refs/tags/$SDK_NAME" --jq '.data.repository.ref.target.oid // ""')"
+          test -z "$ref"
+          tag_created=false
+          rollback() {
+            release_status=$?
+            id="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|select(.tag_name==env.SDK_NAME and .target_commitish==env.GITHUB_SHA)|select((.body|capture("<!-- automation:(?<proof>[^\\n]+) -->").proof|fromjson?|.producer_run_id)==(env.GITHUB_RUN_ID|tonumber))|.id')"
+            if [ -n "$id" ]; then gh release delete "$SDK_NAME" --repo "$GITHUB_REPOSITORY" --yes || printf '本次Release撤销未完成\n' >&2; fi
+            if [ "$tag_created" = true ]; then
+              if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" --jq .object.sha | grep -Fxq "$GITHUB_SHA"; then
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$encoded" || printf '本次Tag撤销未完成\n' >&2
+              fi
+            fi
+            exit "$release_status"
+          }
+          trap rollback ERR
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$SDK_NAME" -f sha="$GITHUB_SHA" > "$RUNNER_TEMP/sdk-tag.json"
+          tag_created=true
+          jq -e '.object.sha==env.GITHUB_SHA' "$RUNNER_TEMP/sdk-tag.json" >/dev/null
+          # GitHub会规范化下载文件名；官方label保留准确的产品、平台和版本显示名。
+          files=()
+          for file in "$SDK_ARTIFACT_DIRECTORY/"*; do case "$(basename "$file")" in *.tgz) label="$SDK_NAME.tgz" ;; *.json) label="$SDK_NAME.json" ;; SHA256SUMS) label="$SDK_NAME.sha256" ;; *) exit 1 ;; esac; files+=("$file#$label"); done
+          gh release create "$SDK_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" --title "$SDK_NAME" --notes-file "$RUNNER_TEMP/worker-notes.txt" --draft
+          back="$RUNNER_TEMP/sdk-readback-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$back"
+          gh release view "$SDK_NAME" --repo "$GITHUB_REPOSITORY" --json assets > "$RUNNER_TEMP/sdk-assets.json"
+          for file in "$SDK_ARTIFACT_DIRECTORY/"*; do
+            case "$(basename "$file")" in *.tgz) label="$SDK_NAME.tgz" ;; *.json) label="$SDK_NAME.json" ;; SHA256SUMS) label="$SDK_NAME.sha256" ;; *) exit 1 ;; esac
+            remote="$(jq -er --arg label "$label" '[.assets[]|select(.label==$label and .state=="uploaded")]|if length==1 then .[0].name else error("附件标签不唯一") end' "$RUNNER_TEMP/sdk-assets.json")"
+            gh release download "$SDK_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$remote" --output "$back/$label"
+            cmp "$file" "$back/$label"
+          done
+          gh release edit "$SDK_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$encoded" | jq -e '.draft==false and .prerelease==false and .published_at!=null and .name==env.SDK_NAME and .tag_name==env.SDK_NAME and .target_commitish==env.GITHUB_SHA and (.assets|length)==3' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$encoded" | jq -e '.object.type=="commit" and .object.sha==env.GITHUB_SHA' >/dev/null
+          trap - ERR
+          # 新正式版本完整确认后才清理同一SDK命名空间的旧版本；失败明确保留重试。
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|.tag_name|select(startswith("公民服务端·Cloudflare·v"))' > "$RUNNER_TEMP/sdk-old-tags.txt"
+          while IFS= read -r old; do
+            if [ "$old" != "$SDK_NAME" ]; then gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || printf '旧版本清理未完成：%s\n' "$old" >&2; fi
+          done < "$RUNNER_TEMP/sdk-old-tags.txt"
+      - name: 清理本轮SDK编译现场
+        continue-on-error: true
+        if: ${{ always() && steps.build.outputs.work != '' }}
+        env:
+          SDK_WORK_DIRECTORY: ${{ steps.build.outputs.work }}
+        run: |
+          [[ "${SDK_WORK_DIRECTORY%/*}" = "$GITHUB_WORKSPACE/target/test" && "${SDK_WORK_DIRECTORY##*/}" =~ ^cloudflare-[A-Za-z0-9]+$ ]]
+          test "$(cd "$SDK_WORK_DIRECTORY" && pwd -P)" = "$SDK_WORK_DIRECTORY"
+          rm -rf "$SDK_WORK_DIRECTORY"

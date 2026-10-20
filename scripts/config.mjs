@@ -68,3 +68,19 @@ export function describeConfiguration(){
     ||resourceBindings.some(name=>!source.includes('"'+name+'"')))throw Error('公民服务端运行配置与所属声明不一致');
   return {schema:1,product_id:'citizenserve',configuration:{id:'citizenserve',kind:'cloud',title:'服务端配置',items}};
 }
+
+// 编译和工作流共用所属产品的工具、协议与正式包声明。
+export const repository='crcfrcn/citizenserve';
+export const tools=Object.freeze({node:'25.2.1',rust:'1.97.1',protoc:'35.0',worker:'0.8.5',bindgen:'0.2.127',binaryen:'130'});
+export const protocol=Object.freeze({repository:'tuyutata/tatachatsdk',commit:'b0485cf0a2c0922791741a748fdec0a49003089f'});
+const cargo=readFileSync(new URL('../Cargo.toml',import.meta.url),'utf8');
+export const releaseMembers=Object.freeze(JSON.parse(/^release_members = '''([^']+)'''/mu.exec(cargo)[1]));
+export function automationDisplayName(platform,version){if(platform!=='cloudflare'||typeof version!=='string'||version.length>64||!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(version))throw Error('服务端平台或版本无效');return '公民服务端·Cloudflare·v'+version;}
+export function releaseIdentity(){return {prefix:'公民服务端·Cloudflare·v'};}
+export function nextVersion(runs){
+ const latest=[...runs].filter(run=>run.status==='completed'&&run.conclusion==='success').sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at)||b.id-a.id)[0];
+ if(!latest)return /^version = "([^"\n]+)"$/mu.exec(cargo)[1];
+ const prefix=releaseIdentity().prefix,version=latest.display_title?.startsWith(prefix)?latest.display_title.slice(prefix.length):'';automationDisplayName('cloudflare',version);
+ const parts=version.split('.');parts[2]=String(BigInt(parts[2])+1n);const next=parts.join('.');automationDisplayName('cloudflare',next);return next;
+}
+export function retainedRuns(rows){const keep=new Set(),states=new Set();for(const run of [...rows].sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at)||b.id-a.id)){if(run.status!=='completed'){keep.add(run.id);continue;}const state=run.conclusion==='success'?'success':'failed';if(!states.has(state)){states.add(state);keep.add(run.id);}}return keep;}
