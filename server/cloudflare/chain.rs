@@ -70,13 +70,13 @@ impl NetworkAsset {
 }
 impl Chain {
     pub fn available(env: &Env) -> bool {
-        env.var("CHAIN_URL")
+        env.var("CHAIN_URL").ok().is_some_and(|v| {
+            trusted_rpc_url(&v.to_string())
+                .is_ok_and(|url| url.path() == "/" && url.query().is_none())
+        }) && env
+            .var("CF_ACCESS_CLIENT_ID")
             .ok()
-            .is_some_and(|v| trusted_rpc_url(&v.to_string()).is_ok())
-            && env
-                .var("CF_ACCESS_CLIENT_ID")
-                .ok()
-                .is_some_and(|v| !v.to_string().is_empty())
+            .is_some_and(|v| !v.to_string().is_empty())
             && env
                 .secret("CHAIN_SECRET")
                 .ok()
@@ -238,7 +238,11 @@ impl Chain {
     pub async fn configured(env: &Env, purpose: Purpose) -> Result<Self> {
         let missing = || Error::new(503, "chain_not_configured");
         let url = env.var("CHAIN_URL").map_err(|_| missing())?.to_string();
-        trusted_rpc_url(&url)?;
+        // Node的RPC和静态资源共用HTTPS根端点，拒绝已失配的旧子路径配置。
+        let target = trusted_rpc_url(&url)?;
+        if target.path() != "/" || target.query().is_some() {
+            return Err(missing());
+        }
         let client_id = env
             .var("CF_ACCESS_CLIENT_ID")
             .map_err(|_| missing())?

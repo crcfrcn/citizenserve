@@ -87,6 +87,8 @@ async function outbound(req){
    if(mode==='limit')return new Response(new Uint8Array(128*1024).fill(32),{headers});
    return new Response(url.pathname==='/'?networkHTML:networkPNG,{headers});
   }
+  // 所有原生与Ethereum RPC都走Node根端点；静态GET已在上方独立分流。
+  assert.equal(url.pathname,'/');assert.equal(url.search,'');
   if(unknownChain)return new Response('{}',{status:503});
   if(slowChain>0){const round=slowChain--;if(round===4)firstLeaseExpiry=(await first("SELECT lease_expires_at FROM maintenance_jobs WHERE state='leased' AND artifact_owner IS NULL ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;await new Promise(resolve=>setTimeout(resolve,8000));if(round===1)renewedLeaseExpiry=(await first("SELECT lease_expires_at FROM maintenance_jobs WHERE state='leased' AND artifact_owner IS NULL ORDER BY updated_at DESC LIMIT 1")).lease_expires_at;}
   const {method,params,id:rid}=await req.json();receivedRpc.push(method);let result;
@@ -183,7 +185,7 @@ export async function queryCounts(reset=false){return (await worker.fetch('https
 export async function startWorker(extraBindings={},readLimit=1000){
  anchorTime=Date.now();
  mf=new Miniflare(convertV4MiniflareOptions({cf:false,workers:[{name:"citizenserve",modules:[{type:'ESModule',path:join(workerRoot,'_test_entry.mjs'),contents:instrumentedEntry},{type:'ESModule',path:join(workerRoot,'index.js')},{type:'CompiledWasm',path:join(workerRoot,'index_bg.wasm')}],modulesRoot:workerRoot,compatibilityDate:'2026-10-07',compatibilityFlags:['no_nodejs_global_timers'],
- bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test',CF_ACCESS_CLIENT_ID:'offline-test.access',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
+ bindings:{TATACHAT_QUEUE_NAME:'citizenserve-tatachat-test',WEB_ORIGIN:registration.service_origin,REGISTRATION_SCOPE:registration.registration_scope,TURNSTILE_SITEKEY:'0x4AAAAAAD0GQRiB2O3a0DYJ',CHAIN_GENESIS_HASH:fixture.genesis,CHAIN_URL:'https://chain.example.test/',CF_ACCESS_CLIENT_ID:'offline-test.access',CHAIN_SECRET:'offline-test',HASH_KEY:'synthetic-rate-key-for-worker-fixture',APNS_KEY:keys.apns,APNS_KID:'KEY1234567',APNS_TEAM:'TEAM123456',APNS_TOPIC:'com.test.citizen',FCM_KEY:keys.fcm,FCM_EMAIL:'test@test-project.iam.gserviceaccount.com',FCM_PROJECT:'test-project',CF_ACCOUNT_ID:'11'.repeat(16),R2_KEY:'test',R2_SECRET:'test',ZONE_ID:'11'.repeat(16),PURGE:'test',SQUARE_PUBLIC_MEDIA_BASE_URL:'https://media.example.test',...extraBindings},
  d1Databases:['DB','TATACHAT_DB'],r2Buckets:['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'],durableObjects:{TATACHAT_DEVICES:{className:'TataChatDevice',useSQLite:true}},kvNamespaces:['SQUARE_CACHE'],queueProducers:{NOTIFY:'citizenserve',TATACHAT_PUSH:'citizenserve-tatachat-test'},ratelimits:Object.fromEntries(['RATE_AUTH','RATE_READ','RATE_WRITE'].map((n,i)=>[n,{namespace_id:String(i+1),simple:{limit:n==='RATE_READ'?readLimit:1000,period:60}}])),outboundService:outbound}]}));
  db=await mf.getD1Database('DB');worker=await mf.getWorker();privateBucket=await mf.getR2Bucket('SQUARE_PRIVATE');publicBucket=await mf.getR2Bucket('SQUARE_PUBLIC_MEDIA');
  chatBucket=await mf.getR2Bucket('TATACHAT_ATTACHMENTS');chatDB=await mf.getD1Database('TATACHAT_DB');const chatSchema=JSON.parse(execFileSync(process.env.PYTHON,['-c',String.raw`
@@ -290,11 +292,13 @@ test('公共网络交付HTML和PNG字节，HEAD核验相同资源且不透传上
   }
  }
 });
-test('静态源取CHAIN_URL的origin，不继承RPC路径或查询',async()=>{
- await stopWorker();try{await startWorker({CHAIN_URL:'https://chain.example.test/protected/rpc?scope=fixture'});
-  const before=seen.length,r=await networkFetch('/icons/gmb.png');assert.equal(r.status,200);await r.arrayBuffer();
-  assert.deepEqual(seen.slice(before),[{url:'https://chain.example.test/icons/gmb.png',method:'GET'}]);
- }finally{await stopWorker();await startWorker();}
+test('旧RPC子路径或查询配置在访问节点前拒绝，不以路径回退掩盖接口失配',async()=>{
+ try{for(const CHAIN_URL of ['https://chain.example.test/protected/rpc','https://chain.example.test/?scope=fixture']){
+  await stopWorker();await startWorker({CHAIN_URL});
+  for(const [path,method,body] of [['/icons/gmb.png','GET',undefined],['/','POST',JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_chainId',params:[]})]]){
+   const before=seen.length,r=await networkFetch(path,method,body);assert.equal(r.status,503);await r.arrayBuffer();assert.equal(seen.length,before);
+  }
+ }}finally{await stopWorker();await startWorker();}
 });
 test('公共网络拒绝旧图标路径、未知路径、查询和错误方法且不访问上游',async()=>{
  for(const [path,method,status] of [['/crates/icons/gmb.png','GET',404],['/install.html','GET',404],['/icons/other.png','GET',404],

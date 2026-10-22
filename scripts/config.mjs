@@ -2,7 +2,7 @@
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
-const descriptions={CHAIN_URL:'公民链Access保护RPC HTTPS端点',ZONE_ID:'广场公开媒体所属Cloudflare Zone编号',
+const descriptions={CHAIN_URL:'公民链Access保护RPC HTTPS根地址',ZONE_ID:'广场公开媒体所属Cloudflare Zone编号',
   APNS_KID:'Apple推送Key ID',APNS_TEAM:'Apple开发者Team ID',APNS_TOPIC:'Apple推送Topic',
   FCM_EMAIL:'Firebase服务账户邮箱',FCM_PROJECT:'Firebase项目编号',TATACHAT_AUTH_KID:'聊天授权密钥标识',
   HASH_KEY:'敏感索引HMAC密钥',TURNSTILE_SECRET:'Turnstile服务端校验密钥',CF_ACCESS_CLIENT_ID:'Cloudflare Access客户端ID',
@@ -15,7 +15,7 @@ const names=(values,access,kind,format)=>values.map(name=>({
   description:descriptions[name]??name,revealable:true,
   accessLevel:access,kind,...(format?.[name]?{format:format[name]}:{})
 }));
-const publicFormats={CHAIN_URL:'https_rpc_url:chain.crcfrcn.com',CF_ACCESS_CLIENT_ID:'cloudflare_access_client_id',ZONE_ID:'hex16',APNS_KID:'apple_id',APNS_TEAM:'apple_id',
+const publicFormats={CHAIN_URL:'https_root_url:chain.crcfrcn.com',CF_ACCESS_CLIENT_ID:'cloudflare_access_client_id',ZONE_ID:'hex16',APNS_KID:'apple_id',APNS_TEAM:'apple_id',
   APNS_TOPIC:'apns_topic',FCM_EMAIL:'fcm_email',FCM_PROJECT:'fcm_project',TATACHAT_AUTH_KID:'auth_kid'};
 export const dynamicPublicNames=Object.freeze(['CHAIN_URL','CF_ACCESS_CLIENT_ID','ZONE_ID','APNS_KID','APNS_TEAM','APNS_TOPIC','FCM_EMAIL','FCM_PROJECT','TATACHAT_AUTH_KID']);
 export const workerSecretNames=Object.freeze(['HASH_KEY','TURNSTILE_SECRET','CHAIN_SECRET','R2_KEY','R2_SECRET','PURGE',
@@ -29,10 +29,10 @@ export function validateDynamicPublic(values){
     const value=values[name],format=publicFormats[name];
     if(typeof value!=='string'||!value||value.length>512||/[\x00-\x1f\x7f]/u.test(value))throw Error('公开运行变量无效：'+name);
     let valid=false;
-    if(format.startsWith('https_rpc_url:')){
-      try{const host=format.slice('https_rpc_url:'.length),url=new URL(value);
-        valid=url.protocol==='https:'&&url.hostname===host&&/^\/rpc-[a-f0-9]{48}$/u.test(url.pathname)
-          &&value==='https://'+host+url.pathname&&!url.username&&!url.password&&!url.hash&&!url.search&&!url.port;}catch{}
+    if(format.startsWith('https_root_url:')){
+      try{const host=format.slice('https_root_url:'.length),url=new URL(value);
+        valid=url.protocol==='https:'&&url.hostname===host&&url.pathname==='/'
+          &&value==='https://'+host+'/'&&!url.username&&!url.password&&!url.hash&&!url.search&&!url.port;}catch{}
     }else if(format==='hex16')valid=/^[a-f0-9]{32}$/u.test(value);
     else if(format==='apple_id')valid=/^[A-Za-z0-9]{10}$/u.test(value);
     else if(format==='apns_topic')valid=/^[A-Za-z0-9.-]{1,255}$/u.test(value);
@@ -86,3 +86,14 @@ export function nextVersion(runs){
  const parts=version.split('.');parts[2]=String(BigInt(parts[2])+1n);const next=parts.join('.');automationDisplayName('cloudflare',next);return next;
 }
 export function retainedRuns(rows){const keep=new Set(),states=new Set();for(const run of [...rows].sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at)||b.id-a.id)){if(run.status!=='completed'){keep.add(run.id);continue;}const state=run.conclusion==='success'?'success':'failed';if(!states.has(state)){states.add(state);keep.add(run.id);}}return keep;}
+
+// 本仓流程的公开入口声明；调用方只交付标准传输能力，不拥有产品规则或任务宿主。
+export async function describeAction({flow,platform}){
+ if(flow!=='release'||platform!=='cloudflare')throw Error('本产品尚未声明该流程入口：'+flow+'·'+platform);
+ return {repository,launch:async({read,dispatch})=>{
+  const rows=[];
+  for(let page=1;;page++){const data=await read('actions/workflows/cloudflare.yml/runs?branch=main&event=workflow_dispatch&per_page=100&page='+page);rows.push(...data.workflow_runs);if(data.workflow_runs.length<100)break;}
+  const receipt=await dispatch({workflow:'cloudflare.yml',ref:'main',inputs:{version:nextVersion(rows)}});
+  return {runID:receipt.workflow_run_id};
+ }};
+}

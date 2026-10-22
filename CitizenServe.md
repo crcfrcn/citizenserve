@@ -332,7 +332,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 - 客户端源文件/衍生图直传：https://f088b553d27d9c26b81f48f1924c3bbd.r2.cloudflarestorage.com/citizenserve-media/square/{cid_number}/posts/{post_id}/media/{index}/{filename}?<服务端SigV4查询>；只使用prepare返回的完整URL与签名头。
 - 私有manifest对象键：square/{cid_number}/posts/{post_id}/manifest.json，仅通过上述受保护控制面读写；资料对象键：profile/{cid_number}/avatar、profile/{cid_number}/banner。
 
-当前CHAIN_URL没有已核实部署值，方案只读取既有配置并保持固定HTTPS源/Access认证，不凭空填写域名。本产品不开放任意RPC URL或自建迁移入口。
+CHAIN_URL沿用所属公开配置入口并固定为受Access保护的HTTPS根RPC，符合下文根地址合同；本产品不开放任意RPC URL或自建迁移入口。
 
 ## 充值、结算、下载与链工具
 
@@ -345,7 +345,7 @@ A提供的宿主权限语义为：来自合法当前会话的user_id与device_id
 3. **以真实EVM链事实创建订单。** 固定TOPUP_BASE_RPC_URL，不接受客户端RPC URL；核对eth_chainId=8453、交易/receipt哈希、成功状态、实际token Transfer事件、付款/收款地址、足额u256金额、log所属canonical区块、区块时间和确认策略。付款发生时间必须晚于意图签发且不晚于十分钟到期；配置min_confirmations=0沿用finalized，否则使用准确确认数并核对canonical hash。未知编码、链错、重组、超时或缺区块不能成功。同(chain_id,evm_tx_hash)与intent_id双唯一，同意图/同准确规范事实幂等，不同意图抢占拒绝；保留原pending/paid/exception三态，RPC待确认不落新终态。将准确付款区块/日志、意图及钱包授权摘要和核验期限存入原topup_orders相应列，一次原子写入，不设影子用户。保留IP和目标AccountId限速、外部付款RPC每链300次/60秒D1全局硬顶；重复已确认查询不再打付款RPC。
 4. **排他claim与双链结算。** 仅常量时间匹配SETTLE_TOKEN的结算客户端可操作。pending≤50，history≤100并用(confirmed_at,order_id)稳定游标合并三态。claim同ID幂等、不同ID排斥，永不自动过期释放；服务端不持发币私钥，不自动签发/广播公民币。settled在当前claim下复核Base付款，并用目标块metadata完整解析OnchainTransaction::transfer_with_remark、整交易哈希、canonical finalized块/准确index/整签名字节、配置发币账户、准确受益AccountId/金额、topup:<order_id>备注、同phase的唯一System.ExtrinsicSuccess且无失败、准确TransferWithRemark事件；不靠硬编码pallet/call index或“交易包含在块中”宣称转账成功。抽取现有通用signed/finalized核心时保留会员/帖子专用CID及SquarePost核验。最后一次D1事务比较claim、订单与全部证据，重复paid须完整证据一致；同GMB交易不能付给两笔订单。exception须匹配claim及准确理由，不从异常自动恢复或重新发币。
 5. **链引导、宪法及受控广播。** App与CitizenSDK两个bootstrap保留各自exact schema、SS58=2027/GMB两位小数、已登记创世hash/state_root/bootnodes、签名安装包bundled chainspec/light_sync_state及P2P finalized信任合同，不下发可替换checkpoint或服务端节点/Access秘密。返回当前/api实际服务路径；广播显式关闭时返回不可用。宪法从同一canonical finalized块的LegislationYuan Laws(0)已生效版本、LawVersions、LawVersionLabels与ConstitutionImmutableManifest完整解码，拒绝尾字节/非法层级/超大内容，保留中英标签与准确更新时间；展示缓存≤300秒不能用于授权。POST extrinsics只收signed_extrinsic_hex，不收私钥/助记词、账户申报或任意RPC方法；原始extrinsic≤65536B、JSON≤131584B。显式RELAY_ENABLED=1及实际固定节点配置后才调用author_submitExtrinsic；IP每分钟20次跨PoP硬顶、SHA-256十分钟去重与排他占用，验证节点tx_hash与完整extrinsic BLAKE2-256一致。广播超时保留不确定结果/定位，不假报失败后自动重发；广播成功只表示broadcast，不签发CID/准入/会话或宣称finalized。
-6. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面与PNG由CitizenChain节点自身的同一HTTPS RPC端点交付，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有展示缓存和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
+6. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面、PNG与RPC共用CitizenChain节点的同一HTTPS根端点，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有展示缓存和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
 7. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行全量fmt/测试/Clippy/WASM Release/WebAssembly.compile，回归现有授权/社区/内容合同，health继续account_services_ready:false。
 
 ### 付款钱包签名合同
@@ -385,7 +385,7 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 ### 实际固定后端地址和配置来源
 
 - 旧正式配置登记的Base源是https://mainnet.base.org；实施时仅从TOPUP_BASE_RPC_URL加载固定HTTPS源，核实准确币轨合约/decimals/实际资产种类，以合约白名单为准，不凭symbol识别或把桥接资产说成原生资产。TOPUP_RECV_ADDRESS、TOPUP_DISBURSE_ACCOUNT_ID和两币合约对照历史公开配置，未核实不猜填、不增加新网络/供应商。
-- CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。实际CHAIN_URL部署值目前未核实，不凭空写域名。公共EVM源属于该CitizenChain节点，不转给Base源。
+- CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。CHAIN_URL按本产品根地址声明交付，与Node根RPC保持一致。公共EVM源属于该CitizenChain节点，不转给Base源。
 - 展示 KV 沿用 SQUARE_CACHE；服务端不再声明公民链下载 D1 和发布指针密钥。TOPUP_INTENT_SECRET 与 SETTLE_TOKEN 仍只声明，不读值、不线上写。
 - 当前/api归一化与付款签名/HMAC变更先实现服务端合同；App及产品发布器必须在各自后续接线验收新实际路径，未验收前不能替换生产。
 
@@ -467,7 +467,7 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
 
 本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、11项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
-`CHAIN_URL` 指向固定主机上的 Access 保护 RPC 路径，格式为 `/rpc-` 后接48位小写十六进制；产品只校验结构，不在源码、文档、日志或夹具保存实际路径。该值保持现有公开运行配置类别，真正的 Access 凭据仍由 `CHAIN_SECRET` 保管；发布冷签只携带最终配置摘要。
+`CHAIN_URL`使用既有`https_root_url:chain.crcfrcn.com`配置格式，对应`https://chain.crcfrcn.com/`，与Node现有根POST/WSS接口一致。发布候选与Worker运行态都拒绝子路径或查询，不保留旧RPC路径兼容。Access须保护该源域的完整路径并保留服务认证，公共钱包仍只经既有Worker白名单访问。该值保持现有公开运行配置类别，真正的Access凭据仍由`CHAIN_SECRET`保管；发布冷签只携带最终配置摘要。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
 控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。
 发布器核对正式Wrangler时仅接受 `DB` 和 `TATACHAT_DB` 两个D1绑定，分节数量由这两个准确名称推导；旧公民链下载指针的第三个D1绑定仍按多余资源拒绝。
@@ -688,7 +688,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 
 数据库更新和发布尚未执行。已有数据库需要在独立发布审批中准备两次ALTER TABLE ADD COLUMN、原视图的事务内DROP/CREATE及恢复定义；只重新执行CREATE TABLE IF NOT EXISTS不会给旧表加列。本步仅在临时SQLite验证视图/列切换、失败回滚及重复应用，不能据此声称生产已生效。投影游标及健康标记必须由独立同步真实追平建立。
 
-macOS测试工具与正式声明统一：Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及协议提交b0485cf0a2c0922791741a748fdec0a49003089f。测试入口核对原件摘要和实际工具版本，不使用系统protoc34.0；正式Linux Build、依赖锁、Workflow与生产绑定保持。具体本轮结果与下一步审批记录在原任务卡`/Users/rhett/tataconsole/tasks/进行中/前后端联调任务.md`。
+macOS测试工具与正式声明统一：Node25.2.1、Rust1.97.1、protoc35.0、worker-build0.8.5、wasm-bindgen0.2.127、Binaryen130及协议提交b0485cf0a2c0922791741a748fdec0a49003089f。测试入口核对原件摘要和实际工具版本，不使用系统protoc34.0；正式Linux Build、依赖锁、Workflow与生产绑定保持。具体本轮结果与下一步审批记录在原任务卡`/Users/rhett/tataconsole/work/进行中/公民前后端任务.md`。
 
 ## 前后端联调第2步：平台确认可选快照（2026年10月18日）
 
@@ -754,3 +754,7 @@ begin、upload、complete、download均比较整份密文与当前原明文上�
 第二步构建约定：缓存原子领取，持有时使用固定源码投影和原文件时间戳，以复用Cargo实际产物；缓存占用立即使用本轮独占目录。所有原锁不变。控制台所属接入先经宿主执行本仓构建回归与本接入回归，再派发所属工作流。完整SDK含Rust/Dart、Android原生与Flutter、Apple Core/Flutter XCTest以及桌面Host和独立消费者回归。SDK内部传递Artifact已获准增加目标后缀，最终完整包/Release/Tag仍为产品·SDK·版本。当前尚未实际验收。
 
 新正式版上传并回读后才删除旧正式版与对应Tag；旧版本清理失败必须使本轮失败，不能只打印告警后报告整体成功。
+
+## 外部调用入口
+
+本仓现有 scripts/config.mjs 的 describeAction({flow,platform}) 声明流程入口。自动化启动逻辑、版本输入与平台选择归本仓；调用方交付已授权令牌和标准 read/dispatch 传输能力，接收准确 Run 编号。既有独立自动化接口继续由本仓实现。未提供的安装或发布入口明确报产品侧未声明，不错接到编译，也不产生成功回执。
