@@ -42,12 +42,12 @@ function one(block,key){
  if(values.length!==1)fail('Wrangler字段缺失或重复：'+key);
  return values[0];
 }
-function string(block,key){const raw=one(block,key);if(!/^"[^"\n]*"$/u.test(raw))fail('Wrangler字符串字段无效：'+key);return JSON.parse(raw);}
+function string(block,key){const raw=one(block,key);let value;try{value=JSON.parse(raw);}catch{fail('Wrangler字符串字段无效：'+key);}if(typeof value!=='string')fail('Wrangler字符串字段无效：'+key);return value;}
 function blocks(value,name,count){const rows=value.get(name)??[];if(rows.length!==count)fail('Wrangler分节数量无效：'+name);return rows;}
 function exactKeys(value,expected,label){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join('\0')!==[...expected].sort().join('\0'))fail(label+'字段缺失或越界');}
 function publicationConfiguration(source,publicValues){
  const value=sections(source),root=blocks(value,'root',1)[0],vars=blocks(value,'vars',1)[0];
- if(string(root,'name')!=='citizenserve'||string(root,'main')!=='../../target/build/cloudflare/worker/index.js'
+ if(string(root,'name')!=='citizenserve'||string(root,'main')!=='../target/build/cloudflare/worker/index.js'
   ||string(root,'compatibility_date')!=='2026-10-07'
   ||one(root,'compatibility_flags')!=='["no_nodejs_global_timers"]'
   ||one(root,'workers_dev')!=='false'||one(root,'preview_urls')!=='false')fail('Worker部署身份无效');
@@ -180,7 +180,7 @@ export async function preparePublication({request=publicRequest}={}){return sele
 // 公开运行值由产品唯一声明解码；原生层只交付当前产品已保存的公开值。
 
 function renderedDeploymentConfig(contents,publicValues){
- let config;try{config=new TextDecoder('utf-8',{fatal:true}).decode(contents.get('server/cloudflare/wrangler.toml'));}catch{fail('正式Wrangler配置编码无效');}
+ let config;try{config=new TextDecoder('utf-8',{fatal:true}).decode(contents.get('cloudflare/wrangler.toml'));}catch{fail('正式Wrangler配置编码无效');}
  const candidate=publicationConfiguration(config,publicValues);
  for(const name of runtimeVariables){const line=new RegExp('^'+name+' = ""$','gmu');
   if([...config.matchAll(line)].length!==1)fail('正式配置动态变量边界无效：'+name);
@@ -275,7 +275,7 @@ export async function deployCloudflare(payload,credentials,{signal,invoke=runToo
   ||typeof node!=='string'||!node.startsWith('/')||await realpath(node)!==node||!(await lstat(node)).isFile())fail('Worker执行现场无效');
  const {account,token,secrets}=deploymentCredentials(credentials,{secrets:true});exactKeys(secrets,requiredSecretNames,'Worker密钥');
  if(Object.values(secrets).some(value=>typeof value!=='string'||!value||Buffer.byteLength(value)>64*1024))fail('Worker密钥格式无效');
- const config=await publicationFile(work,'server/cloudflare/wrangler.toml',65536);if(hash(config)!==payload.config_sha256)fail('批准后Worker配置发生变化');
+ const config=await publicationFile(work,'cloudflare/wrangler.toml',65536);if(hash(config)!==payload.config_sha256)fail('批准后Worker配置发生变化');
  const rendered=new TextDecoder('utf-8',{fatal:true}).decode(config),vars=blocks(sections(rendered),'vars',1)[0];
  const publicValues=Object.fromEntries(runtimeVariables.map(name=>[name,string(vars,name)]));let template=rendered;
  for(const name of runtimeVariables){const pattern=new RegExp('^'+name+' = .+$','gmu');if([...template.matchAll(pattern)].length!==1)fail('Worker动态配置边界无效');template=template.replace(pattern,name+' = ""');}
@@ -288,9 +288,9 @@ export async function deployCloudflare(payload,credentials,{signal,invoke=runToo
  if((await invoke(node,['--version'],work,environment,signal)).trim()!=='v25.2.1')fail('Worker执行Node不符合产品锁');
  const privateEnvironment={...environment,CLOUDFLARE_API_TOKEN:token,CLOUDFLARE_ACCOUNT_ID:account},protectedValues=[token,...Object.values(secrets)];
  signal?.throwIfAborted();
- await invoke(node,[wrangler,'secret','bulk','--config',join(work,'server/cloudflare/wrangler.toml')],work,privateEnvironment,signal,{input:JSON.stringify(secrets),protectedValues});
+ await invoke(node,[wrangler,'secret','bulk','--config',join(work,'cloudflare/wrangler.toml')],work,privateEnvironment,signal,{input:JSON.stringify(secrets),protectedValues});
  const started=now();
- await invoke(node,[wrangler,'deploy','--no-bundle','--config',join(work,'server/cloudflare/wrangler.toml')],work,privateEnvironment,signal,{protectedValues});
+ await invoke(node,[wrangler,'deploy','--no-bundle','--config',join(work,'cloudflare/wrangler.toml')],work,privateEnvironment,signal,{protectedValues});
  const result=await cloudflareJSON(account,token,'workers/scripts/citizenserve/deployments?per_page=1',{request,signal});
  const latest=result?.deployments?.[0],versions=latest?.versions;
  if(!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu.test(latest?.id||'')||!Number.isFinite(Date.parse(latest.created_on))||Date.parse(latest.created_on)<started-30000
@@ -311,8 +311,8 @@ export async function publishCloudflare({proof,configSHA,runID,nodePath=process.
  const base=join(fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url)));
  await mkdir(base,{recursive:true,mode:0o700});const work=await mkdtemp(join(base,runID+'-'));
  try{
-  for(const name of ['index.js','index_bg.wasm','server/cloudflare/wrangler.toml','test/worker/package-lock.json']){
-   const bytes=name==='server/cloudflare/wrangler.toml'?config:candidate.contents.get(name);
+  for(const name of ['index.js','index_bg.wasm','cloudflare/wrangler.toml','test/worker/package-lock.json']){
+   const bytes=name==='cloudflare/wrangler.toml'?config:candidate.contents.get(name);
    if(!bytes)fail('正式包缺少部署成员：'+name);
    const path=join(work,name.startsWith('index')?'target/build/cloudflare/worker/'+name:name);
    await mkdir(dirname(path),{recursive:true,mode:0o700});await writeFile(path,bytes,{flag:'wx',mode:0o600});
@@ -365,9 +365,9 @@ if(direct&&!testing){
 if(testing){
  const {test}=await import('node:test'),{default:assert}=await import('node:assert/strict'),{gzipSync}=await import('node:zlib');
  const {Readable}=await import('node:stream');
- function fixture(config=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8')){
+ function fixture(config=readFileSync(fileURLToPath(new URL('../cloudflare/wrangler.toml',import.meta.url)),'utf8')){
   const files=Object.fromEntries(packageFiles.map(name=>[name,Buffer.from(name==='index_bg.wasm'?'synthetic-wasm':'fixture-'+name)]));
-  files['server/cloudflare/wrangler.toml']=Buffer.from(config);
+  files['cloudflare/wrangler.toml']=Buffer.from(config);
   const blocks=[];for(const [name,bytes]of Object.entries(files)){const h=Buffer.alloc(512);h.write(name);h.write(bytes.length.toString(8).padStart(11,'0')+'\0',124);h.fill(32,148,156);h[156]=48;h.write('ustar\0',257);h.write([...h].reduce((sum,b)=>sum+b,0).toString(8).padStart(6,'0')+'\0 ',148);blocks.push(h,bytes,Buffer.alloc((512-bytes.length%512)%512));}blocks.push(Buffer.alloc(1024));
   const archive=gzipSync(Buffer.concat(blocks)),head='a'.repeat(40),run={id:42,run_attempt:2,path:workflow,repository:{full_name:repository},head_branch:'main',event:'workflow_dispatch',status:'completed',conclusion:'success',head_sha:head};
   const manifest={schema:1,product_id:'citizenserve',platform:'cloudflare',software_version:'1.2.3',source_sha:head,producer_run_id:42,producer_run_attempt:2,assets:Object.entries(files).map(([path,bytes])=>({path,bytes:bytes.length,sha256:hash(bytes)}))};
@@ -384,15 +384,15 @@ if(testing){
  });
  test('错误Run、Tag、资产字节与归档缺项都失败',async()=>{const f=fixture();await assert.rejects(inspectCandidate({...f,run:{...f.run,conclusion:'failure'}}));await assert.rejects(inspectCandidate({...f,readTag:async()=>null}));await assert.rejects(inspectCandidate({...f,readAsset:async()=>Readable.from([Buffer.from('changed')])}));assert.throws(()=>inspectArchive(f.body.get(assets[0]),[]));});
  test('公开发布接口自行分页，只消费读取能力并拒绝重复成功',async()=>{const f=fixture(),calls=[];const request=async(path,options={})=>{assert.equal(options.method,undefined);calls.push(path);if(path.startsWith('actions/runs?'))return {workflow_runs:[f.run]};if(path.startsWith('releases?'))return [f.release];if(path.startsWith('git/ref/tags/'))return f.readTag();return {body:await f.readAsset(f.release.assets.find(asset=>asset.url===path))};};assert.equal((await preparePublication({request})).release_id,7);assert.ok(calls.length>=6);await assert.rejects(preparePublication({request:async path=>path.startsWith('actions/')?{workflow_runs:[f.run,f.run]}:[f.release]}),/唯一/u);});
- const publicValues={CHAIN_URL:'https://chain.crcfrcn.com/',CF_ACCESS_CLIENT_ID:'fixture-client.access',ZONE_ID:'1'.repeat(32),APNS_KID:'ABCDEFGHIJ',APNS_TEAM:'0123456789',APNS_TOPIC:'example.chat',FCM_EMAIL:'service@example.iam.gserviceaccount.com',FCM_PROJECT:'example-project',TATACHAT_AUTH_KID:'chat-test-1'};
+ const publicValues={CHAIN_URL:'https://chain.crcfrcn.com/',CF_ACCESS_CLIENT_ID:'fixture-client.access',ZONE_ID:'1'.repeat(32),APNS_KID:'ABCDEFGHIJ',APNS_TEAM:'0123456789',APNS_TOPIC:'example.chat',FCM_EMAIL:'service@example.iam.gserviceaccount.com',FCM_PROJECT:'example-project',TATACHAT_AUTH_KID:'chat-test-1',TOPUP_RPCS:JSON.stringify(Object.fromEntries(['ethereum','base','bnb','tron','solana'].map(n=>[n,'https://'+n+'.example.test/']))),TOPUP_RECEIVERS:JSON.stringify(JSON.parse(readFileSync(new URL('../test/contract/topup.json',import.meta.url),'utf8')).receivers)};
  const requestFor=f=>async path=>{if(path.startsWith('actions/runs?'))return {workflow_runs:[f.run]};if(path.startsWith('releases?'))return [f.release];if(path.startsWith('git/ref/tags/'))return f.readTag();return {body:await f.readAsset(f.release.assets.find(asset=>asset.url===path))};};
  test('统一门禁只增加准确业务媒体路由，媒体根域通配与其它路径仍拒绝',()=>{
-  const source=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8');
+  const source=readFileSync(fileURLToPath(new URL('../cloudflare/wrangler.toml',import.meta.url)),'utf8');
   assert.deepEqual(publicationConfiguration(source,publicValues).routes,['www.crcfrcn.com/api/*','nrcrpc.crcfrcn.com','media.crcfrcn.com/square/*']);
   for(const changed of [source.replace('media.crcfrcn.com/square/*','media.crcfrcn.com/*'),source.replace('media.crcfrcn.com/square/*','other.example/square/*')])assert.throws(()=>publicationConfiguration(changed,publicValues));
  });
  test('Web计时器合同只接收准确兼容标记，缺失重复或扩展均拒绝',()=>{
-  const source=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8');
+  const source=readFileSync(fileURLToPath(new URL('../cloudflare/wrangler.toml',import.meta.url)),'utf8');
   const declaration='compatibility_flags = ["no_nodejs_global_timers"]';
   assert.doesNotThrow(()=>publicationConfiguration(source,publicValues));
   for(const changed of [source.replace(declaration,''),source.replace(declaration,'compatibility_flags = []'),
@@ -402,20 +402,20 @@ if(testing){
   }
  });
  test('链回源公开声明与Node既有根RPC一致，只接受准确HTTPS根地址',()=>{
-  const source=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8');
+  const source=readFileSync(fileURLToPath(new URL('../cloudflare/wrangler.toml',import.meta.url)),'utf8');
   assert.equal(describeConfiguration().configuration.items.find(item=>item.name==='CHAIN_URL').format,'https_root_url:chain.crcfrcn.com');
   assert.doesNotThrow(()=>publicationConfiguration(source,publicValues));
   for(const value of ['https://chain.crcfrcn.com','https://chain.crcfrcn.com/protected/rpc','https://chain.crcfrcn.com/?x=1','https://chain.crcfrcn.com/#x','http://chain.crcfrcn.com/','https://chain.crcfrcn.com:443/','https://user@chain.crcfrcn.com/','https://other.example.test/'])
    assert.throws(()=>publicationConfiguration(source,{...publicValues,CHAIN_URL:value}));
  });
- test('正式包中的准确资源、路由和九项公开运行值形成无机密候选',async()=>{const f=fixture(),result=await prepareDeployment({request:requestFor(f),publicValues});assert.equal(result.publication.release_id,7);assert.equal(result.d1.TATACHAT_DB.name,'citizenserve-tatachat');assert.equal(result.public_var_names.length,9);assert.equal(result.secret_names.length,11);assert.notEqual((await prepareDeployment({request:requestFor(f),publicValues:{...publicValues,APNS_KID:'ZZZZZZZZZZ'}})).config_sha256,result.config_sha256);const declaration=describeConfiguration();assert.equal(declaration.configuration.items.length,23);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='public').length,9);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='protected').length,14);assert.equal(declaration.configuration.items.find(item=>item.name==='COLD_SIGNER_PUBLIC_KEY')?.accessLevel,'protected');assert.ok(!declaration.configuration.items.some(item=>item.accessLevel==='publish'));assert.ok(!declaration.configuration.items.some(item=>item.name==='CF_ACCOUNT_ID'));assert.equal(Object.hasOwn(declaration,'fixed'),false);const output=JSON.stringify(result);for(const name of runtimeVariables)assert.ok(!output.includes(publicValues[name]));});
- test('缺少或畸形公开值及扩大公开路由均拒绝候选',async()=>{const source=readFileSync(fileURLToPath(new URL('../server/cloudflare/wrangler.toml',import.meta.url)),'utf8');for(const bad of [{...publicValues,CHAIN_URL:''},{...publicValues,CHAIN_URL:'https://chain.crcfrcn.com/protected/rpc'},{...publicValues,CHAIN_URL:'https://other.example.test/'},{...publicValues,CHAIN_URL:publicValues.CHAIN_URL+'?x=1'},{...publicValues,CF_ACCESS_CLIENT_ID:'invalid client id'},{...publicValues,ZONE_ID:'invalid'},{...publicValues,APNS_KID:'short'},{...publicValues,FCM_EMAIL:'invalid'},{...publicValues,FCM_PROJECT:'UPPERCASE'},{...publicValues,TATACHAT_AUTH_KID:'bad key'},{...publicValues,UNKNOWN:'x'}])assert.throws(()=>publicationConfiguration(source,bad));for(const changed of [source.replace('www.crcfrcn.com/api/*','*/*'),source.replace('TATACHAT_AUTH_KID = ""','TATACHAT_AUTH_KID = "fixed"'),source.replace('citizenserve-private','other-bucket'),source.replace('TATACHAT_AUTH_KEY','UNOWNED_SECRET'),source.replace('4 3 * * *','5 3 * * *'),source.replace('limit = 120','limit = 999'),source.replace('max_retries = 5','max_retries = 50'),source.replace('WEB_ORIGIN = "https://www.crcfrcn.com"','WEB_ORIGIN = "https://other.example.test"'),source+'\n[[d1_databases]]\nbinding = "CITIZENCHAIN_DOWNLOAD_DB"\ndatabase_name = "citizenweb-download"\ndatabase_id = "428b28ae-e02d-4ebb-b4a2-ac03faf2f58a"\n'])assert.throws(()=>publicationConfiguration(changed,publicValues));});
+ test('正式包中的准确资源、路由和十一项公开运行值形成无机密候选',async()=>{const f=fixture(),result=await prepareDeployment({request:requestFor(f),publicValues});assert.equal(result.publication.release_id,7);assert.equal(result.d1.TATACHAT_DB.name,'citizenserve-tatachat');assert.equal(result.public_var_names.length,11);assert.equal(result.secret_names.length,12);assert.notEqual((await prepareDeployment({request:requestFor(f),publicValues:{...publicValues,APNS_KID:'ZZZZZZZZZZ'}})).config_sha256,result.config_sha256);const declaration=describeConfiguration();assert.equal(declaration.configuration.items.length,26);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='public').length,11);assert.equal(declaration.configuration.items.filter(item=>item.accessLevel==='protected').length,15);assert.equal(declaration.configuration.items.find(item=>item.name==='COLD_SIGNER_PUBLIC_KEY')?.accessLevel,'protected');assert.ok(!declaration.configuration.items.some(item=>item.accessLevel==='publish'));assert.ok(!declaration.configuration.items.some(item=>item.name==='CF_ACCOUNT_ID'));assert.equal(Object.hasOwn(declaration,'fixed'),false);const output=JSON.stringify(result);for(const name of runtimeVariables)assert.ok(!output.includes(publicValues[name]));});
+ test('缺少或畸形公开值及扩大公开路由均拒绝候选',async()=>{const source=readFileSync(fileURLToPath(new URL('../cloudflare/wrangler.toml',import.meta.url)),'utf8');for(const bad of [{...publicValues,CHAIN_URL:''},{...publicValues,CHAIN_URL:'https://chain.crcfrcn.com/protected/rpc'},{...publicValues,CHAIN_URL:'https://other.example.test/'},{...publicValues,CHAIN_URL:publicValues.CHAIN_URL+'?x=1'},{...publicValues,CF_ACCESS_CLIENT_ID:'invalid client id'},{...publicValues,ZONE_ID:'invalid'},{...publicValues,APNS_KID:'short'},{...publicValues,FCM_EMAIL:'invalid'},{...publicValues,FCM_PROJECT:'UPPERCASE'},{...publicValues,TATACHAT_AUTH_KID:'bad key'},{...publicValues,UNKNOWN:'x'}])assert.throws(()=>publicationConfiguration(source,bad));for(const changed of [source.replace('www.crcfrcn.com/api/*','*/*'),source.replace('TATACHAT_AUTH_KID = ""','TATACHAT_AUTH_KID = "fixed"'),source.replace('citizenserve-private','other-bucket'),source.replace('TATACHAT_AUTH_KEY','UNOWNED_SECRET'),source.replace('4 3 * * *','5 3 * * *'),source.replace('limit = 120','limit = 999'),source.replace('max_retries = 5','max_retries = 50'),source.replace('WEB_ORIGIN = "https://www.crcfrcn.com"','WEB_ORIGIN = "https://other.example.test"'),source+'\n[[d1_databases]]\nbinding = "CITIZENCHAIN_DOWNLOAD_DB"\ndatabase_name = "citizenweb-download"\ndatabase_id = "428b28ae-e02d-4ebb-b4a2-ac03faf2f58a"\n'])assert.throws(()=>publicationConfiguration(changed,publicValues));});
  // 只在本产品现场物化已有合成包；模拟全部云请求和Wrangler，绝不装配真实凭据。
  async function workerExecutionFixture(t){
   const f=fixture(),selected=await selectedPublication(requestFor(f),true),rendered=renderedDeploymentConfig(selected.contents,publicValues);
   const base=fileURLToPath(new URL('../target/publish/cloudflare/',import.meta.url));await mkdir(base,{recursive:true});
   const work=await realpath(await mkdtemp(join(base,'123456789-')));t.after(()=>rm(work,{recursive:true,force:true}));
-  for(const [name,bytes]of [['server/cloudflare/wrangler.toml',rendered.bytes],['target/build/cloudflare/worker/index.js',Buffer.from('synthetic-js')],
+  for(const [name,bytes]of [['cloudflare/wrangler.toml',rendered.bytes],['target/build/cloudflare/worker/index.js',Buffer.from('synthetic-js')],
    ['target/build/cloudflare/worker/index_bg.wasm',Buffer.from('synthetic-wasm')],['test/worker/package-lock.json',Buffer.from(JSON.stringify({packages:{'':{devDependencies:{wrangler:'4.149.0'}}}}))],
    ['test/worker/node_modules/wrangler/bin/wrangler.js',Buffer.from('synthetic')]]){await mkdir(dirname(join(work,name)),{recursive:true});await writeFile(join(work,name),bytes);}
   const payload={schema:1,product_id:'citizenserve',platform:'cloudflare',run_id:'123456789',release_tag:selected.proof.tag,source_sha:selected.proof.source_sha,
@@ -442,7 +442,7 @@ if(testing){
   f.setMode('wrong-version');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/回读失败/u);
   f.setMode('success');const abort=new AbortController();abort.abort(Error('synthetic cancellation'));
   await assert.rejects(deployCloudflare(f.payload,f.credentials,{...f,signal:abort.signal}),/synthetic cancellation/u);assert.equal(f.calls.length,0);
-  await writeFile(join(f.payload.work,'server/cloudflare/wrangler.toml'),'changed');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/配置发生变化/u);assert.equal(f.calls.length,0);
+  await writeFile(join(f.payload.work,'cloudflare/wrangler.toml'),'changed');await assert.rejects(deployCloudflare(f.payload,f.credentials,f),/配置发生变化/u);assert.equal(f.calls.length,0);
  });
 
 }

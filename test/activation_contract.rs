@@ -1,6 +1,6 @@
 //! 真正生成Sr25519钱包签名与Ed25519 MLS证明，内存端口只模拟提交/失败。
 use citizenserve::{
-    server::gate,
+    gate,
     shared::{crypto, Error, Result},
     user::{
         admission::Admission,

@@ -8,7 +8,7 @@ import community_storage_contract as community
 import auth_storage_contract as auth
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT = (ROOT / "server/cloudflare/repositories/chat_access.rs").read_text()
+TEXT = (ROOT / "cloudflare/repositories/chat_access.rs").read_text()
 CURRENT = re.search(r'pub const CURRENT_SQL: &str = "([^"]+)";', TEXT)[1]
 
 
@@ -84,7 +84,7 @@ class ChatAccessStorageContract(unittest.TestCase):
 
     def test_no_chat_shadow_tables_or_raw_key_storage(self):
         tables = {row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertEqual(len(tables), 41)
+        self.assertEqual(len(tables), 42)
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset(tables))
         self.assertFalse(any(name.startswith('tatachat_') for name in tables))
         self.assertNotIn("TATACHAT_AUTH_KEY", auth.SCHEMA)

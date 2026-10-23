@@ -10,8 +10,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = (ROOT / "server/cloudflare/schema.sql").read_text()
-SQL = ROOT / "server/cloudflare/sql"
+SCHEMA = (ROOT / "cloudflare/schema.sql").read_text()
+SCHEMA += '\n' + (ROOT / 'cloudflare/topup/schema.sql').read_text()
+SQL = ROOT / "cloudflare/sql"
 IDENTITY = json.loads((ROOT / "test/contract/finalized_identity.json").read_text())
 FIXTURE = json.loads((ROOT / "test/contract/activation.json").read_text())
 
@@ -562,7 +563,7 @@ class AccountDeletionStorage(unittest.TestCase):
                   "square_memberships", "square_creator_tiers", "square_creator_subscriptions"]
         before = {table: self.db.execute("SELECT * FROM " + table).fetchall() for table in tables}
         self.begin(self.issue())
-        source = (ROOT / "server/cloudflare/repositories/deletion.rs").read_text()
+        source = (ROOT / "cloudflare/repositories/deletion.rs").read_text()
         whitelist = source.split("const ROWS:")[1].split("];", 1)[0]
         for table, column in re.findall(r'\("([^"]+)","([^"]+)"\)', whitelist):
             while self.db.execute("SELECT 1 FROM " + table + " WHERE " + column + "=? LIMIT 1", (IDENTITY["cid_number"],)).fetchone():
@@ -573,7 +574,7 @@ class AccountDeletionStorage(unittest.TestCase):
 
 
     def test_profile_current_quota_survives_real_deletion_template_and_readmission(self):
-        source=(ROOT/'server/cloudflare/repositories/deletion.rs').read_text()
+        source=(ROOT/'cloudflare/repositories/deletion.rs').read_text()
         guard=re.search(r'const CURRENT_QUOTA_EXCLUSION: &str = "([^"\n]+)";',source)[1]
         templates=[json.loads('"'+t+'"') for t in re.findall(r'format!\(\s*"((?:\\.|[^"\\])*)"\s*\)',source)]
         condition=next(t for t in templates if t.startswith('{column}=')).format(column='cid_number',guard=guard)

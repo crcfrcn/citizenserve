@@ -39,7 +39,7 @@ fn all_twenty_six_methods_pass_independent_contract() {
 
 #[test]
 fn gate_rejects_all_invalid_rpc_items_without_requiring_a_node() {
-    use citizenserve::server::gate::{self,request::Incoming,Classification};
+    use citizenserve::gate::{self,request::Incoming,Classification};
     let input=Incoming {method:"POST",url:"https://nrcrpc.crcfrcn.com/",service_origin:None,
         media_origin:None,browser_origin:None,preflight_method:None,preflight_headers:None,
         content_length:None,authorization:None,mls_proof:None,internal_header:false,upgrade:None,websocket_protocol:None};

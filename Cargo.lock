@@ -161,6 +161,7 @@ dependencies = [
 name = "citizenserve"
 version = "1.0.0"
 dependencies = [
+ "base58",
  "base64",
  "blake2",
  "ed25519-dalek",
@@ -180,6 +181,7 @@ dependencies = [
  "subtle",
  "twox-hash",
  "url",
+ "zeroize",
 ]
 
 [[package]]

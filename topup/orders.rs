@@ -1,9 +1,9 @@
+//! 订单先于付款落盘；CAS冻结首个付款定位和唯一签名交易，重试不产生第二笔出款。
 use super::{
-    config::Config,
-    evm_verify::{self, Outcome, Payment},
+    config::{Config, Network},
     intent::{self, Intent},
     ports::{Clock, PaymentRpc, Repository},
-    wallet_authorization as wallet, State,
+    State,
 };
 use crate::shared::{crypto, Error, Result};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Confirm {
     pub payment_intent: String,
-    pub evm_tx_hash: String,
+    pub payment_txid: String,
     pub payer_signature: String,
 }
 #[derive(Clone, Debug, Deserialize)]
@@ -20,176 +20,233 @@ pub struct Status {
     pub order_id: String,
     pub payment_intent: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Order {
-    pub order_id: String,
-    pub intent_id: String,
-    pub chain_id: u64,
-    pub token: super::Token,
-    pub token_contract: String,
-    pub evm_tx_hash: String,
-    pub payer_address: String,
-    pub recv_address: String,
-    pub pay_amount: String,
-    pub cid_number: Option<String>,
-    pub account_id: String,
-    pub coin_fen: String,
-    pub package_id: String,
-    pub status: State,
-    pub settlement_claim_id: Option<String>,
-    pub settlement_claimed_at: Option<u64>,
-    pub gmb_tx_hash: Option<String>,
-    pub gmb_block_hash: Option<String>,
-    pub gmb_extrinsic_index: Option<u32>,
-    pub exception_reason: Option<String>,
-    pub confirmed_at: u64,
-    pub settled_at: Option<u64>,
-    pub intent_hash: String,
-    pub intent_issued_at: u64,
-    pub intent_expires_at: u64,
-    pub payer_authorization_hash: String,
-    #[serde(deserialize_with = "flag")]
+pub struct Payment {
+    pub tx_hash: String,
+    pub block_hash: String,
+    pub block_number: u64,
+    pub transaction_index: u32,
+    pub log_index: u32,
+    pub block_time_ms: u64,
+    pub actual_amount: String,
     pub wallet_is_contract: bool,
-    pub evm_block_hash: String,
-    pub evm_block_number: u64,
-    pub evm_transaction_index: u32,
-    pub evm_log_index: u32,
-    pub evm_block_time_ms: u64,
-    pub evm_actual_amount: String,
-    pub gmb_evidence_hash: Option<String>,
+    pub payer_authorization_hash: String,
+    pub checked_at: u64,
+    pub verification_deadline: u64,
 }
-impl Order {
-    pub fn intent(&self) -> Intent {
-        Intent {
-            intent_id: self.intent_id.clone(),
-            cid_number: self.cid_number.clone(),
-            account_id: self.account_id.clone(),
-            payer_address: self.payer_address.clone(),
-            token: self.token,
-            package_id: self.package_id.clone(),
-            chain_id: self.chain_id,
-            token_contract: self.token_contract.clone(),
-            recv_address: self.recv_address.clone(),
-            pay_amount: self.pay_amount.clone(),
-            coin_fen: self.coin_fen.clone(),
-            issued_at: self.intent_issued_at,
-            expires_at: self.intent_expires_at,
-        }
-    }
-    pub fn response(&self, deduplicated: bool) -> serde_json::Value {
-        serde_json::json!({"ok":true,"status":self.status,"status_label":label(self.status),"order_id":self.order_id,"gmb_tx_hash":self.gmb_tx_hash,"coin_fen":self.coin_fen,"deduplicated":deduplicated})
-    }
-    pub fn matches_payment(&self, p: &Payment) -> Result<()> {
-        if self.evm_tx_hash != p.tx_hash
-            || self.evm_block_hash != p.block_hash
-            || self.evm_block_number != p.block_number
-            || self.evm_transaction_index != p.transaction_index
-            || self.evm_log_index != p.log_index
-            || self.evm_block_time_ms != p.block_time_ms
-            || self.evm_actual_amount != p.actual_amount
+impl Payment {
+    pub fn require_fresh(&self, now: u64) -> Result<()> {
+        if self.checked_at > now
+            || now >= self.verification_deadline
+            || self.verification_deadline.checked_sub(self.checked_at) != Some(60000)
         {
-            return Err(Error::new(409, "topup_payment_evidence_conflict"));
+            return Err(Error::new(503, "topup_payment_evidence_expired"));
         }
         Ok(())
     }
 }
+pub enum Outcome {
+    Pending,
+    Confirmed(Payment),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    Awaiting,
+    Verifying,
+    Received,
+    Signed,
+    Broadcast,
+    Paid,
+    Exception,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Signed {
+    pub account_id: String,
+    pub nonce: u64,
+    pub extrinsic: String,
+    pub tx_hash: String,
+    pub born: u64,
+    pub claim: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Order {
+    pub order_id: String,
+    pub intent: Intent,
+    pub intent_hash: String,
+    pub message: String,
+    pub created_at: u64,
+    pub revision: u64,
+    pub phase: Phase,
+    pub payment_txid: Option<String>,
+    pub payer_signature: Option<String>,
+    pub payment: Option<Payment>,
+    pub signed: Option<Signed>,
+    pub legacy: Option<serde_json::Value>,
+    pub scan: u64,
+    pub gmb: Option<crate::chain::settlement::Proof>,
+    pub exception_reason: Option<String>,
+}
+impl Order {
+    pub fn create(c: &Config, i: Intent, token: &str) -> Result<Self> {
+        Ok(Self {
+            message: intent::message(c, &i, token)?,
+            order_id: format!("top_{}", &i.intent_id[4..]),
+            created_at: i.issued_at,
+            intent: i,
+            intent_hash: crypto::sha256_hex(token.as_bytes()),
+            revision: 0,
+            phase: Phase::Awaiting,
+            payment_txid: None,
+            payer_signature: None,
+            payment: None,
+            signed: None,
+            legacy: None,
+            scan: 0,
+            gmb: None,
+            exception_reason: None,
+        })
+    }
+    pub fn state(&self) -> State {
+        match self.phase {
+            Phase::Paid => State::Paid,
+            Phase::Exception => State::Exception,
+            _ => State::Pending,
+        }
+    }
+    pub fn response(&self, deduplicated: bool) -> serde_json::Value {
+        serde_json::json!({"ok":true,"status":self.state(),"phase":self.phase,"status_label":label(self.state()),"order_id":self.order_id,"payment_txid":self.payment_txid,"gmb_tx_hash":self.signed.as_ref().map(|s|&s.tx_hash),"coin_fen":self.intent.coin_fen,"reason":self.exception_reason,"deduplicated":deduplicated})
+    }
+    pub fn next(&self) -> Self {
+        let mut n = self.clone();
+        n.revision += 1;
+        n
+    }
+}
 pub fn label(s: State) -> &'static str {
     match s {
-        State::Pending => "待支付",
-        State::Paid => "已支付",
+        State::Pending => "处理中",
+        State::Paid => "已到账",
         State::Exception => "异常",
     }
 }
-pub async fn confirm<R: Repository, E: PaymentRpc, C: Clock>(
+pub async fn confirm<R: Repository, C: Clock>(
+    repo: &R,
+    clock: &C,
+    c: &Config,
+    key: &[u8],
+    r: Confirm,
+) -> Result<serde_json::Value> {
+    let i = intent::verify(&r.payment_intent, key)?;
+    i.validate(c)?;
+    if !i.network.txid(&r.payment_txid) {
+        return Err(super::routes::invalid());
+    }
+    // Solana钱包签名使用base58，EVM/Tron使用规范十六进制；真实授权在付款链最终块核对。
+    signature(i.network, &r.payer_signature)?;
+    let id = format!("top_{}", &i.intent_id[4..]);
+    let o = repo
+        .by_id(&id)
+        .await?
+        .ok_or(Error::new(404, "topup_order_not_found"))?;
+    if o.intent != i || o.intent_hash != crypto::sha256_hex(r.payment_intent.as_bytes()) {
+        return Err(Error::new(404, "topup_order_not_found"));
+    }
+    if let Some(tx) = &o.payment_txid {
+        if tx != &r.payment_txid || o.payer_signature.as_deref() != Some(&r.payer_signature) {
+            return Err(Error::new(409, "topup_payment_conflict"));
+        }
+        return Ok(o.response(true));
+    }
+    // 报价到期不阻止离线补交原交易；验款仍严格限制真实付款块在原十分钟报价内。
+    if i.issued_at > clock.now() {
+        return Err(Error::new(409, "topup_intent_expired"));
+    }
+    let mut n = o.next();
+    n.payment_txid = Some(r.payment_txid);
+    n.payer_signature = Some(r.payer_signature);
+    n.phase = Phase::Verifying;
+    Ok(repo.save(&o, &n).await?.response(false))
+}
+pub fn signature(n: Network, s: &str) -> Result<Vec<u8>> {
+    if n == Network::Solana {
+        use base58::FromBase58;
+        let b = s
+            .from_base58()
+            .map_err(|_| super::wallet_authorization::bad())?;
+        if b.len() != 64 {
+            return Err(super::wallet_authorization::bad());
+        }
+        Ok(b)
+    } else {
+        super::wallet_authorization::canonical_signature(s)
+    }
+}
+pub async fn verify<R: PaymentRpc, C: Clock>(
+    rpc: &R,
+    clock: &C,
+    c: &Config,
+    o: &Order,
+) -> Result<Outcome> {
+    let tx = o
+        .payment_txid
+        .as_deref()
+        .ok_or_else(super::routes::invalid)?;
+    let sig = signature(
+        o.intent.network,
+        o.payer_signature
+            .as_deref()
+            .ok_or_else(super::routes::invalid)?,
+    )?;
+    let msg = &o.message;
+    match o.intent.network {
+        Network::Tron => super::tron::verify(rpc, clock, c, &o.intent, tx, msg, &sig).await,
+        Network::Solana => super::solana::verify(rpc, clock, c, &o.intent, tx, msg, &sig).await,
+        _ => super::evm_verify::verify(rpc, clock, c, &o.intent, tx, Some((msg, &sig))).await,
+    }
+}
+/// U链未finalized时只保留原单，不创建或预扣公民链RPC上下文。
+pub async fn receive<R: Repository, E: PaymentRpc, C: Clock>(
     repo: &R,
     rpc: &E,
     clock: &C,
     c: &Config,
-    key: &[u8],
-    request: Confirm,
-    random: &str,
-) -> Result<serde_json::Value> {
-    if !crate::shared::ids::hex(&request.evm_tx_hash, 32, true) {
-        return Err(super::routes::invalid());
-    }
-    let i = intent::verify(&request.payment_intent, key)?;
-    i.validate(c)?;
-    i.require_live(clock.now())?;
-    let sig = wallet::canonical_signature(&request.payer_signature)?;
-    let msg = intent::message(c, &i, &request.payment_intent)?;
-    let ih = crypto::sha256_hex(request.payment_intent.as_bytes());
-    if let Some(old) = repo.by_tx(i.chain_id, &request.evm_tx_hash).await? {
-        if old.intent() != i
-            || old.intent_hash != ih
-            || old.payer_authorization_hash != wallet::signature_hash(&sig, old.wallet_is_contract)?
-        {
-            return Err(Error::new(409, "topup_txhash_claimed"));
-        }
-        if !old.wallet_is_contract
-            && wallet::recover(&wallet::digest(&msg), &sig)? != i.payer_address
-        {
-            return Err(wallet::bad());
-        }
-        return Ok(old.response(true));
-    }
-    let p = match evm_verify::verify(rpc, clock, c, &i, &request.evm_tx_hash, Some((&msg, &sig)))
+    id: &str,
+) -> Result<Option<Order>> {
+    let o = repo
+        .by_id(id)
         .await?
+        .ok_or(Error::new(404, "topup_order_not_found"))?;
+    if o.signed.is_some() || matches!(o.phase, Phase::Paid | Phase::Exception) {
+        return Ok(Some(o));
+    }
+    if o.phase == Phase::Received
+        && o.payment
+            .as_ref()
+            .is_some_and(|p| p.require_fresh(clock.now()).is_ok())
     {
-        Outcome::Pending => return Ok(serde_json::json!({"ok":true,"status":"confirming"})),
-        Outcome::Confirmed(p) => p,
-    };
-    i.require_live(clock.now())?;
-    if !crate::shared::ids::hex(random, 16, false) {
-        return Err(evm_verify::invalid());
+        return Ok(Some(o));
     }
-    let o = Order {
-        order_id: format!("top_{random}"),
-        intent_id: i.intent_id,
-        chain_id: i.chain_id,
-        token: i.token,
-        token_contract: i.token_contract,
-        evm_tx_hash: p.tx_hash.clone(),
-        payer_address: i.payer_address,
-        recv_address: i.recv_address,
-        pay_amount: i.pay_amount,
-        cid_number: i.cid_number,
-        account_id: i.account_id,
-        coin_fen: i.coin_fen,
-        package_id: i.package_id,
-        status: State::Pending,
-        settlement_claim_id: None,
-        settlement_claimed_at: None,
-        gmb_tx_hash: None,
-        gmb_block_hash: None,
-        gmb_extrinsic_index: None,
-        exception_reason: None,
-        confirmed_at: clock.now(),
-        settled_at: None,
-        intent_hash: ih,
-        intent_issued_at: i.issued_at,
-        intent_expires_at: i.expires_at,
-        payer_authorization_hash: p.payer_authorization_hash.clone(),
-        wallet_is_contract: p.wallet_is_contract,
-        evm_block_hash: p.block_hash.clone(),
-        evm_block_number: p.block_number,
-        evm_transaction_index: p.transaction_index,
-        evm_log_index: p.log_index,
-        evm_block_time_ms: p.block_time_ms,
-        evm_actual_amount: p.actual_amount.clone(),
-        gmb_evidence_hash: None,
+    let proof = match verify(rpc, clock, c, &o).await {
+        Ok(Outcome::Pending) => return Ok(None),
+        Ok(Outcome::Confirmed(p)) => p,
+        Err(e) if matches!(e.status, 400 | 403 | 409) => {
+            let mut n = o.next();
+            n.phase = Phase::Exception;
+            n.exception_reason = Some(e.code.into());
+            return Ok(Some(repo.save(&o, &n).await?));
+        }
+        Err(e) => return Err(e),
     };
-    let stored = repo.insert(&o, &p).await?;
-    Ok(stored.response(stored.order_id != o.order_id))
-}
-pub fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
-    let v = serde_json::Value::deserialize(d)?;
-    match v {
-        serde_json::Value::Bool(b) => Ok(b),
-        serde_json::Value::Number(n) if n == 0.into() => Ok(false),
-        serde_json::Value::Number(n) if n == 1.into() => Ok(true),
-        _ => Err(serde::de::Error::custom("invalid boolean flag")),
-    }
+    proof.require_fresh(clock.now())?;
+    let mut n = o.next();
+    n.phase = Phase::Received;
+    n.payment = Some(proof);
+    n.exception_reason = None;
+    Ok(Some(repo.save(&o, &n).await?))
 }
 pub async fn status<R: Repository>(repo: &R, key: &[u8], r: Status) -> Result<serde_json::Value> {
     if !super::routes::order_id(&r.order_id) {
@@ -200,8 +257,18 @@ pub async fn status<R: Repository>(repo: &R, key: &[u8], r: Status) -> Result<se
         .by_id(&r.order_id)
         .await?
         .ok_or(Error::new(404, "topup_order_not_found"))?;
-    if o.intent() != i || o.intent_hash != crypto::sha256_hex(r.payment_intent.as_bytes()) {
+    if o.intent != i || o.intent_hash != crypto::sha256_hex(r.payment_intent.as_bytes()) {
         return Err(Error::new(404, "topup_order_not_found"));
     }
     Ok(o.response(false))
+}
+// 其他既有存储合同使用的严格布尔解码，不接受字符串或任意数字。
+pub fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Bool(b) => Ok(b),
+        serde_json::Value::Number(n) if n == 0.into() => Ok(false),
+        serde_json::Value::Number(n) if n == 1.into() => Ok(true),
+        _ => Err(serde::de::Error::custom("invalid boolean flag")),
+    }
 }

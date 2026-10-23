@@ -50,7 +50,7 @@
 
 server通用宿主位于第1级，cloudflare平台适配位于第2级；普通业务存储适配、SQL及聊天平台适配分别归第3级repositories、sql、tatachat。Cloudflare聊天适配的attachment、key、mailbox、push、realtime仅为Rust逻辑模块，不再建立对应第4级源码目录。
 
-server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、maintenance.rs、schema.sql；attachment.rs、attachment_objects.rs、attachment_store.rs；key.rs、key_store.rs；mailbox.rs、mailbox_store.rs、mailbox_commit.sql、mailbox_acknowledge.sql；push.rs、push_provider.rs、push_store.rs；realtime.rs、realtime_device.rs。模块入口用Rust正式path属性定位所属内部实现，保留原逻辑模块、可见性及super关系；收件箱源码和SQLite合同测试读取同一直属SQL文件。上述结构调整不改变接口、数据、协议或授权。
+cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、maintenance.rs、schema.sql；attachment.rs、attachment_objects.rs、attachment_store.rs；key.rs、key_store.rs；mailbox.rs、mailbox_store.rs、mailbox_commit.sql、mailbox_acknowledge.sql；push.rs、push_provider.rs、push_store.rs；realtime.rs、realtime_device.rs。模块入口用Rust正式path属性定位所属内部实现，保留原逻辑模块、可见性及super关系；收件箱源码和SQLite合同测试读取同一直属SQL文件。上述结构调整不改变接口、数据、协议或授权。
 
 | 完整路径 | 当前内容 | 当前范围 |
 |---|---|---|
@@ -60,13 +60,13 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 | /Users/rhett/citizenserve/user/profiles.rs | 资料长度、CID头像/背景对象键 | 资料API、引用/并发CAS已实现；资料资产准备/代际/条件写/受保护读取由profile_assets服务完成。 |
 | /Users/rhett/citizenserve/8964/ | 信息流/关注、上传/额度、完整manifest、媒体、帖子 | 三种feed及浏览计量、原子预留/完成、R2事实核验、同块发布/详情/回灌/故障删除闭环已实现。 |
 | /Users/rhett/citizenserve/membership/ | 有效期、独立会员轴、三档完整额度与创作者 | 当前权益、交易确认/投影、档位/订阅/概览、调度及30天/24小时清理提醒已实现。 |
-| /Users/rhett/citizenserve/topup/ | 原包ID/金额、claim及结算状态规则 | HMAC意图、ERC-191/1271付款钱包自证、EVM canonical付款/原子订单及完整GMB结算API已实现。 |
+| /Users/rhett/citizenserve/topup/ | 两套餐、六币轨验款与服务端发币 | HMAC意图先存订单，跨协议付款授权，sr25519签名、原字节恢复与GMB最终成功证明。 |
 | /Users/rhett/citizenserve/notifications/ | 当前设备端点、持久任务、扇出与发送合同 | 未读、端点登记/代际、原子outbox、40端点分页、单端点APNs/FCM与Queue消费已本地验收。 |
 | /Users/rhett/citizenserve/chain/ | canonical finalized、metadata/SCALE、身份/会员/完整交易 | 身份/订阅/完整交易、两引导schema、同块宪法/清单、受控广播和26方法EVM代理已实现。 |
 | /Users/rhett/citizenserve/tatachat/ | 按auth/protocol/key/mailbox/attachment/push/realtime分目录维护的通用聊天 | 通用核心已接入根库；Cloudflare数据面源码已装配，当前Worker统一编译与运行态仍待验收。原chat已删除，公民授权归user/membership/server。 |
-| /Users/rhett/citizenserve/server/cloudflare/ | 10项用户授权/恢复、37账户、27工具API、RPC、D1/R2/Queue/Cron/WebCrypto | 完整ESM/WASM、本地fetch/queue/scheduled验收通过；生产兼容日期、线上资源/推送与正式发布未验收。 |
+| /Users/rhett/citizenserve/cloudflare/ | 用户授权/恢复、账户和工具API、RPC、D1/R2/Queue/Cron/WebCrypto | 完整ESM/WASM、本地fetch/queue/scheduled验收通过；生产兼容日期、线上资源/推送与正式发布未验收。 |
 
-主库规范DDL位于server/cloudflare/schema.sql，当前41张产品表（含统一会员指标及幂等操作表）；下载库独立1张，聊天库独立使用tatachat/schema.sql。数据库结构和授权围栏由真实SQL定义，不复制为宿主影子模型；源码结构不代表线上DDL已经执行。
+主库规范DDL位于cloudflare/schema.sql，当前41张产品表（含统一会员指标及幂等操作表）；下载库独立1张，聊天库独立使用tatachat/schema.sql。数据库结构和授权围栏由真实SQL定义，不复制为宿主影子模型；源码结构不代表线上DDL已经执行。
 
 ## 注册、设备与会话接口
 
@@ -107,7 +107,7 @@ server/cloudflare/tatachat直属文件为config.rs、routes.rs、lifecycle.rs、
 
 ## 运行边界与未来自建兼容
 
-当前只落地Cloudflare WASM，平台依赖在 /Users/rhett/citizenserve/server/cloudflare/Cargo.toml。共同库不引用worker/D1/R2/Tokio/PostgreSQL驱动。具体业务端口表达完整原子操作；平台适配不能把先读取后写入当作同等事务。
+当前只落地Cloudflare WASM，平台依赖在 /Users/rhett/citizenserve/cloudflare/Cargo.toml。共同库不引用worker/D1/R2/Tokio/PostgreSQL驱动。具体业务端口表达完整原子操作；平台适配不能把先读取后写入当作同等事务。
 
 未来自建接入须使用相同逻辑身份、对象键、时间单位、摘要和授权合同，scope/origin不编码部署商，缓存不作准入事实源。当前没有自建服务器运行crate、迁移crate、导出/导入、切流、迁移CLI或控制台按钮。
 
@@ -340,35 +340,32 @@ CHAIN_URL沿用所属公开配置入口并固定为受Access保护的HTTPS根RPC
 
 ### 业务与权限合同
 
-1. **固定精确路径与权限。** 统一功能前缀为/api/topup、/api/chain；不保留安装包下载、旧/square、根/constitution或/operations路由。将以下14项API方法及独立rpc域明确分为公共链工具、HMAC付款意图、SETTLE_TOKEN结算三类，逐方法逐路径登记；它们均不能访问广场、聊天、通讯录、会员或用户资料，现有普通账户服务守卫和MLS实际路径证明不改。保留冷钱包/代充的原产品能力，充值目标AccountId可未绑定CID；RPC失败不能记成“未绑定CID”。客户端不得让未完成准入的主体访问账户服务。
-2. **报价、付款意图与付款人授权。** Base主网8453、USDC/USDT两条既有代币轨、6位最小单位；pkg_15为15000000原子单位→1000000公民币分，pkg_1400为1400000000→100000000分，金额以精确整数字符串交付。意图绑定目标AccountId、实际当前CID或null、付款地址、币轨/合约、收款地址、套餐/金额、唯一intent_id和签发/十分钟到期时间，保留服务器HMAC能力令牌。旧代码只有客户端申报payer_address及“签发早于区块”检查；观察待打包交易后仍能先造不同目标意图，所以增加**付款钱包签署完整充值意图**：intent响应返回服务端生成的wallet_authorization_message；confirm准确增加payer_signature字段。EOA以ERC-191 personal_sign恢复付款地址；合约付款钱包按该canonical付款块的ERC-1271只读验签。任何地址、目标、金额、链/域或意图变更均使签名失效，私钥不上传。客户端签名交互归CitizenApp，服务端按同一公开付款授权合同验证。
-3. **以真实EVM链事实创建订单。** 固定TOPUP_BASE_RPC_URL，不接受客户端RPC URL；核对eth_chainId=8453、交易/receipt哈希、成功状态、实际token Transfer事件、付款/收款地址、足额u256金额、log所属canonical区块、区块时间和确认策略。付款发生时间必须晚于意图签发且不晚于十分钟到期；配置min_confirmations=0沿用finalized，否则使用准确确认数并核对canonical hash。未知编码、链错、重组、超时或缺区块不能成功。同(chain_id,evm_tx_hash)与intent_id双唯一，同意图/同准确规范事实幂等，不同意图抢占拒绝；保留原pending/paid/exception三态，RPC待确认不落新终态。将准确付款区块/日志、意图及钱包授权摘要和核验期限存入原topup_orders相应列，一次原子写入，不设影子用户。保留IP和目标AccountId限速、外部付款RPC每链300次/60秒D1全局硬顶；重复已确认查询不再打付款RPC。
-4. **排他claim与双链结算。** 仅常量时间匹配SETTLE_TOKEN的结算客户端可操作。pending≤50，history≤100并用(confirmed_at,order_id)稳定游标合并三态。claim同ID幂等、不同ID排斥，永不自动过期释放；服务端不持发币私钥，不自动签发/广播公民币。settled在当前claim下复核Base付款，并用目标块metadata完整解析OnchainTransaction::transfer_with_remark、整交易哈希、canonical finalized块/准确index/整签名字节、配置发币账户、准确受益AccountId/金额、topup:<order_id>备注、同phase的唯一System.ExtrinsicSuccess且无失败、准确TransferWithRemark事件；不靠硬编码pallet/call index或“交易包含在块中”宣称转账成功。抽取现有通用signed/finalized核心时保留会员/帖子专用CID及SquarePost核验。最后一次D1事务比较claim、订单与全部证据，重复paid须完整证据一致；同GMB交易不能付给两笔订单。exception须匹配claim及准确理由，不从异常自动恢复或重新发币。
+1. **固定精确路径与权限。** /api/topup和/api/chain共11项API方法；公共链工具、HMAC付款意图、SETTLE_TOKEN管理读取分别授权，均不签发普通账户服务权限。代充目标AccountId可未绑定CID，但存在的CID必须双向核对；RPC失败不得伪装成不存在。原注册、MLS和账户业务合同保持。
+2. **两套餐与六币轨。** pkg_15为15 U→1000000公民币分，pkg_1400为1400 U→100000000公民币分，不接受自定义金额。仅支持USDC Ethereum/Base/Solana和USDT Ethereum/Tron/BNB。BNB指定Binance平台USDT，18位；其余指定资产6位。实际合约/mint在topup/config.rs固定，不按symbol接受任意资产。客户端自动取得实际network上下文，无网络选择要求；服务端验证主网及实际收款。金额使用整数十进制字符串，18位金额不缩窄为u64或浮点。
+3. **先落订单再验款。** intent绑定目标、CID或null、协议、资产、付款/收款地址、两端金额、套餐和十分钟报价时间，生成HMAC令牌及付款钱包签名消息并立即持久化。confirm绑定首个payment_txid和付款授权，(network,payment_txid)、intent_id、GMB交易哈希分别唯一。付款块必须晚于签发、不晚于到期且不在未来；只要真实付款在报价期内，服务端继续等待最终性，不因报价到期停止已登记订单。EVM验证chainId、准确receipt/Transfer及canonical finalized块和ERC-191/1271授权；Tron核对主网genesis、固化成功交易、TRC20日志及Tron钱包签名；Solana核对主网genesis、finalized成功交易与块签名成员、原SPL Token程序、USDC mint、双方token账户owner及Ed25519授权。超付只发所选套餐固定分额，其他链币组合即使收到也不发币。
+4. **服务端自动转账与恢复。** TOPUP_DISBURSE_KEY是Worker Secret中的32字节sr25519种子，仅由其派生公开账户，从已有余额转账，不能增发。单公开账户串行领取，按finalized账户nonce、Runtime版本和metadata构造OnchainTransaction::transfer_with_remark；索引及签名扩展类型来自metadata，零tip、immortal及原生签名域不改。完整签名字节、账户、nonce及起始块先CAS保存再通过既有Tunnel广播；未知结果只追踪/重播同一字节，未解决前不释放账户占用、不重签。更换种子不改变已签订单的冻结账户及原字节，旧交易最终核对不需要旧私钥。只有原交易在canonical finalized块中，完整调用、准确收款金额/账户/topup:<order_id>、唯一成功phase及TransferWithRemark事件全部吻合，才记paid；入池或入块不算到账。余额不足停在received并显示原因。终态保存与执行占用释放在同一D1原子批完成。
 5. **链引导、宪法及受控广播。** App与CitizenSDK两个bootstrap保留各自exact schema、SS58=2027/GMB两位小数、已登记创世hash/state_root/bootnodes、签名安装包bundled chainspec/light_sync_state及P2P finalized信任合同，不下发可替换checkpoint或服务端节点/Access秘密。返回当前/api实际服务路径；广播显式关闭时返回不可用。宪法从同一canonical finalized块的LegislationYuan Laws(0)已生效版本、LawVersions、LawVersionLabels与ConstitutionImmutableManifest完整解码，拒绝尾字节/非法层级/超大内容，保留中英标签与准确更新时间；展示缓存≤300秒不能用于授权。POST extrinsics只收signed_extrinsic_hex，不收私钥/助记词、账户申报或任意RPC方法；原始extrinsic≤65536B、JSON≤131584B。显式RELAY_ENABLED=1及实际固定节点配置后才调用author_submitExtrinsic；IP每分钟20次跨PoP硬顶、SHA-256十分钟去重与排他占用，验证节点tx_hash与完整extrinsic BLAKE2-256一致。广播超时保留不确定结果/定位，不假报失败后自动重发；广播成功只表示broadcast，不签发CID/准入/会话或宣称finalized。
-6. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不是充值用Base节点。页面、PNG与RPC共用CitizenChain节点的同一HTTPS根端点，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有展示缓存和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
-7. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行全量fmt/测试/Clippy/WASM Release/WebAssembly.compile，回归现有授权/社区/内容合同，health继续account_services_ready:false。
+6. **独立公共EVM RPC与本产品本地装配。** https://nrcrpc.crcfrcn.com/作为CitizenServe Worker的Custom Domain，根GET/HEAD交付MetaMask接入页，同域/icons/gmb.png的GET/HEAD交付PNG；根POST/OPTIONS固定代理CitizenChain的EVM节点，不使用外部充值节点。页面、PNG与RPC共用CitizenChain节点的同一HTTPS根端点，资源源码和产物归node；cloudflared直接连接节点，机构部署参数留在服务器与Tunnel配置中。静态资源只读取CHAIN_URL的origin及两个准确路径，以服务端Access身份执行GET，禁止重定向；3秒总超时覆盖响应头和正文，实际正文最多128KiB，校验text/html或image/png，HTML必须有效UTF-8。GET/HEAD共用RATE_READ，HEAD核验资源后丢弃正文，错误及限流也保持空正文；公开响应独立设置媒体类型、no-store及公共CORS，不透传上游头、Cookie、凭据或错误。严格保留26项方法，单次/批量≤20项、JSON正文≤128KiB、合法唯一id、明确params预算及真实节点result/error；不执行通知、重复ID、未知方法或私钥参数。eth_getLogs≤1000块/32地址/4层topics，feeHistory≤1024块/100百分位，accessList≤64×64；固定Access源、10秒超时、有界响应、逐项限制及最大全局工作量，不开放任意Substrate JSON-RPC代理。本地声明既有展示缓存和准确域/秘密/变量，不读取或上传秘密、不创建资源、不部署。共同Rust核心保持无worker/D1/R2耦合，本产品不写自建服务器或迁移工具。
+7. **验收要求。** 覆盖真实HMAC/ECDSA/Keccak及ERC-191向量、ERC-1271合成RPC、付款被他人观察后不能抢单、错目标/错链/错币/不足额/过期/重组、完整GMB成功及失败交易、同交易不同订单、24并发意图/付款/claim/广播、持久claim崩溃、故障保留不确定状态、完整引导/宪法和26方法边界、实际/api HMAC互操作。生产SQL原文在SQLite运行，模拟端口明确标为模拟。运行工作空间测试/Clippy、范围内fmt、真实Worker WASM Release及端到端回归，回归现有授权/社区/内容合同，health继续account_services_ready:false。
 
 ### 付款钱包签名合同
 
-消息由服务端生成，UTF-8 ASCII，固定顺序逐行包含：CitizenServe Topup v1、service_origin、chain_genesis_hash、intent_id、chain_id、payer_address、token_contract、recv_address、pay_amount、coin_fen、account_id、package_id、issued_at、expires_at、intent_sha256；key=value，各行LF且最后一行带LF，intent_sha256对返回的完整payment_intent ASCII字节求SHA-256。展示金额与目标，客户端不得自行重排/重编码。EOA采用personal_sign的Ethereum Signed Message前缀和**消息字节长度**再Keccak-256；只接受规范65字节r/s/v及low-S，v=0/1或27/28规范化，恢复地址须与意图payer_address相同。合约钱包使用同一digest及有界签名（≤4096B），在已核实付款块读取代码并只调用该地址isValidSignature，gas≤500000，准确返回0x1626ba7e才通过；不能把RPC故障降级成EOA或成功。
+消息由服务端生成，UTF-8 ASCII，固定顺序逐行包含：CitizenServe Topup v1、service_origin、chain_genesis_hash、intent_id、network、payer_address、asset、recv_address、pay_amount、coin_fen、account_id、package_id、issued_at、expires_at、intent_sha256；key=value，各行LF且最后一行带LF，intent_sha256对返回的完整payment_intent ASCII字节求SHA-256。展示金额与目标，客户端不得自行重排/重编码。EOA采用personal_sign的Ethereum Signed Message前缀和**消息字节长度**再Keccak-256；只接受规范65字节r/s/v及low-S，v=0/1或27/28规范化，恢复地址须与意图payer_address相同。合约钱包使用同一digest及有界签名（≤4096B），在已核实付款块读取代码并只调用该地址isValidSignature，gas≤500000，准确返回0x1626ba7e才通过；不能把RPC故障降级成EOA或成功。
 
-这是对旧充值实现实际抢单漏洞的方案加固，增加的是付款意图签名，不是CID注册步骤。EOA标准依据 [ERC-191](https://eips.ethereum.org/EIPS/eip-191)，合约钱包依据 [ERC-1271](https://eips.ethereum.org/EIPS/eip-1271)。所需最小纯Rust ECDSA/Keccak依赖实施前核实官方版本/API并固定到Cargo.toml/Cargo.lock，记录版本与验证，不批量升级其他依赖。
+同一消息另用于Tron Signed Message V2及Solana原始UTF-8 Ed25519签名，协议格式由实际network决定。Tron只接受规范低S的65字节r/s/v；Solana接收base58的64字节签名。付款钱包不得替换消息、目标或顺序，任何RPC故障均不能降级成授权成功。EOA依据[ERC-191](https://eips.ethereum.org/EIPS/eip-191)，合约钱包依据[ERC-1271](https://eips.ethereum.org/EIPS/eip-1271)。
 
 ### 全部外部请求地址、内部路径和权限
 
-API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST（settled/广播除外）正文上限16KiB；settled≤131584B、广播≤131584B且原始交易≤65536B；GET仅接受标出的规范查询；拒绝重复/未知查询、字段和方法。动态order_id只接受top_<32位小写hex>。public/付款/结算均不签发账户服务授权；现有普通账户业务始终走MLS守卫。
+API origin为https://www.crcfrcn.com，权限由精确路由决定。下列POST（广播除外）正文上限16KiB；广播≤131584B且原始交易≤65536B；GET仅接受标出的规范查询；拒绝重复/未知查询、字段和方法。动态order_id只接受top_<32位小写hex>。public/付款/结算均不签发账户服务授权；现有普通账户业务始终走MLS守卫。
 
 | 方法与完整请求地址 | 内部路径 | 准确输入/权限 |
 |---|---|---|
 | GET https://www.crcfrcn.com/api/topup/config | /topup/config | 公开准确报价/已配置币轨，空正文。 |
-| POST https://www.crcfrcn.com/api/topup/intent | /topup/intent | account_id、token、package_id、payer_address；返回HMAC意图与完整钱包签名消息。 |
-| POST https://www.crcfrcn.com/api/topup/confirm | /topup/confirm | payment_intent、evm_tx_hash、payer_signature；实际付款钱包授权+双唯一付款事实。 |
+| POST https://www.crcfrcn.com/api/topup/intent | /topup/intent | account_id、token、network、package_id、payer_address；先存订单，返回order_id、HMAC意图与完整钱包签名消息。 |
+| POST https://www.crcfrcn.com/api/topup/confirm | /topup/confirm | payment_intent、payment_txid、payer_signature；绑定定位后立即派发核验。 |
 | POST https://www.crcfrcn.com/api/topup/status | /topup/status | order_id、payment_intent；只查该意图订单；既有订单查询不因付款意图TTL结束失联。 |
-| GET https://www.crcfrcn.com/api/topup/settlement/pending?limit=<1..50> | /topup/settlement/pending | SETTLE_TOKEN；空正文。 |
 | GET https://www.crcfrcn.com/api/topup/settlement/history?limit=<1..100>&cursor=<BASE64URL> | /topup/settlement/history | SETTLE_TOKEN；准确复合游标。 |
-| POST https://www.crcfrcn.com/api/topup/settlement/{order_id}/claim | /topup/settlement/{order_id}/claim | SETTLE_TOKEN；可选claim_id（缺省由服务端生成）。 |
-| POST https://www.crcfrcn.com/api/topup/settlement/{order_id}/settled | /topup/settlement/{order_id}/settled | SETTLE_TOKEN；claim_id、gmb_tx_hash、gmb_block_hash、gmb_extrinsic_index、signed_extrinsic_hex。 |
-| POST https://www.crcfrcn.com/api/topup/settlement/{order_id}/exception | /topup/settlement/{order_id}/exception | SETTLE_TOKEN；claim_id、reason。 |
+| GET https://www.crcfrcn.com/api/topup/account | /topup/account | SETTLE_TOKEN；派生公开发币账户、GMB余额、六币轨各自余额及读取状态，绝不返回种子。 |
 | GET https://www.crcfrcn.com/api/chain/bootstrap | /chain/bootstrap | App准确引导schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/citizensdk/bootstrap | /chain/citizensdk/bootstrap | CitizenSDK准确窄schema；公开只读。 |
 | GET https://www.crcfrcn.com/api/chain/constitution | /chain/constitution | 已生效宪法；公开只读。 |
@@ -384,9 +381,10 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 
 ### 实际固定后端地址和配置来源
 
-- 旧正式配置登记的Base源是https://mainnet.base.org；实施时仅从TOPUP_BASE_RPC_URL加载固定HTTPS源，核实准确币轨合约/decimals/实际资产种类，以合约白名单为准，不凭symbol识别或把桥接资产说成原生资产。TOPUP_RECV_ADDRESS、TOPUP_DISBURSE_ACCOUNT_ID和两币合约对照历史公开配置，未核实不猜填、不增加新网络/供应商。
-- CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。CHAIN_URL按本产品根地址声明交付，与Node根RPC保持一致。公共EVM源属于该CitizenChain节点，不转给Base源。
-- 展示 KV 沿用 SQUARE_CACHE；服务端不再声明公民链下载 D1 和发布指针密钥。TOPUP_INTENT_SECRET 与 SETTLE_TOKEN 仍只声明，不读值、不线上写。
+- TOPUP_RPCS为ethereum/base/bnb/tron/solana五个固定HTTPS RPC的JSON，TOPUP_RECEIVERS为evm/tron/solana三种地址的JSON，均由正式配置交付，源码不猜填生产输入，不接受客户端URL。EVM各链共用同一收款地址；Tron使用T格式地址，Solana使用独立地址。六个币轨分别读取原子余额、精度和成功/错误状态，不合并不同链币余额，读取失败不填假零。
+- TOPUP_DISBURSE_KEY为不可显示的Worker Secret；TOPUP_INTENT_SECRET与SETTLE_TOKEN沿用原用途。控制台后续通过官方Cloudflare Worker Secrets API更新种子（会创建新Worker版本），服务端不持有修改自身Secrets的管理令牌，不开放普通HTTP私钥写入D1。
+- CitizenChain只从既有CHAIN_URL/CF_ACCESS_CLIENT_ID/CHAIN_SECRET固定Access源读取或受控广播；CF_ACCESS_CLIENT_ID是公开的Cloudflare Access客户端标识，不是公民链的链规格ID或EVM链ID，CHAIN_SECRET仍属保密材料。CHAIN_URL按本产品根地址声明交付，与Node根RPC保持一致。公共EVM源属于该CitizenChain节点，不转给外部充值RPC源。
+- 展示KV沿用SQUARE_CACHE，服务端不声明下载D1或发布指针密钥；管理只读接口不执行私钥更新或发币命令。
 - 当前/api归一化与付款签名/HMAC变更先实现服务端合同；App及产品发布器必须在各自后续接线验收新实际路径，未验收前不能替换生产。
 
 ## 通知、调度与维护
@@ -413,7 +411,7 @@ public是保留的链网络/报价能力，不代表未通过验证者能进入�
 | POST https://www.crcfrcn.com/api/user/challenges | /user/challenges | 既有准确六字段；purpose=request增加上述两个实际/api目标，不接受其他推送管理路径。 |
 | GET https://www.crcfrcn.com/api/membership | /membership | 既有空正文/Bearer/MLS接口，响应增加本人本周期storage_cleanup_notice；不新增清理管理API。 |
 
-请求识别以server/gate/request.rs的真实声明为准，开放/CID/拒绝及具体准入规则统一归server/gate/policy.rs。Queue/Cron是Cloudflare事件入口，没有公网HTTP任务执行、推送任意载荷或重试财务接口。推送HTTP地址固定在平台适配层；MLS证明仍覆盖实际方法、完整/api路径/查询和原始正文。
+请求识别以gate/request.rs的真实声明为准，开放/CID/拒绝及具体准入规则统一归gate/policy.rs。Queue/Cron是Cloudflare事件入口，没有公网HTTP任务执行、推送任意载荷或重试财务接口。推送HTTP地址固定在平台适配层；MLS证明仍覆盖实际方法、完整/api路径/查询和原始正文。
 
 ### 许可接口地址与规范路径
 
@@ -436,7 +434,7 @@ GitHub Runner只使用本产品声明的TataChatSDK固定提交及该提交的�
 
 产品Build在Runner编译现场直接准备并核验协议原件，回执位于当前`target/build/cloudflare/tatachat-protocol/receipt.json`；根build.rs只消费这份回执及准确文件列表。缺件或字节漂移直接失败。
 
-JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。server/cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及canonical CID后映射；recheck匹配原主体、会话、修订及中性附件状态并裁剪原期限，authorize_wake取得目标当前权限；attachment_limit单独消费统一会员门禁。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
+JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60秒窗口、严格Ed25519验签唯一归tatachat/auth；宿主只将已核实Authorization映射为Claims并调用unsigned，再由现有WebCrypto执行器签名。server不保留第二Claims/Header/VerifiedToken或第二验签实现；verify_token只委托通用CredentialContext，然后检查本产品真实CID、设备、修订、摘要与安全整数边界。cloudflare/tatachat.rs现有Host直接实现通用Host端口，用current_session重查真实会话/准入/设备及canonical CID后映射；recheck匹配原主体、会话、修订及中性附件状态并裁剪原期限，authorize_wake取得目标当前权限；attachment_limit单独消费统一会员门禁。通用Access独立保留原credential_deadline，未知或核验失败即拒绝。
 
 ## 公民客户端消费边界
 
@@ -444,7 +442,7 @@ JWT头、Claims、签名输入、秒/毫秒一致性、最长15分钟及初次60
 
 ## Cloudflare聊天数据面与资源
 
-Cloudflare入口仍是同一CitizenServe Worker。server/cloudflare/tatachat根只放config、routes、schema和maintenance；key、mailbox、attachment、push、realtime各功能的mod/store或具体驱动分目录。通用权限、协议、幂等规则与协调器继续消费根tatachat已有端口；不复制SDK协议、宿主身份、设备登记或会员真源，不维护待退役旧仓。
+Cloudflare入口仍是同一CitizenServe Worker。cloudflare/tatachat根只放config、routes、schema和maintenance；key、mailbox、attachment、push、realtime各功能的mod/store或具体驱动分目录。通用权限、协议、幂等规则与协调器继续消费根tatachat已有端口；不复制SDK协议、宿主身份、设备登记或会员真源，不维护待退役旧仓。
 
 唯一公开数据路由为GET /api/tatachat/realtime与GET/PUT /api/tatachat/attachments/{attachment_id}/chunks/{chunk_index}，WebSocket子协议为tatachat，帧为固定SDK生成Protobuf。凭证由已有/api/tatachat/access签发，数据入口复用同一验签和可信Host。配置须有四绑定；HTTPS服务origin、可选Origin、原始路径和方法严格核对，客户端内部头不产生能力。附件分块无查询字符串、非规范编号或旧/attachments别名。非创建设备执行上传、完成或中止，沿用通用附件合同返回not_found（HTTP为404），隐藏存在性；真实Worker回归同时核对拒绝前后的整件元数据及全部上传记录不变。每设备最多4连接，帧最多2MiB，单密文块最多4MiB；附件总体额度仍取可信会员许可与通用MLS开销规则。
 
@@ -466,7 +464,7 @@ rebuild只重建本模块业务表，保持D1/R2/DO/Queue资源身份与对象�
 
 云能力由获准安全执行器持有和发送认证；产品脚本只通过当前任务的双向FD传公开Cloudflare请求，响应绑定schema/id/product/platform/environment/account。固定Cloudflare账户URL与Worker只读限制在产品再次检查，执行器还必须绑定获准操作和资源ID/名称，拒绝越界。CLI必须显式independent；控制台未交付所需公开能力时，console明确失败，不能读取SERVER_DEPLOY、Keychain或私有发布通道。产品支持配方与能力注入不等于安全执行器或控制台接入已经交付。
 
-本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、11项Worker Secret及固定变量/资源绑定由本接口与 `server/cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
+本仓 `scripts/config.mjs` 是运行、发布和塔塔控制台共用的只读配置需求接口，不保存配置值。正式Worker的九项动态公开变量、11项Worker Secret及固定变量/资源绑定由本接口与 `cloudflare/wrangler.toml` 逐项核对；`scripts/publish.mjs` 直接使用本接口的名称与公开值校验，不另存一份运行变量名单。`CF_ACCESS_CLIENT_ID` 与 `TATACHAT_AUTH_KID` 属公开运行变量，`CHAIN_SECRET` 与 `TATACHAT_AUTH_KEY` 属Worker Secret；旧聊天Ed25519双项不再登记。配置页面的格式校验使用产品声明的受限格式，机密值只由控制台原生安全层保管和授权。
 `CHAIN_URL`使用既有`https_root_url:chain.crcfrcn.com`配置格式，对应`https://chain.crcfrcn.com/`，与Node现有根POST/WSS接口一致。发布候选与Worker运行态都拒绝子路径或查询，不保留旧RPC路径兼容。Access须保护该源域的完整路径并保留服务认证，公共钱包仍只经既有Worker白名单访问。该值保持现有公开运行配置类别，真正的Access凭据仍由`CHAIN_SECRET`保管；发布冷签只携带最终配置摘要。
 `TATACHAT_AUTH_KEY` 声明独立Ed25519 PKCS#8 PEM生成与格式校验，`TATACHAT_AUTH_KID` 声明随机公开标识生成；两项均不在仓库保存值。控制台仅按本产品当前声明在所属配置页生成、更换或删除已保存的值，删除值不删除产品配置声明；Worker签发与验签读取同一部署的私钥和KID。
 控制台只登记公民服务端的自动化和发布动作。自动化派发本仓`cloudflare.yml`，Build只在GitHub Runner被调用；发布动作在用户确认后消费已核验的正式Release资产，准备锁定Wrangler及公开配置；控制台安全层持有并向部署进程交付SERVER_DEPLOY与Worker密钥，部署后回读Worker状态。两者在配置存储合同中均属保密，公开值只在控制台数据库，保密值只在当前受保护Keychain；生产动作的冷签授权与配置存储类别分离。
@@ -601,7 +599,7 @@ GitHub接口使用普通参数和已授权令牌，返回本仓既有版本计�
 
 ## 统一注册门禁
 
-所有传入请求统一由server/gate识别并按开放、公民号校验、直接拒绝三路处理。mod.rs负责门禁编排；request.rs负责无I/O的精确请求识别及有界解析；policy.rs为唯一准入分类；open.rs绑定具体开放路径、能力与可信服务来源；identity.rs承接原CID、真人准入、设备、会话及MLS请求证明校验。原鉴权和通用路由已迁入门禁目录，调用方及既有测试使用新模块，无兼容转发。注册前真人验证不要求CID或MLS，设备激活/会话阶段按对应CID规则处理。发布接口重复成功自动化的拒绝文案明确为“不唯一”，原拒绝逻辑与断言保持。
+所有传入请求统一由gate识别并按开放、公民号校验、直接拒绝三路处理。mod.rs负责门禁编排；request.rs负责无I/O的精确请求识别及有界解析；policy.rs为唯一准入分类；open.rs绑定具体开放路径、能力与可信服务来源；identity.rs承接原CID、真人准入、设备、会话及MLS请求证明校验。原鉴权和通用路由已迁入门禁目录，调用方及既有测试使用新模块，无兼容转发。注册前真人验证不要求CID或MLS，设备激活/会话阶段按对应CID规则处理。发布接口重复成功自动化的拒绝文案明确为“不唯一”，原拒绝逻辑与断言保持。
 
 统一门禁源码迁移、平台接线与本地回归已完成；尚未进行生产Worker编译与线上部署。具体测试证据归原任务卡，线上边界仍须部署验收。所有未知请求必须在数据库、RPC及对象存储访问前拒绝；开放凭据不能取得账户Authority。原签名、一次性挑战及事务授权断言继续保留。
 
@@ -617,7 +615,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 
 ## 统一会员门禁
 
-所有需要公民号的外部业务先完整通过`server/gate`的注册、真人准入、有效CID、当前绑定、设备、会话及实际请求证明校验，再进入`membership/gate.rs`。开放注册/链工具及可信平台回调继续由原注册门禁的精确Scope管理，不能转换成用户业务权限；未知类型直接拒绝。
+所有需要公民号的外部业务先完整通过`gate`的注册、真人准入、有效CID、当前绑定、设备、会话及实际请求证明校验，再进入`membership/gate.rs`。开放注册/链工具及可信平台回调继续由原注册门禁的精确Scope管理，不能转换成用户业务权限；未知类型直接拒绝。
 
 `membership/policy.rs`是唯一业务会员策略；操作从实际方法、规范路径、目标CID或内部真实命令选择，不接受客户端的会员等级、isSelf、已用量或放行声明。Permit私有构造且不可反序列化，绑定操作、CID、账户、修订、设备及期限。未知会员状态失败关闭。
 
@@ -652,7 +650,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 
 会员浏览每页安全顶50，广场仍要求有效会员。原图片/视频/存储账本按last_charged_at至paid_until的会员周期原子预留和扣减；聊天、附件及媒体另受下述UTC日风控硬顶，不改变原单文件权益或新增收费接口。
 
-统一`server/cloudflare/sql/meter.sql`保留原AUTH_ASSERT及会员最新行/期限/同步健康保护。浏览、详情和他人资料只更新原汇总，不新增随机操作流水；发布保留稳定回执，跨周期同结果重试保留首次周期且不重复计数。媒体和聊天资源使用同文件资源预算段，同事务预扣CID汇总membership_usage与全站rate_windows，不写随机访问流水。媒体HEAD/304只扣请求，GET在R2读取前按获准Range长度扣交付字节；重复GET再次预扣，失败保守占量。缺字段、非整数、溢出、冲突、过期和撤销均拒绝。
+统一`cloudflare/sql/meter.sql`保留原AUTH_ASSERT及会员最新行/期限/同步健康保护。浏览、详情和他人资料只更新原汇总，不新增随机操作流水；发布保留稳定回执，跨周期同结果重试保留首次周期且不重复计数。媒体和聊天资源使用同文件资源预算段，同事务预扣CID汇总membership_usage与全站rate_windows，不写随机访问流水。媒体HEAD/304只扣请求，GET在R2读取前按获准Range长度扣交付字节；重复GET再次预扣，失败保守占量。缺字段、非整数、溢出、冲突、过期和撤销均拒绝。
 
 主库新增membership_operations及membership_usage，原资源账本不重置；两表在原注销清理名单末尾按CID、原100行上限处理；当前UTC日风控行（含资料媒体请求/预留字节）保留，删除与剩余检查使用同一条件，旧阶段编号及永久财务证据保留；本轮未执行生产DDL迁移或部署。媒体直读先通过会员再访问R2，交付前再验证原授权view、对象版本和许可期限，保留Range/条件请求及私有no-store响应。
 
@@ -666,7 +664,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 
 ## 统一服务端门禁与查链资源上界（前后端联调第1步）
 
-实现路径：`server/cloudflare/repositories/auth.rs`一次D1快照取得身份、真人准入、设备、会话、原会员行及两项同步健康；`server/gate/identity.rs`生成Authority，`membership/gate.rs`生成对应操作的Permit。普通GET会员、创作者套餐/概览、媒体、业务挑战、已有设备建会话和通知投递均不创建Chain，也不通过失败分支排队补查。会员表历史扣款账户不代替当前CID身份；业务写事务比较最新档位、状态、paid_until、last_charged_at和投影块，旧许可不能跨越降档、停用或续费。
+实现路径：`cloudflare/repositories/auth.rs`一次D1快照取得身份、真人准入、设备、会话、原会员行及两项同步健康；`gate/identity.rs`生成Authority，`membership/gate.rs`生成对应操作的Permit。普通GET会员、创作者套餐/概览、媒体、业务挑战、已有设备建会话和通知投递均不创建Chain，也不通过失败分支排队补查。会员表历史扣款账户不代替当前CID身份；业务写事务比较最新档位、状态、paid_until、last_charged_at和投影块，旧许可不能跨越降档、停用或续费。
 
 聊天签发、WSS定位/升级、恢复、消息、附件、闹钟和唤醒推送直接及间接RPC均为0。Worker先验JWT定位设备DO，DO核验一次完整D1上下文；同事件的基础身份与附件限额共享Host结果。JWT仍为v2、最多15分钟，最长60秒宿主复核，每设备最多4连接。异步签发后的D1撤销围栏保留，不把交付围栏误称为重复完整鉴权。
 
@@ -678,7 +676,7 @@ WSS门禁读取真实Upgrade与sec-websocket-protocol并在凭据前校验升级
 | 会员/帖子确认、受保护充值结算、广场破坏性存储清理核验 | 1000 | 100000 | 64 |
 | 身份确认/激活、匿名广播、充值意图及原公共EVM/宪法/runtime/固定资源 | 1000 | 100000 | 身份/广播/意图64；EVM为5+合法子请求数≤25；宪法16；runtime5；资源1 |
 
-预扣复用rate_windows，一批原子检查minute/day；真实HTTP唯一出口从同一Chain余量扣减，失败和未用余量不退款。公共池不能占用确认池或后台池，不因增加用途另开预算；原IP AUTH10/READ120/WRITE30每分钟及Base独立300每分钟保持。公共26方法、20项批量、参数/正文/日志限制保持；全非法批次不构造Chain。身份确认的typed JSON及块hash格式、设备登记typed正文、广播typed JSON及原bytes()长度/十六进制校验先于Chain创建；这些本地非法输入不预扣、不查链。TopupIntent仅供匿名充值意图只读目标，不能广播；Topup仍只供受SETTLE_TOKEN保护的结算。旧窗口计数不回退或清零，公共池耗尽拒绝公共动作，不转扣确认池。预算是最大预留量，不等同实际账单。
+预扣复用rate_windows，一批原子检查minute/day；真实HTTP唯一出口从同一Chain余量扣减，失败和未用余量不退款。公共池不能占用确认池或后台池，不因增加用途另开预算；原IP AUTH10/READ120/WRITE30每分钟及付款每链独立300次RPC每分钟保持。公共26方法、20项批量、参数/正文/日志限制保持；全非法批次不构造Chain。身份确认的typed JSON及块hash格式、设备登记typed正文、广播typed JSON及原bytes()长度/十六进制校验先于Chain创建；这些本地非法输入不预扣、不查链。TopupIntent仅供匿名充值意图只读目标，不能广播；Topup仅由服务端持久发币队列及受SETTLE_TOKEN保护的账户读取装配。旧窗口计数不回退或清零，公共池耗尽拒绝公共动作，不转扣确认池。预算是最大预留量，不等同实际账单。
 
 创作者概览独立映射CreatorOverview会员操作，复用唯一Permit及600秒会员同步健康、paid_until和最长60秒许可，缺健康/过期/未来时间拒绝，不能因身份健康正常而使用旧会员行。概览仓库仅一次SQL返回一行：有效订阅人数、非法行数、精确月摊高低位合计及档位数；仍最多检查100001条，超过100000拒绝。月/季/年逐笔按1/3/12整数取整，再以1000000拆位求和，Rust用checked u128重组并经原safe_price验证，不使用浮点或交付越界收入。只减少查询往返、结果传输及Worker内存/CPU，不承诺D1只扫描一行或实际扫描费用必然下降。鉴权读取、真实验签、一次性挑战和交付前期限复核保持；普通概览RPC为0。
 
@@ -757,4 +755,19 @@ begin、upload、complete、download均比较整份密文与当前原明文上�
 
 ## 外部调用入口
 
-本仓现有 scripts/config.mjs 的 describeAction({flow,platform}) 声明流程入口。自动化启动逻辑、版本输入与平台选择归本仓；调用方交付已授权令牌和标准 read/dispatch 传输能力，接收准确 Run 编号。既有独立自动化接口继续由本仓实现。未提供的安装或发布入口明确报产品侧未声明，不错接到编译，也不产生成功回执。
+本产品scripts/config.mjs的describeAction仅返回repository、workflow、ref、inputs，或既有本地进程命令声明；不导入构建实现、不派发GitHub请求、不处理令牌、版本或历史。控制台使用统一数据接口直接派发并只读观察准确Run；产品GitHub业务归所属既有YAML。本次自动化Run名称使用运行编号，正式构建及产物保持版本名称。已有工具和依赖复用，缺少时才按原声明准备。
+
+
+## 根目录与发币存储归属
+
+Cloudflare运行crate直接位于cloudflare；HTTP门禁归gate，注册运行编排归user/registration/runtime.rs，聊天许可与路由归tatachat/access.rs及routes.rs，维护归根maintenance.rs。server包装层及旧名重导出已删除。根topup拥有唯一发币业务，Cloudflare专属HTTP、网络、账户、队列、D1、SQL及schema统一归cloudflare/topup；其他功能和数据库只随准确路径移动，不重排业务或数据。
+
+订单保存一份JSON事实，数据库生成付款/阶段/历史索引列；CAS限制准确状态迁移、扫描游标单调、首次付款定位不变、已签付款证明与完整签名字节不变。pending/paid/exception为公开状态，phase细分awaiting、verifying、received、signed、broadcast、paid、exception。账号执行表只保存公开账户、当前订单、claim和未签租约；已签占用没有超时释放。付款及最终成功证明的时效固定60秒。
+
+复用NOTIFY绑定和citizenserve队列，仅按kind=topup分流至本模块，不写通知任务表。订单即持久outbox；正常等待以10秒延迟消息续查，基础设施错误60秒续查，成功派发下一条后才ack。U付款未finalized前不构造公民链确认上下文或预扣其RPC预算；证明确认并落盘、取得账户排他占用后才预扣确认池处理GMB，仍新鲜的证明可复用，过期必须重核。scheduled只补派漏派，不作为正常到账等待。每轮最多追踪6个finalized块，持久游标分批前进。
+
+storage.rs的显式旧表迁移生成单一原子批，先核对旧行数及完整快照，保留旧已完成Base USDT及所有原凭据；旧无完整签名字节的claim不能推定未出款，转为待核实异常，不允许新发币。迁移失败完整回滚，不保留旧表桥接或改动其他表/索引/业务行。请求、启动和scheduled不会自动迁移生产库。App/控制台接入、真实六币轨付款、正式配置、迁移及部署由后续阶段处理；本步骤实现不等于上线。
+
+更换账户时仅释放已经到期且尚无签名字节的旧租约；已签占用不得超时迁往新账户。GMB最终证明同时核对订单冻结的哈希与完整原字节。
+
+既有订单的首次confirm允许离线后补交原付款定位；只取消补交动作的报价到期阻挡。付款发生时间仍由三协议真实链证明限定在原报价期内，过期新付款不得发币，原签名、首次定位和账户占用规则不变。

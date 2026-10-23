@@ -46,19 +46,19 @@ impl AuthContext {
             || now
                 >= self
                     .loaded_at
-                    .saturating_add(crate::server::gate::policy::SERVICE_AUTH_MILLIS)
+                    .saturating_add(crate::gate::policy::SERVICE_AUTH_MILLIS)
         {
             return Err(crate::shared::Error::new(503, "authentication_unavailable"));
         }
         Ok(sync_deadline(self.identity_synced_at, now)?.min(
             self.loaded_at
-                .saturating_add(crate::server::gate::policy::SERVICE_AUTH_MILLIS),
+                .saturating_add(crate::gate::policy::SERVICE_AUTH_MILLIS),
         ))
     }
 }
 pub fn sync_deadline(checked: u64, now: u64) -> Result<u64> {
     let deadline = checked
-        .checked_add(crate::server::gate::policy::SYNC_HEALTH_MILLIS)
+        .checked_add(crate::gate::policy::SYNC_HEALTH_MILLIS)
         .ok_or(crate::shared::Error::new(503, "authentication_unavailable"))?;
     if checked == 0 || checked > now || now >= deadline {
         return Err(crate::shared::Error::new(503, "authentication_unavailable"));

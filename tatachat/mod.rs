@@ -1,6 +1,8 @@
 //! 平台无关的通用聊天服务。公开协议来自SDK，身份与权益只消费可信宿主结果。
 //! 所有携带Access的写入/对象端口必须在实际执行时核验服务器时钟与deadline；
 //! 协调器传入的now只用于业务时间计算，不能代替驱动提交时的授权截止检查。
+pub mod routes;
+pub mod access;
 pub mod attachment;
 pub mod auth;
 pub mod key;

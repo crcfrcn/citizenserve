@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     membership::Record,
-    server::gate::identity::Authority,
+    gate::identity::Authority,
     shared::{Error, Result},
     user::profile_service::Authorization,
 };

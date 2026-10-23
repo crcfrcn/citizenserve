@@ -1,6 +1,6 @@
 //! 公开资料保持CID归属；写端口同时核验授权与旧值，防止遗漏字段被并发更新覆盖。
 use crate::{
-    server::gate::identity::Authority,
+    gate::identity::Authority,
     shared::{ids, Error, Result},
     user::{auth::session, profiles, registration::protocol::Config},
 };
@@ -40,7 +40,7 @@ impl Authorization {
             institution: i.institution,
             now,
             deadline: authority.recheck_deadline(),
-            sync_health_millis: crate::server::gate::policy::SYNC_HEALTH_MILLIS,
+            sync_health_millis: crate::gate::policy::SYNC_HEALTH_MILLIS,
         })
     }
     pub fn cid(&self) -> &str {

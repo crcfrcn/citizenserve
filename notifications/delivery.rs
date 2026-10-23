@@ -41,7 +41,7 @@ impl AuthorizedEndpoint {
         )?;
         if now >= service_deadline
             || service_deadline
-                > now.saturating_add(crate::server::gate::policy::SERVICE_AUTH_MILLIS)
+                > now.saturating_add(crate::gate::policy::SERVICE_AUTH_MILLIS)
         {
             return Err(Error::new(503, "notification_authorization_expired"));
         }

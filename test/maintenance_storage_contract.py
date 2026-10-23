@@ -76,7 +76,7 @@ class ServiceGateMaintenanceContract(unittest.TestCase):
         import re
         self.db=sqlite3.connect(':memory:');ready(self.db)
         self.reserve_sql=constant('maintenance.rs','RPC_RESERVE');self.assert_sql=constant('maintenance.rs','RPC_ASSERT')
-        source=(ROOT/'server/cloudflare/maintenance.rs').read_text()
+        source=(ROOT/'cloudflare/maintenance.rs').read_text()
         self.claim_sql=re.search(r'const REFRESH_CLAIM:\s*&str\s*=\s*r#"([\s\S]*?)"#;',source)[1]
         self.candidate_sql=re.search(r'const REFRESH_CANDIDATE:\s*&str\s*=\s*r#"([\s\S]*?)"#;',source)[1]
     def tearDown(self):self.db.close()

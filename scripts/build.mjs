@@ -53,7 +53,7 @@ export async function build({test=false}={}){
    await run('cargo',['test','--workspace','--locked'],{cwd:project,env});
    await run(process.execPath,['--test','scripts/publish.mjs','test/build.test.mjs'],{cwd:project,env});
   }
-  await run('worker-build',['--out-dir',worker,'--release','--','--locked'],{cwd:join(project,'server/cloudflare'),env});verifyWorker(worker);
+  await run('worker-build',['--out-dir',worker,'--release','--','--locked'],{cwd:join(project,'cloudflare'),env});verifyWorker(worker);
   if(test){
    await run('npm',['ci','--prefer-offline','--no-audit','--no-fund'],{cwd:join(project,'test/worker'),env});
    await run(process.execPath,['--test','test/worker/worker_smoke.mjs','test/worker/tatachat_smoke.mjs','test/worker/tatachat_data_smoke.mjs'],{cwd:project,env:{...env,CITIZENSERVE_TEST_WORKER_DIR:worker,CITIZENSERVE_TEST_WORK_DIR:work,CITIZENSERVE_TEST_PROJECT_DIR:project}});

@@ -1,7 +1,7 @@
 //! ERC-191字节长度与Keccak，不能替换成SHA3-256；ERC-1271必须读取准确付款块。
 use super::{
-    evm_verify::{quantity, Method},
-    ports::PaymentRpc,
+    evm_verify::quantity,
+    ports::{Method, PaymentRpc},
 };
 use crate::shared::{crypto, Error, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};

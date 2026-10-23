@@ -54,8 +54,8 @@ impl UserRoute {
     }
     /// 是否需要请求证明从统一门禁策略派生，不维护第二份权限分类。
     pub const fn requires_mls(self) -> bool {
-        crate::server::gate::policy::requires_mls(crate::server::gate::policy::api(
-            crate::server::gate::request::Route::User(self)))
+        crate::gate::policy::requires_mls(crate::gate::policy::api(
+            crate::gate::request::Route::User(self)))
     }
     pub const fn body_limit(self) -> usize {
         if self.registration() {

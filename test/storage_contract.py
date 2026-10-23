@@ -7,9 +7,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = (ROOT / "server/cloudflare/schema.sql").read_text()
-CREATE = (ROOT / "server/cloudflare/sql/create_registration.sql").read_text()
-CAS = (ROOT / "server/cloudflare/sql/cas_registration.sql").read_text()
+SCHEMA = (ROOT / "cloudflare/schema.sql").read_text()
+SCHEMA += '\n' + (ROOT / 'cloudflare/topup/schema.sql').read_text()
+CREATE = (ROOT / "cloudflare/sql/create_registration.sql").read_text()
+CAS = (ROOT / "cloudflare/sql/cas_registration.sql").read_text()
 
 
 def record(index, context="0x" + "a" * 64, deadline=1600000):
@@ -46,7 +47,7 @@ class StorageContract(unittest.TestCase):
         self.db.executescript(SCHEMA)
         tables = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         self.assertTrue({'membership_usage', 'membership_operations'}.issubset({row[0] for row in tables}))
-        self.assertEqual(len(tables), 41)  # 原账户注销表保留，另含统一会员计量及幂等操作两表。
+        self.assertEqual(len(tables), 42)  # 原账户注销表保留，另含统一会员计量及幂等操作两表。
         self.assertTrue({'account_deletion_assert', 'account_deletion_challenges', 'account_deletions'}.issubset({row[0] for row in tables}))
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0], 1)
 
@@ -159,12 +160,12 @@ if __name__ == "__main__":
 class ExternalSchemaContract(unittest.TestCase):
     def test_relay_active_claim_and_financial_unique_evidence_survive_repeat_ddl(self):
         db=sqlite3.connect(':memory:');db.executescript(SCHEMA);db.executescript(SCHEMA)
-        columns={r[1] for r in db.execute('PRAGMA table_info(topup_orders)')}
-        self.assertTrue({'intent_hash','payer_authorization_hash','evm_block_hash','gmb_evidence_hash'}.issubset(columns))
+        columns={r[1] for r in db.execute('PRAGMA table_xinfo(topup_orders)')}
+        self.assertTrue({'data','network','payment_txid','gmb_tx_hash','phase'}.issubset(columns))
         indexes={r[1] for r in db.execute('PRAGMA index_list(topup_orders)')}
-        self.assertIn('idx_topup_paid_gmb',indexes)
+        self.assertIn('idx_topup_gmb',indexes)
         self.assertIn('active_claim',{r[1] for r in db.execute('PRAGMA table_info(chain_extrinsic_relays)')})
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0],41);db.close()
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0],42);db.close()
 
 
 class ResourceBudgetStorageContract(unittest.TestCase):
@@ -173,7 +174,7 @@ class ResourceBudgetStorageContract(unittest.TestCase):
         from community_storage_contract import ready
         self.db = sqlite3.connect(':memory:')
         ready(self.db)
-        self.sql = (ROOT / 'server/cloudflare/sql/meter.sql').read_text().split('-- resource budget\n', 1)[1]
+        self.sql = (ROOT / 'cloudflare/sql/meter.sql').read_text().split('-- resource budget\n', 1)[1]
 
     def tearDown(self):
         self.db.close()
@@ -276,7 +277,7 @@ class DeletionDayQuotaContract(unittest.TestCase):
         import re,json
         from community_storage_contract import ROOT,ready,auth
         db=sqlite3.connect(':memory:');ready(db);cid=auth()['cid_number'];day=86400000
-        source=(ROOT/'server/cloudflare/repositories/deletion.rs').read_text()
+        source=(ROOT/'cloudflare/repositories/deletion.rs').read_text()
         guard=re.search(r'const CURRENT_QUOTA_EXCLUSION:\s*&str\s*=\s*"([^"]+)";',source)[1]
         metrics=['chat_connections','chat_commands','chat_frame_bytes','chat_deliveries','attachment_begins','chat_chunk_operations','upload_bytes','delivery_bytes','media_requests']
         for metric in metrics:

@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settled {
-    pub claim_id: String,
     pub gmb_tx_hash: String,
     pub gmb_block_hash: String,
     pub gmb_extrinsic_index: u32,
@@ -42,6 +41,11 @@ pub async fn verify<R: Rpc>(
     r: &Settled,
     now: u64,
 ) -> Result<Proof> {
+    let signed = o.signed.as_ref().ok_or_else(scale::invalid)?;
+    if r.gmb_tx_hash != signed.tx_hash || r.signed_extrinsic_hex != signed.extrinsic {
+        return Err(Error::new(409, "topup_gmb_frozen_transaction_mismatch"));
+    }
+    let signer = &signed.account_id;
     let bytes = crate::chain::Relay {
         signed_extrinsic_hex: r.signed_extrinsic_hex.clone(),
     }
@@ -53,7 +57,7 @@ pub async fn verify<R: Rpc>(
         rpc,
         &c.chain_genesis_hash,
         None,
-        &c.disburse_account,
+        signer,
         &Confirm {
             tx_hash: r.gmb_tx_hash.clone(),
             block_hash: r.gmb_block_hash.clone(),
@@ -71,7 +75,10 @@ pub async fn verify<R: Rpc>(
     let dest = account(scale::field(&v.signed.call, "beneficiary_account_id")?)?;
     let amount = scale::u128_value(scale::field(&v.signed.call, "amount")?)?.to_string();
     let remark = scale::text(scale::field(&v.signed.call, "remark")?, 128)?;
-    if dest != o.account_id || amount != o.coin_fen || remark != format!("topup:{}", o.order_id) {
+    if dest != o.intent.account_id
+        || amount != o.intent.coin_fen
+        || remark != format!("topup:{}", o.order_id)
+    {
         return Err(Error::new(409, "topup_gmb_call_mismatch"));
     }
     let events = v
@@ -83,7 +90,7 @@ pub async fn verify<R: Rpc>(
         return Err(Error::new(409, "topup_gmb_event_mismatch"));
     }
     let e = events[0];
-    if account(scale::field(e, "from_account_id")?)? != c.disburse_account
+    if account(scale::field(e, "from_account_id")?)? != *signer
         || account(scale::field(e, "beneficiary_account_id")?)? != dest
         || scale::u128_value(scale::field(e, "amount")?)?.to_string() != amount
         || scale::text(scale::field(e, "remark")?, 128)? != remark
@@ -95,7 +102,7 @@ pub async fn verify<R: Rpc>(
         r.gmb_block_hash.clone(),
         v.anchor.number,
         r.gmb_extrinsic_index,
-        c.disburse_account.clone(),
+        signer.clone(),
         dest.clone(),
         amount.clone(),
         remark.clone(),
@@ -107,7 +114,7 @@ pub async fn verify<R: Rpc>(
         block_hash: r.gmb_block_hash.clone(),
         block_number: v.anchor.number,
         extrinsic_index: r.gmb_extrinsic_index,
-        signer_account_id: c.disburse_account.clone(),
+        signer_account_id: signer.clone(),
         beneficiary_account_id: dest,
         amount,
         remark,

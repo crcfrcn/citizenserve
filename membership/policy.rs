@@ -1,6 +1,6 @@
 //! 唯一会员业务策略；本人/他人由已核验CID比较，客户端不能声明放行类型。
 use crate::{
-    server::gate::request::Route,
+    gate::request::Route,
     shared::{ids, Error, Result},
     square::routes::SquareRoute,
     user::routes::ProtectedUserRoute,

@@ -105,7 +105,7 @@ pub fn read(raw: &[u8], cid: &str, kind: PostType, expected: &str) -> Result<Man
     {
         return Err(Error::new(409, "manifest_hash_mismatch"));
     }
-    let m: Manifest = crate::server::gate::request::parse_json(raw, 262144).map_err(|_| invalid())?;
+    let m: Manifest = crate::gate::request::parse_json(raw, 262144).map_err(|_| invalid())?;
     if m.schema != "citizenapp.square.post"
         || m.cid_number != cid
         || m.post_type != kind

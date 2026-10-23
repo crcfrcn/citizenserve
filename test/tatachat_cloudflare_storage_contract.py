@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = (ROOT / 'server/cloudflare/tatachat/schema.sql').read_text()
-COMMIT = (ROOT / 'server/cloudflare/tatachat/mailbox_commit.sql').read_text().split('\n-- next\n')
-ACK = (ROOT / 'server/cloudflare/tatachat/mailbox_acknowledge.sql').read_text()
+SCHEMA = (ROOT / 'cloudflare/tatachat/schema.sql').read_text()
+COMMIT = (ROOT / 'cloudflare/tatachat/mailbox_commit.sql').read_text().split('\n-- next\n')
+ACK = (ROOT / 'cloudflare/tatachat/mailbox_acknowledge.sql').read_text()
 CLOCK = "(CAST(strftime('%s','now') AS INTEGER)*1000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER))"
 
 
@@ -143,7 +143,7 @@ class AttachmentResourceStorage(unittest.TestCase):
     """直接提取生产stock/独占SQL，不用内存模型冒充跨请求原子性。"""
     def setUp(self):
         self.db=sqlite3.connect(':memory:');self.db.executescript(SCHEMA)
-        self.text=(ROOT/'server/cloudflare/tatachat/attachment_store.rs').read_text()
+        self.text=(ROOT/'cloudflare/tatachat/attachment_store.rs').read_text()
         self.stock=re.search(r'let stock\s*=\s*r#"([\s\S]*?)"#;',self.text)[1]
         self.writing=re.search(r'let writing\s*=\s*r#"([\s\S]*?)"#;',self.text)[1]
         self.insert=next(json.loads('"'+m+'"') for m in re.findall(r'"((?:[^"\\]|\\.)*)"',self.text) if m.startswith('INSERT INTO attachments('))
@@ -229,7 +229,7 @@ class AttachmentResourceStorage(unittest.TestCase):
 class ChatCleanupStorageContract(unittest.TestCase):
     def setUp(self):
         self.db=sqlite3.connect(':memory:');self.db.executescript(SCHEMA)
-        source=(ROOT/'server/cloudflare/tatachat/maintenance.rs').read_text()
+        source=(ROOT/'cloudflare/tatachat/maintenance.rs').read_text()
         def sql(name):return re.search(r'const '+name+r':\s*&str\s*=\s*"([^"]+)";',source)[1]
         self.claim=sql('CLEANUP_CLAIM');self.finish=sql('CLEANUP_FINISH')
         self.messages=sql('CLEANUP_MESSAGES');self.receipts=sql('CLEANUP_MESSAGE_RECEIPTS');self.slots=sql('CLEANUP_SLOTS');self.next=sql('CLEANUP_NEXT')

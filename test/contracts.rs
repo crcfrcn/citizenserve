@@ -545,7 +545,7 @@ fn membership_is_independent_from_identity_and_chat_deadline_is_clipped() {
         created_at: 900_000,
         expires_at: 1_080_000,
     };
-    let authority = citizenserve::server::gate::identity::service_authority(
+    let authority = citizenserve::gate::identity::service_authority(
         &citizenserve::user::ports::AuthContext {
             loaded_at: 1_000_000,
             identity: identity.clone(),
@@ -619,28 +619,22 @@ fn object_paths_are_cid_based_and_reject_traversal() {
     assert!(citizenserve::user::profiles::asset_key("../other", "avatar").is_err());
 }
 #[test]
-fn settlement_claim_is_not_stolen_and_only_same_receipt_is_idempotent() {
-    use citizenserve::topup::{Settlement, State};
-    let mut s = Settlement {
-        state: State::Pending,
-        claim_id: None,
-        finalized_transaction: None,
-    };
-    s.claim("worker-a").unwrap();
-    s.claim("worker-a").unwrap();
-    assert!(s.claim("worker-b").is_err());
-    let hash = format!("0x{}", "ab".repeat(32));
-    s.settle("worker-a", &hash).unwrap();
-    s.settle("worker-a", &hash).unwrap();
-    assert!(s
-        .settle("worker-a", &format!("0x{}", "cd".repeat(32)))
-        .is_err());
+fn topup_contract_has_two_packages_and_no_external_settlement_write() {
+    use citizenserve::topup::{self, routes::TopupRoute};
     assert_eq!(
-        citizenserve::topup::quote("pkg_15")
-            .unwrap()
-            .citizen_coin_fen,
+        topup::quote("pkg_15", 6).unwrap().citizen_coin_fen,
         1_000_000
     );
+    assert_eq!(
+        topup::quote("pkg_1400", 18).unwrap().payment_atomic,
+        1_400_000_000_000_000_000_000
+    );
+    assert!(topup::quote("custom", 6).is_err());
+    assert!(TopupRoute::resolve(
+        "POST",
+        "/topup/settlement/top_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/settled"
+    )
+    .is_none());
 }
 
 #[test]

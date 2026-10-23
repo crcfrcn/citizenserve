@@ -10,11 +10,11 @@ from pathlib import Path
 from auth_storage_contract import seed, activate, issue_session, project, IDENTITY, FIXTURE, challenge
 
 ROOT = Path(__file__).resolve().parents[1]
-SQL = ROOT / "server/cloudflare/sql"
+SQL = ROOT / "cloudflare/sql"
 
 
 def constant(file, name):
-    text = (ROOT / "server/cloudflare/repositories" / file).read_text()
+    text = (ROOT / "cloudflare/repositories" / file).read_text()
     return re.search(r"const " + name + r":\s*&str\s*=\s*r#\"([\s\S]*?)\"#;", text)[1]
 
 

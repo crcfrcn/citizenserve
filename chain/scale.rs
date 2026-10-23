@@ -16,6 +16,8 @@ pub struct ExtrinsicTypes {
     pub signature: u32,
     pub call: u32,
     pub extensions: Vec<u32>,
+    pub identifiers: Vec<String>,
+    pub implicits: Vec<u32>,
 }
 pub struct Metadata {
     pub extrinsic: Option<ExtrinsicTypes>,
@@ -52,6 +54,18 @@ impl Metadata {
                         address,
                         signature,
                         call,
+                        identifiers: x
+                            .extrinsic
+                            .signed_extensions
+                            .iter()
+                            .map(|e| e.identifier.clone())
+                            .collect(),
+                        implicits: x
+                            .extrinsic
+                            .signed_extensions
+                            .iter()
+                            .map(|e| e.additional_signed.id)
+                            .collect(),
                         extensions: x
                             .extrinsic
                             .signed_extensions
@@ -67,6 +81,18 @@ impl Metadata {
                 address: x.extrinsic.address_ty.id,
                 signature: x.extrinsic.signature_ty.id,
                 call: x.extrinsic.call_ty.id,
+                identifiers: x
+                    .extrinsic
+                    .signed_extensions
+                    .iter()
+                    .map(|e| e.identifier.clone())
+                    .collect(),
+                implicits: x
+                    .extrinsic
+                    .signed_extensions
+                    .iter()
+                    .map(|e| e.additional_signed.id)
+                    .collect(),
                 extensions: x
                     .extrinsic
                     .signed_extensions
@@ -95,6 +121,18 @@ impl Metadata {
                     address: x.extrinsic.address_ty.id,
                     signature: x.extrinsic.signature_ty.id,
                     call: x.extrinsic.call_ty.id,
+                    identifiers: indices
+                        .iter()
+                        .map(|i| {
+                            x.extrinsic.transaction_extensions[i.0 as usize]
+                                .identifier
+                                .clone()
+                        })
+                        .collect(),
+                    implicits: indices
+                        .iter()
+                        .map(|i| x.extrinsic.transaction_extensions[i.0 as usize].implicit.id)
+                        .collect(),
                     extensions,
                 })
             }

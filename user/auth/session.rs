@@ -3,7 +3,7 @@ use super::{
     mls_authentication::{Proof, Purpose},
 };
 use crate::{
-    server::gate,
+    gate,
     shared::{crypto, ids, Error, Result},
     user::{ports::AuthRepository, registration::protocol::Config},
 };

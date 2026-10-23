@@ -12,7 +12,7 @@ async function regular(path){for(let p=path;;p=dirname(p)){const value=await lst
 const cloudResources=Object.freeze({
   "schema": {
     "version": 1,
-    "path": "server/cloudflare/tatachat/schema.sql",
+    "path": "cloudflare/tatachat/schema.sql",
     "sha256": "4463a61a07ffde9b304432b5e2ad32acde1f32a77538de6a271b8c87a8454193"
   },
   "workers": {
@@ -57,7 +57,7 @@ const cloudResources=Object.freeze({
 });
 export async function declaration(){
   const value=structuredClone(cloudResources);
-  if(value?.schema?.version!==1||value.schema.path!=='server/cloudflare/tatachat/schema.sql'||!Array.isArray(value.resources)||value.resources.length!==4)fail('模块声明缺失');
+  if(value?.schema?.version!==1||value.schema.path!=='cloudflare/tatachat/schema.sql'||!Array.isArray(value.resources)||value.resources.length!==4)fail('模块声明缺失');
   const source=(await regular(join(root,value.schema.path))).toString('utf8');if(sha(source)!==value.schema.sha256)fail('schema来源漂移');
   const types=['d1','r2','durable_object','queue'];
   for(const kind of types){const matches=value.resources.filter(x=>x.kind===kind);if(matches.length!==1)fail('资源类型重复或缺失');const item=matches[0];if(!/^TATACHAT_[A-Z_]+$/u.test(item.binding)||!['production','test'].every(env=>/^[a-z][a-z0-9-]{2,62}$/u.test(item[env])))fail('资源命名无效');}

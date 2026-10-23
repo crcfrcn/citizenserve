@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "server/cloudflare"]
+members = [".", "cloudflare"]
 default-members = ["."]
 resolver = "2"
 
@@ -11,13 +11,15 @@ license = "MIT"
 publish = false
 
 [package.metadata.citizenserve_automation]
-release_members = '''["server/cloudflare/schema.sql","server/cloudflare/tatachat/schema.sql","server/cloudflare/wrangler.toml","Cargo.toml","Cargo.lock","rust-toolchain.toml","test/worker/package-lock.json","index.js","index_bg.wasm"]'''
+release_members = '''["cloudflare/schema.sql","cloudflare/topup/schema.sql","cloudflare/tatachat/schema.sql","cloudflare/wrangler.toml","Cargo.toml","Cargo.lock","rust-toolchain.toml","test/worker/package-lock.json","index.js","index_bg.wasm"]'''
 
 [lib]
 path = "lib.rs"
 
 [dependencies]
 base64 = "=0.22.1"
+base58 = "=0.2.0"
+zeroize = "=1.9.1"
 prost = "=0.14.4"
 blake2 = "=0.10.6"
 ed25519-dalek = "=2.2.0"

@@ -132,7 +132,7 @@ pub fn resources(level: Level) -> ResourceLimits {
     }
 }
 
-// 回收与历史清理的唯一参数；轮内实际I/O继续使用原server::maintenance::Budget。
+// 回收与历史清理的唯一参数；轮内实际I/O继续使用原maintenance::Budget。
 pub const CLEANUP_ATTACHMENTS: u32 = 8;
 pub const CLEANUP_ROWS: u64 = 1000;
 pub const CLEANUP_WINDOW_MILLIS: u64 = 45_000;

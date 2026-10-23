@@ -2,7 +2,7 @@
 use citizenserve::{
     chain::{identity, ports::Rpc, subscription},
     membership::{chat::Permissions, Status},
-    server::{gate, gate::request, tatachat as chat, tatachat_routes},
+    gate, gate::request, tatachat::{access, routes},
     shared::{crypto, Error, Result},
     user::{
         admission::Admission,
@@ -24,7 +24,7 @@ const CID: &str = "CN220-CTZN2-198805201-2026";
 #[test]
 fn gate_classifies_client_frames_before_any_host_identity_io() {
     use citizenserve::{
-        server::gate,
+        gate,
         tatachat::protocol::{self, chat_frame, ChatFrame, Ping},
     };
     let ping = protocol::encode_chat_frame(&ChatFrame {
@@ -241,8 +241,8 @@ impl Fixture {
     fn authority(&self, now: u64) -> Result<gate::identity::Authority> {
         gate::identity::service_authority(&self.context(now), &self.runtime.config(), now)
     }
-    fn authorization(&self, now: u64) -> Result<chat::Authorization> {
-        chat::authorize(&self.subject(now)?, now)
+    fn authorization(&self, now: u64) -> Result<access::Authorization> {
+        access::authorize(&self.subject(now)?, now)
     }
     fn attachment_permissions(&self, now: u64) -> Result<Permissions> {
         let authority = self.authority(now)?;
@@ -272,11 +272,11 @@ fn signed(unsigned: &str) -> String {
         crypto::base64url(&key.sign(unsigned.as_bytes()).to_bytes())
     )
 }
-fn token(a: &chat::Authorization, now: u64) -> String {
-    signed(&chat::unsigned(a, "local-test-1", now).unwrap())
+fn token(a: &access::Authorization, now: u64) -> String {
+    signed(&access::unsigned(a, "local-test-1", now).unwrap())
 }
 fn verify(raw: &str, now: u64) -> Result<citizenserve::tatachat::auth::VerifiedCredential> {
-    chat::verify_token(
+    access::verify_token(
         raw,
         &SigningKey::from_bytes(&[39; 32]).verifying_key().to_bytes(),
         "local-test-1",
@@ -296,8 +296,8 @@ fn rewrite(raw: &str, header: bool, f: impl FnOnce(&mut Value)) -> String {
 #[test]
 fn frozen_public_contract_and_limits_match_real_permits() {
     let v: Value = serde_json::from_str(include_str!("contract/tatachat.json")).unwrap();
-    assert_eq!(v["audience"], chat::AUDIENCE);
-    assert_eq!(v["purpose"], chat::PURPOSE);
+    assert_eq!(v["audience"], access::AUDIENCE);
+    assert_eq!(v["purpose"], access::PURPOSE);
     assert_eq!(
         v["maximum_permission_millis"],
         citizenserve::tatachat::auth::MAX_ACCESS_MILLIS
@@ -397,12 +397,12 @@ fn jwt_second_precision_never_returns_an_already_expired_credential() {
     let mut f = Fixture::new(NOW + 123);
     f.session.expires_at = NOW + 999;
     let a = f.authorization(NOW + 123).unwrap();
-    assert!(chat::unsigned(&a, "local-test-1", NOW + 123).is_err());
+    assert!(access::unsigned(&a, "local-test-1", NOW + 123).is_err());
     f.session.expires_at = NOW + 1001;
     let a = f.authorization(NOW + 123).unwrap();
     let v = verify(&token(&a, NOW + 123), NOW + 123).unwrap();
     assert_eq!(
-        chat::from_token(&v, a, NOW + 123).unwrap().expires_at(),
+        access::from_token(&v, a, NOW + 123).unwrap().expires_at(),
         NOW + 1000
     );
 }
@@ -424,12 +424,12 @@ fn current_refresh_does_not_extend_original_fifteen_minutes() {
     let mut f = Fixture::new(NOW);
     let old = f.authorization(NOW).unwrap();
     f.refresh(NOW + 60_000);
-    let next = chat::recheck(&old, &f.subject(NOW + 60_000).unwrap(), NOW + 60_000).unwrap();
+    let next = access::recheck(&old, &f.subject(NOW + 60_000).unwrap(), NOW + 60_000).unwrap();
     assert_eq!(old.revision(), next.revision());
     assert_eq!(old.expires_at(), next.expires_at());
     assert_eq!(next.recheck_at(), NOW + 120_000);
     f.refresh(NOW + 900_000);
-    assert!(chat::recheck(&next, &f.subject(NOW + 900_000).unwrap(), NOW + 900_000).is_err());
+    assert!(access::recheck(&next, &f.subject(NOW + 900_000).unwrap(), NOW + 900_000).is_err());
 }
 #[test]
 fn renewal_is_stable_but_device_generation_session_and_privilege_changes_revoke() {
@@ -468,7 +468,7 @@ fn valid_ed25519_token_is_bound_to_actual_origin_user_and_permission() {
     assert_eq!(c.device_id, f.device.device_id);
     assert_eq!(c.exp - c.iat, 900);
     assert_eq!(
-        chat::from_token(&verified, a, NOW).unwrap().recheck_at(),
+        access::from_token(&verified, a, NOW).unwrap().recheck_at(),
         NOW + 60_000
     );
 }
@@ -531,7 +531,7 @@ fn signature_key_truncation_and_duplicate_claims_fail() {
     p[2] = crypto::base64url(&[0; 64]);
     assert!(verify(&p.join("."), NOW).is_err());
     assert!(verify(&raw[..raw.len() - 3], NOW).is_err());
-    assert!(chat::verify_token(
+    assert!(access::verify_token(
         &raw,
         &SigningKey::from_bytes(&[38; 32]).verifying_key().to_bytes(),
         "local-test-1",
@@ -546,9 +546,9 @@ fn stale_token_requires_fresh_facts_and_new_device_cannot_reuse_it() {
     let old = f.authorization(NOW).unwrap();
     let raw = token(&old, NOW);
     let verified = verify(&raw, NOW + 60_000).unwrap();
-    assert!(chat::from_token(&verified, old, NOW + 60_000).is_err());
+    assert!(access::from_token(&verified, old, NOW + 60_000).is_err());
     f.refresh(NOW + 60_000);
-    let fresh = chat::from_token(
+    let fresh = access::from_token(
         &verified,
         f.authorization(NOW + 60_000).unwrap(),
         NOW + 60_000,
@@ -556,7 +556,7 @@ fn stale_token_requires_fresh_facts_and_new_device_cannot_reuse_it() {
     .unwrap();
     assert_eq!(fresh.expires_at(), NOW + 900_000);
     f.device.issued_at += 1;
-    assert!(chat::from_token(
+    assert!(access::from_token(
         &verified,
         f.authorization(NOW + 60_000).unwrap(),
         NOW + 60_000
@@ -566,7 +566,7 @@ fn stale_token_requires_fresh_facts_and_new_device_cannot_reuse_it() {
 #[test]
 fn access_request_is_exact_object_and_route_rejects_aliases_queries() {
     for raw in [b"{}".as_slice(), b" { } \n"] {
-        assert!(tatachat_routes::access_body(raw).is_ok());
+        assert!(routes::access_body(raw).is_ok());
     }
     for raw in [
         b"[]".as_slice(),
@@ -576,9 +576,9 @@ fn access_request_is_exact_object_and_route_rejects_aliases_queries() {
         b"{}{}",
         b"{\"device_id\":1,\"device_id\":2}",
     ] {
-        assert!(tatachat_routes::access_body(raw).is_err());
+        assert!(routes::access_body(raw).is_err());
     }
-    assert!(tatachat_routes::access_body(&vec![b' '; 1025]).is_err());
+    assert!(routes::access_body(&vec![b' '; 1025]).is_err());
     assert!(request::protected_target("POST", "/api/tatachat/access").is_ok());
     for (method, path) in [
         ("GET", "/api/tatachat/access"),
@@ -656,11 +656,11 @@ fn service_health_fixture_matches_shared_policy_without_extending_chain_facts() 
         serde_json::from_str(include_str!("contract/tatachat.json")).unwrap();
     assert_eq!(
         data["service_sync_health_millis"],
-        citizenserve::server::gate::policy::SYNC_HEALTH_MILLIS
+        citizenserve::gate::policy::SYNC_HEALTH_MILLIS
     );
     assert_eq!(
         data["maximum_recheck_millis"],
-        citizenserve::server::gate::policy::SERVICE_AUTH_MILLIS
+        citizenserve::gate::policy::SERVICE_AUTH_MILLIS
     );
     assert_eq!(data["chat_rpc_per_event"], 0);
     assert_eq!(data["full_context_per_event"], 1);

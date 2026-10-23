@@ -1,7 +1,7 @@
 //! 合成metadata改变Platform枚举索引，验证订阅键来自metadata而非硬编码。
 use citizenserve::{
     chain::{ports::Rpc, scale, subscription},
-    server::gate::request as api,
+    gate::request as api,
     shared::{crypto, Error, Result},
     square::{
         feed,
@@ -361,11 +361,11 @@ fn required_author_and_follow_type_cannot_be_defaulted() {
 }
 
 fn profile_context() -> (
-    citizenserve::server::gate::identity::Authority,
+    citizenserve::gate::identity::Authority,
     citizenserve::user::profile_service::Authorization,
 ) {
     use citizenserve::{
-        server::gate,
+        gate,
         user::{
             admission::Admission,
             auth::{device::Device, session::Session},

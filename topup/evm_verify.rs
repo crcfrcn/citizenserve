@@ -1,36 +1,13 @@
 //! 付款与合约钱包签名使用同一canonical付款块；最后复核块hash防读取期间换叉。
+use super::orders::{Outcome, Payment};
 use super::{
     config::Config,
     intent::Intent,
-    ports::{Clock, PaymentRpc},
+    ports::{Clock, Method, PaymentRpc},
     wallet_authorization,
 };
 use crate::shared::{crypto, ids, Error, Result};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Method {
-    ChainId,
-    Transaction,
-    Receipt,
-    Block,
-    Code,
-    Call,
-    BlockNumber,
-}
-impl Method {
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::ChainId => "eth_chainId",
-            Self::Transaction => "eth_getTransactionByHash",
-            Self::Receipt => "eth_getTransactionReceipt",
-            Self::Block => "eth_getBlockByNumber",
-            Self::Code => "eth_getCode",
-            Self::Call => "eth_call",
-            Self::BlockNumber => "eth_blockNumber",
-        }
-    }
-}
 pub fn invalid() -> Error {
     Error::new(503, "topup_evm_evidence_invalid")
 }
@@ -66,38 +43,6 @@ fn hash(v: &Value) -> Result<String> {
     }
     Ok(s.into())
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Payment {
-    pub tx_hash: String,
-    pub block_hash: String,
-    pub block_number: u64,
-    pub transaction_index: u32,
-    pub log_index: u32,
-    pub block_time_ms: u64,
-    pub actual_amount: String,
-    pub wallet_is_contract: bool,
-    pub payer_authorization_hash: String,
-    pub checked_at: u64,
-    pub verification_deadline: u64,
-}
-impl Payment {
-    pub fn require_fresh(&self, now: u64) -> Result<()> {
-        if self.checked_at > now
-            || now >= self.verification_deadline
-            || self.verification_deadline.checked_sub(self.checked_at) != Some(60000)
-        {
-            Err(Error::new(503, "topup_verification_expired"))
-        } else {
-            Ok(())
-        }
-    }
-}
-#[derive(Clone, Debug)]
-pub enum Outcome {
-    Pending,
-    Confirmed(Payment),
-}
 pub async fn verify<R: PaymentRpc, C: Clock>(
     rpc: &R,
     clock: &C,
@@ -112,7 +57,9 @@ pub async fn verify<R: PaymentRpc, C: Clock>(
         return Err(super::routes::invalid());
     }
     let checked = clock.now();
-    if number(&rpc.call(Method::ChainId, json!([])).await?)? != i.chain_id {
+    if number(&rpc.call(Method::ChainId, json!([])).await?)?
+        != i.network.evm_id().ok_or_else(invalid)?
+    {
         return Err(Error::new(409, "topup_wrong_chain"));
     }
     let receipt = rpc.call(Method::Receipt, json!([tx])).await?;
@@ -161,53 +108,44 @@ pub async fn verify<R: PaymentRpc, C: Clock>(
     let time = number(&block["timestamp"])?
         .checked_mul(1000)
         .ok_or_else(invalid)?;
-    if time <= i.issued_at || time > i.expires_at {
+    if time <= i.issued_at || time > i.expires_at || time > checked {
         return Err(Error::new(409, "topup_payment_outside_intent"));
     }
-    let head = rpc
-        .call(
-            Method::Block,
-            json!([
-                if c.min_confirmations == 0 {
-                    "finalized"
-                } else {
-                    "latest"
-                },
-                false
-            ]),
-        )
-        .await?;
+    let head = rpc.call(Method::Block, json!(["finalized", false])).await?;
     if head.is_null() {
         return Ok(Outcome::Pending);
     }
     let head_number = number(&head["number"])?;
     hash(&head["hash"])?;
-    let required = block_number
-        .checked_add(c.min_confirmations.saturating_sub(1))
-        .ok_or_else(invalid)?;
+    let required = block_number;
     if head_number < required {
         return Ok(Outcome::Pending);
     }
     let code = rpc
-        .call(
-            Method::Code,
-            json!([i.token_contract, quantity(block_number)]),
-        )
+        .call(Method::Code, json!([i.asset, quantity(block_number)]))
         .await?;
     let code = data_hex(code.as_str().ok_or_else(invalid)?)?;
     if code.is_empty() || code.len() > 65536 {
         return Err(invalid());
     }
-    let decimals=rpc.call(Method::Call,json!([{"to":i.token_contract,"data":"0x313ce567","gas":"0xc350"},quantity(block_number)])).await?;
+    let decimals = rpc
+        .call(
+            Method::Call,
+            json!([{"to":i.asset,"data":"0x313ce567","gas":"0xc350"},quantity(block_number)]),
+        )
+        .await?;
     let decimals = data_hex(decimals.as_str().ok_or_else(invalid)?)?;
-    if decimals.len() != 32 || decimals[..31].iter().any(|b| *b != 0) || decimals[31] != 6 {
+    if decimals.len() != 32
+        || decimals[..31].iter().any(|b| *b != 0)
+        || decimals[31] != c.rail(i.token, i.network)?.decimals
+    {
         return Err(Error::new(409, "topup_token_decimals_mismatch"));
     }
     let logs = receipt["logs"]
         .as_array()
         .filter(|l| l.len() <= 1024)
         .ok_or_else(invalid)?;
-    let expected = super::quote(&i.package_id)?.payment_atomic;
+    let expected = i.pay_amount.parse::<u128>().map_err(|_| invalid())?;
     let topic = format!(
         "0x{}",
         crypto::hex(&sha3_digest(b"Transfer(address,address,uint256)"))
@@ -222,7 +160,7 @@ pub async fn verify<R: PaymentRpc, C: Clock>(
         if !super::config::address(&address) {
             return Err(invalid());
         }
-        if address != i.token_contract {
+        if address != i.asset {
             continue;
         }
         let topics = log["topics"]
@@ -256,7 +194,7 @@ pub async fn verify<R: PaymentRpc, C: Clock>(
             return Err(invalid());
         }
         let mut min = [0; 32];
-        min[24..].copy_from_slice(&expected.to_be_bytes());
+        min[16..].copy_from_slice(&expected.to_be_bytes());
         if data.as_slice() < min.as_slice() {
             continue;
         }

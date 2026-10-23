@@ -25,6 +25,11 @@ if(testWorker!==undefined){
 }
 const fixture=JSON.parse(await readFile(new URL('../contract/maintenance.json',import.meta.url)));
 const registration=JSON.parse(await readFile(new URL('../contract/activation.json',import.meta.url)));
+const topupFixture=JSON.parse(await readFile(new URL('../contract/topup.json',import.meta.url)));
+const settlementFixture=JSON.parse(await readFile(new URL('../contract/settlement.json',import.meta.url)));
+let topupScenario=null;
+const topupRPCs=Object.fromEntries(['ethereum','base','bnb','tron','solana'].map(n=>[n,'https://'+n+'.topup.example.test/']));
+const topupBindings={TOPUP_RPCS:JSON.stringify(topupRPCs),TOPUP_RECEIVERS:JSON.stringify(topupFixture.receivers),TOPUP_INTENT_SECRET:topupFixture.public_test_key,TOPUP_DISBURSE_KEY:'0x'+'01'.repeat(32),SETTLE_TOKEN:'synthetic-management-token-with-32-bytes',CHAIN_GENESIS_HASH:settlementFixture.genesis};
 const networkRequests=JSON.parse(await readFile(new URL('../contract/ethereum_rpc.json',import.meta.url))).requests;
 const networkMethods=new Set(networkRequests.map(request=>request.method));
 const receivedRpc=[];
@@ -61,6 +66,7 @@ async function sql(query,...params){return db.prepare(query).bind(...params).run
 async function first(query,...params){return db.prepare(query).bind(...params).first();}
 async function outbound(req){
  const url=new URL(req.url);seen.push({url:req.url,method:req.method});
+ if(topupScenario&&(url.origin==='https://chain.example.test'||url.hostname.endsWith('.topup.example.test')))return topupOutbound(req,url);
  if(url.origin==='https://chain.example.test'){
   if(req.method==='GET'){
    const mode=networkAssetMode;
@@ -146,9 +152,10 @@ function input(request){if(requests.has(request))return requests.get(request);co
  const value=Reflect.get(target,key,target);if(['arrayBuffer','text','json','formData'].includes(key))return (...args)=>{counters.body_reads++;return value.apply(target,args);};return typeof value==='function'?value.bind(target):value;
 }});requests.set(request,proxy);return proxy;}
 function queue(value){if(queues.has(value))return queues.get(value);const proxy=new Proxy(value,{get(target,key){if(key==='constructor')return target.constructor;const member=Reflect.get(target,key,target);if(key==='send')return (body,options)=>{counters.queue_sends++;queueMessages.push({body:typeof body==='string'?JSON.parse(body):body,delay:options?.delaySeconds??0});return member.call(target,body,options);};return typeof member==='function'?member.bind(target):member;}});queues.set(value,proxy);return proxy;}
-function environment(env){return new Proxy(env,{get(target,key){const value=Reflect.get(target,key,target);return key==='TATACHAT_PUSH'?queue(value):key==='DB'||key==='TATACHAT_DB'?database(value):['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'].includes(key)?bucket(value):value;}});}
+let topupKeyOverride;
+function environment(env){return new Proxy(env,{get(target,key){if(key==='TOPUP_DISBURSE_KEY'&&topupKeyOverride!==undefined)return topupKeyOverride;const value=Reflect.get(target,key,target);return key==='TATACHAT_PUSH'?queue(value):key==='DB'||key==='TATACHAT_DB'?database(value):['SQUARE_PRIVATE','SQUARE_PUBLIC_MEDIA','TATACHAT_ATTACHMENTS'].includes(key)?bucket(value):value;}});}
 export default class extends WorkerEntrypoint {
- async fetch(request){if(new URL(request.url).hostname==='fixture.internal'){if(new URL(request.url).pathname==='/fail-deletion-receipt'){failDeletionReceipt=Number(await request.text());return new Response(null,{status:204});}if(new URL(request.url).pathname==='/fail-receipt'){failReceipt=true;return new Response(null,{status:204});}const result={...counters,queue_messages:queueMessages};if(request.method==='DELETE'){for(const key in counters)counters[key]=0;queueMessages=[];}return Response.json(result);}return new Actual(this.ctx,environment(this.env)).fetch(new URL(request.url).pathname==='/api/tatachat/realtime'?request:input(request));}
+ async fetch(request){if(new URL(request.url).hostname==='fixture.internal'){if(new URL(request.url).pathname==='/topup-key'){topupKeyOverride=await request.text();return new Response(null,{status:204});}if(new URL(request.url).pathname==='/fail-deletion-receipt'){failDeletionReceipt=Number(await request.text());return new Response(null,{status:204});}if(new URL(request.url).pathname==='/fail-receipt'){failReceipt=true;return new Response(null,{status:204});}const result={...counters,queue_messages:queueMessages};if(request.method==='DELETE'){for(const key in counters)counters[key]=0;queueMessages=[];}return Response.json(result);}return new Actual(this.ctx,environment(this.env)).fetch(new URL(request.url).pathname==='/api/tatachat/realtime'?request:input(request));}
  queue(batch){return new Actual(this.ctx,environment(this.env)).queue(batch);}
  scheduled(event){return new Actual(this.ctx,environment(this.env)).scheduled(event);}
 }
@@ -198,7 +205,7 @@ for line in open(sys.argv[1]):
   part=''
 if part.strip():raise ValueError('schema末尾不完整')
 print(json.dumps(parts))
-`,root+'/server/cloudflare/tatachat/schema.sql'],{encoding:'utf8'}));for(const statement of chatSchema)await chatDB.prepare(statement).run();
+`,root+'/cloudflare/tatachat/schema.sql'],{encoding:'utf8'}));for(const statement of chatSchema)await chatDB.prepare(statement).run();
  for(const stmt of seed)await sql(stmt.sql,...stmt.args);
  await sql('DELETE FROM mls_devices');await sql('DELETE FROM square_sessions');await sql('INSERT INTO mls_devices VALUES(?,?,1,?,?,1,?,?,?)',fixture.cid,device,fixture.account,publicKey,Date.now(),Date.now(),Date.now());await sql('INSERT INTO square_sessions VALUES(?,?,1,?,?,?,?)',tokenHash,fixture.cid,fixture.account,device,Date.now(),Date.now()+86400000);
  const i=JSON.parse(await readFile(new URL('../contract/finalized_identity.json',import.meta.url)));i.checked_at_millis=Date.now();i.verification_deadline_millis=i.checked_at_millis+60000;i.chain_scope=fixture.genesis;i.registered_block_number=0;i.registered_block_hash=fixture.genesis;i.registered_at_millis=0;i.finalized_timestamp_millis=anchorTime;
@@ -800,8 +807,7 @@ test('本地非法身份/广播输入既不预扣RPC预算也不访问上游',as
 
 test('匿名身份/广播/充值意图共用公共池，耗尽不抢会员确认池',async()=>{
  await stopWorker();await startWorker({
-  RELAY_ENABLED:'1',TOPUP_RECV_ADDRESS:'0x'+'11'.repeat(20),TOPUP_DISBURSE_ACCOUNT_ID:fixture.account,TOPUP_MIN_CONFIRMATIONS:'1',
-  TOPUP_BASE_USDC:'0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',TOPUP_BASE_USDT:'0xfde4c96c8593536e31f229ea8f37b2ada2699bb2',
+  RELAY_ENABLED:'1',TOPUP_RECEIVERS:JSON.stringify(topupFixture.receivers),TOPUP_RPCS:JSON.stringify(topupRPCs),
   TOPUP_INTENT_SECRET:'synthetic-payment-intent-key-with-32-bytes',
  });
  try{
@@ -813,7 +819,7 @@ test('匿名身份/广播/充值意图共用公共池，耗尽不抢会员确认
   for(const [path,body] of [
    ['/api/user/identity',{block_hash:fixture.head}],
    ['/api/chain/extrinsics',{signed_extrinsic_hex:'0x01'}],
-   ['/api/topup/intent',{account_id:fixture.account,token:'USDC',package_id:'pkg_15',payer_address:'0x'+'22'.repeat(20)}],
+   ['/api/topup/intent',{account_id:fixture.account,token:'USDC',network:'base',package_id:'pkg_15',payer_address:'0x'+'22'.repeat(20)}],
   ]){
    const response=await fetch(path,'POST',JSON.stringify(body));
    assert.equal(response.status,429,await response.clone().text());await response.arrayBuffer();
@@ -930,3 +936,148 @@ export function chainCalls(){return seen.filter(x=>x.url.startsWith('https://cha
 export function setUnknownChain(value){unknownChain=value;}
 export function setChatPushOutcome(status,reason='BadDeviceToken'){pushStatus=status;pushReason=reason;}
 export {sql,first,fetch,proof,fixture,registration,token,tokenHash,device,seen};
+
+
+// 所有发币出站都由这一个封闭服务核对；先读取D1签名字节再接受广播。
+async function topupOutbound(req,url){
+ const body=await req.json(),id=body.id??1;let result;
+ const scenario=topupScenario;
+ const orderRow=scenario.orderId?await first('SELECT data FROM topup_orders WHERE order_id=?',scenario.orderId):null;
+ const order=orderRow?JSON.parse(orderRow.data):null;
+ const i=order?.intent;
+ const reply=value=>new Response(JSON.stringify({jsonrpc:'2.0',id,result:value}),{headers:{'content-type':'application/json'}});
+ if(url.origin==='https://chain.example.test'){
+  assert.equal(req.headers.get('CF-Access-Client-Id'),'offline-test.access');assert.equal(req.headers.get('CF-Access-Client-Secret'),'offline-test');
+  const n=scenario.finalize?9:8;
+  const header=number=>({...settlementFixture.header,number:'0x'+number.toString(16),parentHash:h(number-1)});
+  switch(body.method){
+   case 'chain_getFinalizedHead':result=h(n);break;
+   case 'chain_getBlockHash':result=body.params[0]===0?settlementFixture.genesis:h(Number(body.params[0]));break;
+   case 'chain_getHeader':result=header(parseInt(body.params[0].slice(2,4),16));break;
+   case 'state_getMetadata':result=settlementFixture.metadata;break;
+   case 'state_getRuntimeVersion':result={specVersion:7,transactionVersion:8,specName:'citizenchain'};break;
+   case 'state_getStorage':{
+    const key=body.params[0],auto=settlementFixture.auto;
+    if(key===auto.account_key)result=scenario.insufficient?'0x'+'00'.repeat(36):auto.account_data;
+    else if(key===auto.events_key){
+     assert.ok(order?.signed);const old=Buffer.from(auto.order_id).toString('hex'),next=Buffer.from(order.order_id).toString('hex');assert.equal(auto.events_template.split(old).length,2);result=auto.events_template.replace(old,next);
+    }else if(key===auto.timestamp_key){const bytes=Buffer.alloc(8);bytes.writeBigUInt64LE(BigInt(Date.now()));result='0x'+bytes.toString('hex');}
+    else result=null;
+    break;
+   }
+   case 'chain_getBlock':{const number=parseInt(body.params[0].slice(2,4),16);result={block:{header:header(number),extrinsics:scenario.finalize&&number===9?[scenario.broadcasts[0]]:[]}};break;}
+   case 'author_submitExtrinsic':{
+    assert.ok(order.signed,'必须先持久化完整签名交易');assert.equal(order.signed.extrinsic,body.params[0]);scenario.broadcasts.push(body.params[0]);
+    if(scenario.timeout)return new Response('{}',{status:503});result=order.signed.tx_hash;break;
+   }
+   default:throw Error('封闭发币RPC不接受 '+body.method);
+  }
+  return reply(result);
+ }
+ const network=url.hostname.split('.')[0];
+ if(network==='tron'){
+  assert.ok(scenario.native);let v;
+  switch(url.pathname){
+   case '/walletsolidity/getblockbynum':v=body.num===0?{blockID:'00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc'}:scenario.native.block;break;
+   case '/walletsolidity/gettransactionbyid':v=scenario.native.transaction;break;
+   case '/walletsolidity/gettransactioninfobyid':v=scenario.native.receipt;break;
+   case '/walletsolidity/triggerconstantcontract':v={result:{result:true},constant_result:[(body.function_selector==='decimals()'?6n:20000000n).toString(16).padStart(64,'0')]};break;
+   default:throw Error('未知Tron测试请求');
+  }return new Response(JSON.stringify(v),{headers:{'content-type':'application/json'}});
+ }
+ if(network==='solana'){
+  if(body.method==='getGenesisHash')result='5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+  else if(body.method==='getTransaction')result=scenario.native.transaction;
+  else if(body.method==='getBlock')result=scenario.native.block;
+  else if(body.method==='getTokenAccountsByOwner')result={context:{slot:10},value:[]};
+  else throw Error('未知Solana测试请求');return reply(result);
+ }
+ const tx=order?.payment_txid??h(9),blockHash=h(10),time=i?Math.floor((scenario.latePayment?i.expires_at:i.issued_at)/1000)+1:1001;
+ const canonical={hash:blockHash,number:'0xa',timestamp:'0x'+time.toString(16),transactions:[tx]};
+ const receipt=structuredClone(topupFixture.evm.receipt);
+ if(i){receipt.logs[0].address=i.asset;receipt.logs[0].topics[1]='0x'+'00'.repeat(12)+i.payer_address.slice(2);receipt.logs[0].topics[2]='0x'+'00'.repeat(12)+i.recv_address.slice(2);receipt.logs[0].data='0x'+BigInt(i.pay_amount).toString(16).padStart(64,'0');}
+ receipt.transactionHash=tx;receipt.logs[0].transactionHash=tx;
+ switch(body.method){
+  case 'eth_chainId':result={ethereum:'0x1',base:'0x2105',bnb:'0x38'}[network];break;
+  case 'eth_getTransactionReceipt':result=scenario.paymentPending?null:receipt;break;
+  case 'eth_getTransactionByHash':result={...topupFixture.evm.transaction,hash:tx};break;
+  case 'eth_getBlockByNumber':result=body.params[0]==='finalized'?{hash:h(11),number:'0xb'}:canonical;break;
+  case 'eth_getCode':result='0x6000';break;
+  case 'eth_call':{
+   const data=body.params[0].data;
+   result=data==='0x313ce567'?'0x'+(network==='bnb'?18n:6n).toString(16).padStart(64,'0'):data.startsWith('0x70a08231')?'0x'+(20000000n).toString(16).padStart(64,'0'):'0x1626ba7e'+'00'.repeat(28);break;
+  }
+  default:throw Error('未知EVM测试请求 '+body.method);
+ }return reply(result);
+}
+async function topupOrder(network,token,paymentTx=h(9)){
+ if(network==='tron'||network==='solana'){
+  const v=topupFixture.native[network];topupScenario.native=v;
+  const order={order_id:'top_'+v.intent.intent_id.slice(4),intent:v.intent,intent_hash:digest(v.token),message:v.message,created_at:v.intent.issued_at,revision:1,phase:'verifying',payment_txid:v.txid,payer_signature:v.signature,payment:null,signed:null,legacy:null,scan:0,gmb:null,exception_reason:null};
+  await sql('INSERT INTO topup_orders(order_id,data) VALUES(?,?)',order.order_id,JSON.stringify(order));topupScenario.orderId=order.order_id;return order;
+ }
+ const response=await fetch('/api/topup/intent','POST',JSON.stringify({account_id:h(4),token,network,package_id:'pkg_15',payer_address:topupFixture.intent.payer_address}));
+ assert.equal(response.status,200,await response.clone().text());const created=await response.json();topupScenario.orderId=created.order_id;
+ assert.equal(JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',created.order_id)).data).phase,'awaiting');
+ await new Promise(resolve=>setTimeout(resolve,1100));
+ const confirm=await fetch('/api/topup/confirm','POST',JSON.stringify({payment_intent:created.payment_intent,payment_txid:paymentTx,payer_signature:'0x'+'11'.repeat(65)}));
+ assert.equal(confirm.status,200,await confirm.clone().text());assert.equal((await confirm.json()).phase,'verifying');
+ return JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',created.order_id)).data);
+}
+async function topupQueue(id){return worker.queue('citizenserve',[{id:'topup-'+randomBytes(8).toString('hex'),timestamp:new Date(),body:{version:1,kind:'topup',id},attempts:1}]);}
+if(import.meta.url===pathToFileURL(process.argv[1]).href){
+test('六币轨实际Worker/D1/Queue服务端签发，只有原交易finalized成功才能paid',async()=>{
+ try{for(const [network,token] of [['ethereum','USDC'],['ethereum','USDT'],['base','USDC'],['bnb','USDT'],['tron','USDT'],['solana','USDC']]){
+  await stopWorker();topupScenario={broadcasts:[],finalize:false};await startWorker(topupBindings);
+  const o=await topupOrder(network,token);await topupQueue(o.order_id);
+  let saved=JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',o.order_id)).data);
+  assert.equal(saved.phase,'broadcast',JSON.stringify(saved));assert.ok(saved.payment);assert.ok(saved.signed);assert.equal(topupScenario.broadcasts.length,1);
+  topupScenario.finalize=true;await topupQueue(o.order_id);saved=JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',o.order_id)).data);
+  assert.equal(saved.phase,'paid');assert.equal(saved.gmb.signer_account_id,settlementFixture.auto.account);assert.equal(saved.gmb.amount,'1000000');
+  await topupQueue(o.order_id);assert.equal(topupScenario.broadcasts.length,1);assert.equal((await first('SELECT count(*) n FROM topup_accounts')).n,0);
+ }}finally{await stopWorker();topupScenario=null;await startWorker();}
+});
+test('未知广播、重复队列及换钥只重播原字节；余额不足不签发',async()=>{
+ try{
+  await stopWorker();topupScenario={broadcasts:[],finalize:false,timeout:true};await startWorker(topupBindings);
+  const o=await topupOrder('base','USDC');await topupQueue(o.order_id);
+  const firstSigned=JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',o.order_id)).data).signed;assert.ok(firstSigned);
+  await worker.fetch('https://fixture.internal/topup-key',{method:'POST',body:'0x'+'02'.repeat(32)});
+  topupScenario.timeout=false;await topupQueue(o.order_id);assert.deepEqual(topupScenario.broadcasts,[firstSigned.extrinsic,firstSigned.extrinsic]);
+  topupScenario.finalize=true;await topupQueue(o.order_id);assert.equal(JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',o.order_id)).data).phase,'paid');
+  const noAuth=await fetch('/api/topup/account');assert.equal(noAuth.status,401);await noAuth.text();
+  const account=await fetch('/api/topup/account','GET','',{authorization:'Bearer '+topupBindings.SETTLE_TOKEN});assert.equal(account.status,200,await account.clone().text());const status=await account.json();assert.equal(status.configured,true);assert.notEqual(status.gmb.account_id,firstSigned.account_id);assert.equal(status.receipts.length,6);assert.ok(status.receipts.every(r=>typeof r.balance.ok==='boolean'));assert.equal(JSON.stringify(status).includes('TOPUP_DISBURSE_KEY'),false);
+  await stopWorker();topupScenario={broadcasts:[],finalize:false,insufficient:true};await startWorker(topupBindings);
+  const low=await topupOrder('base','USDC');await topupQueue(low.order_id);const saved=JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',low.order_id)).data);
+  assert.equal(saved.phase,'received');assert.equal(saved.exception_reason,'topup_disburse_insufficient_balance');assert.equal(saved.signed,null);assert.equal(topupScenario.broadcasts.length,0);
+ }finally{await stopWorker();topupScenario=null;await startWorker();}
+});
+
+test('U链等待及同账户占用不消耗公民链确认预算，正常队列持续续查',async()=>{
+ try{
+  await stopWorker();topupScenario={broadcasts:[],finalize:false,paymentPending:true};await startWorker(topupBindings);
+  const o=await topupOrder('base','USDC');
+  const reserved=()=>first("SELECT coalesce(sum(request_count),0) n FROM rate_windows WHERE rate_key LIKE 'rpc:%:confirmation:%'");
+  const initial=await reserved();for(let attempt=0;attempt<8;attempt++)await topupQueue(o.order_id);
+  assert.deepEqual(await reserved(),initial);assert.equal(topupScenario.broadcasts.length,0);assert.equal(JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',o.order_id)).data).phase,'verifying');
+  topupScenario.paymentPending=false;await topupQueue(o.order_id);assert.equal(topupScenario.broadcasts.length,1);assert.ok((await reserved()).n>initial.n);
+  const holding=await reserved();const other=await topupOrder('base','USDC',h(8));await topupQueue(other.order_id);
+  assert.deepEqual(await reserved(),holding);assert.equal(topupScenario.broadcasts.length,1);assert.equal(JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',other.order_id)).data).phase,'received');
+ }finally{await stopWorker();topupScenario=null;await startWorker();}
+});
+
+test('App离线后首次补交原单仍能验款，原报价后付款绝不发币',async()=>{
+ try{for(const latePayment of [false,true]){
+  await stopWorker();topupScenario={broadcasts:[],finalize:false,latePayment};await startWorker(topupBindings);
+  // 使用公开原意图，当前时钟已超过报价期；不延长或重新签发报价。
+  const i=topupFixture.intent,token=topupFixture.payment_intent;
+  const order={order_id:'top_'+i.intent_id.slice(4),intent:i,intent_hash:digest(token),message:topupFixture.wallet_authorization_message,created_at:i.issued_at,revision:0,phase:'awaiting',payment_txid:null,payer_signature:null,payment:null,signed:null,legacy:null,scan:0,gmb:null,exception_reason:null};
+  await sql('INSERT INTO topup_orders(order_id,data) VALUES(?,?)',order.order_id,JSON.stringify(order));topupScenario.orderId=order.order_id;
+  const confirm=await fetch('/api/topup/confirm','POST',JSON.stringify({payment_intent:token,payment_txid:h(9),payer_signature:topupFixture.payer_signature}));
+  assert.equal(confirm.status,200,await confirm.clone().text());assert.equal((await confirm.json()).phase,'verifying');
+  await topupQueue(order.order_id);const saved=JSON.parse((await first('SELECT data FROM topup_orders WHERE order_id=?',order.order_id)).data);
+  assert.equal(saved.phase,latePayment?'exception':'broadcast',JSON.stringify(saved));assert.equal(topupScenario.broadcasts.length,latePayment?0:1);
+ }}finally{await stopWorker();topupScenario=null;await startWorker();}
+});
+
+}

@@ -3,7 +3,7 @@
 use citizenserve::{
     chain::{finalized, identity, ports::Rpc, scale::Metadata, subscription},
     membership::cleanup::{Eligibility, Notice},
-    server::maintenance::{daily_due, five_minute_slot, task_id, Budget, Work},
+    maintenance::{daily_due, five_minute_slot, task_id, Budget, Work},
     shared::{crypto, Result},
     square::maintenance::Locator,
 };

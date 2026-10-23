@@ -88,7 +88,7 @@ pub async fn register<A: AuthRepository, R: Repository>(
     config: &Config,
     identity: &Identity,
     input: &Register,
-    checked_proof: &crate::server::gate::identity::CheckedProof<'_>,
+    checked_proof: &crate::gate::identity::CheckedProof<'_>,
     body: &[u8],
     target: &str,
     now: u64,

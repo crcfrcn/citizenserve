@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct Request {
     pub account_id: String,
     pub token: Token,
+    pub network: super::config::Network,
     pub package_id: String,
     pub payer_address: String,
 }
@@ -24,9 +25,9 @@ pub struct Intent {
     pub account_id: String,
     pub payer_address: String,
     pub token: Token,
+    pub network: super::config::Network,
     pub package_id: String,
-    pub chain_id: u64,
-    pub token_contract: String,
+    pub asset: String,
     pub recv_address: String,
     pub pay_amount: String,
     pub coin_fen: String,
@@ -49,18 +50,18 @@ impl Intent {
         if !ids::hex(random, 16, false) {
             return Err(config::unconfigured());
         }
-        let rail = c.rail(r.token)?;
-        let q = quote(&r.package_id)?;
+        let rail = c.rail(r.token, r.network)?;
+        let q = quote(&r.package_id, rail.decimals)?;
         Ok(Self {
             intent_id: format!("tpi_{random}"),
             cid_number: cid,
             account_id: r.account_id,
-            payer_address: config::normalize_address(&r.payer_address)?,
+            payer_address: r.network.normalize(&r.payer_address)?,
             token: r.token,
             package_id: r.package_id,
-            chain_id: rail.chain_id,
-            token_contract: rail.token_contract.clone(),
-            recv_address: c.recv_address.clone(),
+            network: r.network,
+            asset: rail.asset.clone(),
+            recv_address: c.receiver(r.network).into(),
             pay_amount: q.payment_atomic.to_string(),
             coin_fen: q.citizen_coin_fen.to_string(),
             issued_at: now,
@@ -68,8 +69,8 @@ impl Intent {
         })
     }
     pub fn validate(&self, c: &Config) -> Result<()> {
-        let q = quote(&self.package_id)?;
-        let r = c.rail(self.token)?;
+        let r = c.rail(self.token, self.network)?;
+        let q = quote(&self.package_id, r.decimals)?;
         ids::account(&self.account_id)?;
         if let Some(cid) = &self.cid_number {
             ids::cid(cid)?
@@ -78,10 +79,10 @@ impl Intent {
             .intent_id
             .strip_prefix("tpi_")
             .is_some_and(|s| ids::hex(s, 16, false))
-            || !config::address(&self.payer_address)
-            || self.chain_id != r.chain_id
-            || self.token_contract != r.token_contract
-            || self.recv_address != c.recv_address
+            || self.network.normalize(&self.payer_address).as_deref()
+                != Ok(self.payer_address.as_str())
+            || self.asset != r.asset
+            || self.recv_address != c.receiver(self.network)
             || self.pay_amount != q.payment_atomic.to_string()
             || self.coin_fen != q.citizen_coin_fen.to_string()
             || self.issued_at == 0
@@ -140,7 +141,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>> {
 }
 pub fn message(c: &Config, i: &Intent, token: &str) -> Result<String> {
     i.validate(c)?;
-    Ok(format!("CitizenServe Topup v1\nservice_origin={}\nchain_genesis_hash={}\nintent_id={}\nchain_id={}\npayer_address={}\ntoken_contract={}\nrecv_address={}\npay_amount={}\ncoin_fen={}\naccount_id={}\npackage_id={}\nissued_at={}\nexpires_at={}\nintent_sha256={}\n",c.service_origin,c.chain_genesis_hash,i.intent_id,i.chain_id,i.payer_address,i.token_contract,i.recv_address,i.pay_amount,i.coin_fen,i.account_id,i.package_id,i.issued_at,i.expires_at,crypto::sha256_hex(token.as_bytes())))
+    Ok(format!("CitizenServe Topup v1\nservice_origin={}\nchain_genesis_hash={}\nintent_id={}\nnetwork={}\npayer_address={}\nasset={}\nrecv_address={}\npay_amount={}\ncoin_fen={}\naccount_id={}\npackage_id={}\nissued_at={}\nexpires_at={}\nintent_sha256={}\n",c.service_origin,c.chain_genesis_hash,i.intent_id,i.network.name(),i.payer_address,i.asset,i.recv_address,i.pay_amount,i.coin_fen,i.account_id,i.package_id,i.issued_at,i.expires_at,crypto::sha256_hex(token.as_bytes())))
 }
 
 /// 代充目标只记录当前CID双向绑定，不要求目标拥有消费方账户服务的机构类型/MLS会话。

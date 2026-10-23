@@ -926,7 +926,7 @@ impl membership::ports::Repository for NoticeRepository {
 #[test]
 fn membership_response_only_exposes_current_inactive_overage_notice() {
     use citizenserve::{
-        server::gate,
+        gate,
         user::{
             admission::Admission,
             auth::{device::Device, session::Session},
@@ -1182,7 +1182,7 @@ fn resource_limits_preserve_single_file_rights_and_plan_shape() {
 
 #[test]
 fn cleanup_day_reservation_covers_the_shared_original_round_budget() {
-    use citizenserve::{membership::limits, server::maintenance::Budget};
+    use citizenserve::{membership::limits, maintenance::Budget};
     let budget = Budget::default();
     let shared = budget.clone();
     budget.business(45).unwrap();

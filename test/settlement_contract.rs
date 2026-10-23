@@ -74,6 +74,16 @@ enum Event {
     OnchainTransaction(TransferEvent),
 }
 #[derive(Encode, TypeInfo)]
+struct AccountData {
+    free: u128,
+    frozen: u128,
+}
+#[derive(Encode, TypeInfo)]
+struct AccountInfo {
+    nonce: u32,
+    data: AccountData,
+}
+#[derive(Encode, TypeInfo)]
 struct Record {
     phase: Phase,
     event: Event,
@@ -200,7 +210,18 @@ fn pallet(name: &'static str, index: u8, entries: Vec<StorageEntryMetadata>) -> 
         index,
     }
 }
+#[derive(Encode, TypeInfo)]
+enum Era {
+    Immortal,
+}
+#[derive(Encode, TypeInfo)]
+enum MetadataMode {
+    Disabled,
+}
 fn metadata() -> Vec<u8> {
+    metadata_extensions(false)
+}
+fn metadata_extensions(full: bool) -> Vec<u8> {
     let mut money = pallet("OnchainTransaction", 142, vec![]);
     money.calls = Some(PalletCallMetadata {
         ty: meta_type::<Call>(),
@@ -210,10 +231,24 @@ fn metadata() -> Vec<u8> {
             pallet(
                 "System",
                 3,
-                vec![entry::<Vec<Record>, ()>("Events", vec![])],
+                vec![
+                    entry::<Vec<Record>, ()>("Events", vec![]),
+                    entry::<AccountInfo, [u8; 32]>(
+                        "Account",
+                        vec![StorageHasher::Blake2_128Concat],
+                    ),
+                ],
             ),
             pallet("Timestamp", 4, vec![entry::<u64, ()>("Now", vec![])]),
             money,
+            pallet(
+                "CitizenIdentity",
+                55,
+                vec![entry::<Vec<u8>, [u8; 32]>(
+                    "CidByAccountId",
+                    vec![StorageHasher::Blake2_128Concat],
+                )],
+            ),
             pallet(
                 "LegislationYuan",
                 51,
@@ -234,11 +269,81 @@ fn metadata() -> Vec<u8> {
         ExtrinsicMetadata {
             ty: meta_type::<Extrinsic<Address, RuntimeCall, Signature, Compact<u32>>>(),
             version: 4,
-            signed_extensions: vec![SignedExtensionMetadata {
-                identifier: "CheckNonce",
-                ty: meta_type::<Compact<u32>>(),
-                additional_signed: meta_type::<()>(),
-            }],
+            signed_extensions: if full {
+                vec![
+                    SignedExtensionMetadata {
+                        identifier: "AuthorizeCall",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckNonZeroSender",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckNonStakeSender",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckSpecVersion",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<u32>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckTxVersion",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<u32>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckGenesis",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<[u8; 32]>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckMortality",
+                        ty: meta_type::<Era>(),
+                        additional_signed: meta_type::<[u8; 32]>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckNonce",
+                        ty: meta_type::<Compact<u32>>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckWeight",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "ChargeTransactionPayment",
+                        ty: meta_type::<Compact<u128>>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "CheckMetadataHash",
+                        ty: meta_type::<MetadataMode>(),
+                        additional_signed: meta_type::<Option<[u8; 32]>>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "SetOrigin",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                    SignedExtensionMetadata {
+                        identifier: "WeightReclaim",
+                        ty: meta_type::<()>(),
+                        additional_signed: meta_type::<()>(),
+                    },
+                ]
+            } else {
+                vec![SignedExtensionMetadata {
+                    identifier: "CheckNonce",
+                    ty: meta_type::<Compact<u32>>(),
+                    additional_signed: meta_type::<()>(),
+                }]
+            },
         },
         meta_type::<()>(),
     );
@@ -257,12 +362,12 @@ fn fixture_build() -> Value {
         .unwrap(),
     )
     .unwrap();
-    let o = &base["order"];
+    let mut o = base["order"].clone();
     let signer = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
     let account = signer.verifying_key().to_bytes();
     let remark = format!("topup:{}", o["order_id"].as_str().unwrap()).into_bytes();
     let call = RuntimeCall::OnchainTransaction(Call::transfer_with_remark {
-        beneficiary_account_id: raw32(o["account_id"].as_str().unwrap()),
+        beneficiary_account_id: raw32(o["intent"]["account_id"].as_str().unwrap()),
         amount: 1000000,
         remark: remark.clone(),
     });
@@ -280,6 +385,8 @@ fn fixture_build() -> Value {
     bytes.extend(call.encode());
     let mut raw = Compact(bytes.len() as u32).encode();
     raw.extend(bytes);
+    o["phase"] = json!("signed");
+    o["signed"] = json!({"account_id":format!("0x{}",crypto::hex(&account)),"nonce":12,"extrinsic":format!("0x{}",crypto::hex(&raw)),"tx_hash":transaction::hash(&raw),"born":8,"claim":format!("tpc_{}","33".repeat(16))});
     let meta = metadata();
     let m = Metadata::read(&meta).unwrap();
     let mut storage = serde_json::Map::new();
@@ -308,7 +415,7 @@ fn fixture_build() -> Value {
                 phase: Phase::ApplyExtrinsic(0),
                 event: Event::OnchainTransaction(TransferEvent::TransferWithRemark {
                     from_account_id: account,
-                    beneficiary_account_id: raw32(o["account_id"].as_str().unwrap()),
+                    beneficiary_account_id: raw32(o["intent"]["account_id"].as_str().unwrap()),
                     amount: 1000000,
                     remark,
                 }),
@@ -394,7 +501,7 @@ fn fixture_build() -> Value {
         }
         .encode(),
     );
-    json!({"schema":"citizenserve.settlement.test.v1","metadata":format!("0x{}",crypto::hex(&meta)),"genesis":h(0),"block_hash":h(9),"header":{"number":"0x9","parentHash":h(8),"stateRoot":h(21),"extrinsicsRoot":h(22),"digest":{"logs":[]}},"storage":storage,"order":o,"disburse_account":format!("0x{}",crypto::hex(&account)),"request":{"claim_id":format!("tpc_{}","33".repeat(16)),"gmb_tx_hash":transaction::hash(&raw),"gmb_block_hash":h(9),"gmb_extrinsic_index":0,"signed_extrinsic_hex":format!("0x{}",crypto::hex(&raw))}})
+    json!({"schema":"citizenserve.settlement.test.v1","metadata":format!("0x{}",crypto::hex(&meta)),"genesis":h(0),"block_hash":h(9),"header":{"number":"0x9","parentHash":h(8),"stateRoot":h(21),"extrinsicsRoot":h(22),"digest":{"logs":[]}},"storage":storage,"order":o,"disburse_account":format!("0x{}",crypto::hex(&account)),"request":{"gmb_tx_hash":transaction::hash(&raw),"gmb_block_hash":h(9),"gmb_extrinsic_index":0,"signed_extrinsic_hex":format!("0x{}",crypto::hex(&raw))}})
 }
 fn run<F: Future>(f: F) -> F::Output {
     let mut f = std::pin::pin!(f);
@@ -433,33 +540,21 @@ impl citizenserve::chain::ports::Rpc for Rpc {
     }
 }
 fn config(v: &Value) -> citizenserve::topup::config::Config {
-    use citizenserve::topup::{
-        config::{Config, Rail},
-        Token,
-    };
-    let o = &v["order"];
+    use citizenserve::topup::config::{Config, Receivers};
     Config {
         service_origin: "https://www.crcfrcn.com".into(),
         chain_genesis_hash: v["genesis"].as_str().unwrap().into(),
-        recv_address: o["recv_address"].as_str().unwrap().into(),
-        disburse_account: v["disburse_account"].as_str().unwrap().into(),
-        min_confirmations: 0,
-        rails: vec![
-            Rail {
-                token: Token::USDC,
-                chain_id: 8453,
-                token_contract: citizenserve::topup::config::USDC.into(),
-                token_decimals: 6,
-                label: "USDC".into(),
-            },
-            Rail {
-                token: Token::USDT,
-                chain_id: 8453,
-                token_contract: citizenserve::topup::config::USDT.into(),
-                token_decimals: 6,
-                label: "Bridged USDT".into(),
-            },
-        ],
+        receivers: Receivers {
+            evm: v["order"]["intent"]["recv_address"]
+                .as_str()
+                .unwrap()
+                .into(),
+            tron: citizenserve::topup::tron::from_hex(
+                v["order"]["intent"]["recv_address"].as_str().unwrap(),
+            )
+            .unwrap(),
+            solana: "11111111111111111111111111111111".into(),
+        },
     }
 }
 #[test]
@@ -478,6 +573,7 @@ fn exact_finalized_money_proof_and_complete_golden() {
     assert_eq!(proof.amount, "1000000");
     assert_eq!(proof.extrinsic_index, 0);
     v["proof"] = json!(proof);
+    v["auto"] = auto_fixture();
     let path = format!(
         "{}/test/contract/settlement.json",
         env!("CARGO_MANIFEST_DIR")
@@ -497,12 +593,12 @@ fn wrong_beneficiary_amount_remark_signer_index_and_full_bytes_are_rejected() {
         let mut o: citizenserve::topup::orders::Order =
             serde_json::from_value(v["order"].clone()).unwrap();
         let mut r: settlement::Settled = serde_json::from_value(v["request"].clone()).unwrap();
-        let mut c = config(&v);
+        let c = config(&v);
         match n {
-            0 => o.account_id = h(99),
-            1 => o.coin_fen = "999999".into(),
+            0 => o.intent.account_id = h(99),
+            1 => o.intent.coin_fen = "999999".into(),
             2 => o.order_id = format!("top_{}", "55".repeat(16)),
-            3 => c.disburse_account = h(88),
+            3 => o.signed.as_mut().unwrap().account_id = h(88),
             4 => r.gmb_extrinsic_index = 1,
             5 => r.signed_extrinsic_hex.push_str("00"),
             _ => unreachable!(),
@@ -603,4 +699,261 @@ fn runtime_upgrade_call_and_events_use_parent_runtime_metadata() {
         Metadata::read(&crypto::unhex(v["post_metadata"].as_str().unwrap()).unwrap()).unwrap();
     let raw = crypto::unhex(v["request"]["signed_extrinsic_hex"].as_str().unwrap()).unwrap();
     assert!(transaction::decode_for(&bad, &raw, "OnchainTransaction").is_err());
+}
+
+#[test]
+fn server_sr25519_builder_uses_metadata_indices_and_native_payload_bytes() {
+    use citizenserve::topup::{account::Account, disburse};
+    use parity_scale_codec::Decode;
+    let v = fixture_build();
+    let o = serde_json::from_value(v["order"].clone()).unwrap();
+    let m = Metadata::read(&metadata()).unwrap();
+    let key = Account::read(&format!("0x{}", "01".repeat(32))).unwrap();
+    let signed = disburse::build(&m, &key, &h(0), 7, 8, 12, &o, "tpc_test", 8).unwrap();
+    let raw = crypto::unhex(&signed.extrinsic).unwrap();
+    let mut input = raw.as_slice();
+    Compact::<u32>::decode(&mut input).unwrap();
+    assert_eq!(input[0], 0x84);
+    assert_eq!(input[1], 5);
+    assert_eq!(input[34], Signature::Sr25519([0; 64]).encode()[0]);
+    let signature = schnorrkel::Signature::from_bytes(&input[35..99]).unwrap();
+    let expected_call = RuntimeCall::OnchainTransaction(Call::transfer_with_remark {
+        beneficiary_account_id: [4; 32],
+        amount: 1000000,
+        remark: format!("topup:{}", o.order_id).into_bytes(),
+    })
+    .encode();
+    let mut payload = expected_call.clone();
+    payload.extend(Compact(12u32).encode());
+    schnorrkel::PublicKey::from_bytes(&key.public())
+        .unwrap()
+        .verify_simple(b"substrate", &payload, &signature)
+        .unwrap();
+    assert_eq!(&input[100..], expected_call);
+    assert_eq!(input[100], 142);
+    assert_eq!(input[101], 19);
+    let decoded = transaction::decode_for(&m, &raw, "OnchainTransaction").unwrap();
+    assert_eq!(decoded.account, key.id());
+    assert_ne!(
+        key.address(),
+        Account::read(&format!("0x{}", "02".repeat(32)))
+            .unwrap()
+            .address()
+    );
+    // 不支持的新扩展必须报错，禁止沿用之前的签名材料。
+    let mut changed = Metadata::read(&metadata()).unwrap();
+    changed.extrinsic.as_mut().unwrap().identifiers[0] = "UnknownExtension".into();
+    assert!(disburse::build(&changed, &key, &h(0), 7, 8, 12, &o, "tpc_test", 8).is_err());
+}
+
+#[test]
+fn signed_order_finalizes_with_frozen_account_without_old_private_key() {
+    use citizenserve::{
+        chain::network_ports::{BroadcastOutcome, Broadcaster},
+        shared::{Error, Result},
+        topup::{
+            self,
+            config::Network,
+            orders::Order,
+            ports::{Clock, Repository},
+            settlement::Cursor,
+        },
+    };
+    use std::sync::Mutex;
+    struct Memory(Mutex<Order>);
+    impl Repository for Memory {
+        async fn by_id(&self, _: &str) -> Result<Option<Order>> {
+            Ok(Some(self.0.lock().unwrap().clone()))
+        }
+        async fn save(&self, b: &Order, a: &Order) -> Result<Order> {
+            let mut v = self.0.lock().unwrap();
+            if v.revision != b.revision {
+                return Err(Error::new(409, "cas"));
+            }
+            *v = a.clone();
+            Ok(a.clone())
+        }
+        async fn insert(&self, _: &Order) -> Result<Order> {
+            unreachable!()
+        }
+        async fn list(&self, _: u32, _: Option<&Cursor>) -> Result<Vec<Order>> {
+            unreachable!()
+        }
+        async fn pending(&self, _: u32) -> Result<Vec<Order>> {
+            unreachable!()
+        }
+        async fn lock(&self, _: &Order, _: &str, _: &str, _: u64) -> Result<bool> {
+            panic!("signed transaction cannot acquire new signer")
+        }
+        async fn unlock(&self, _: &str, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn budget(&self, _: Network, _: u64) -> Result<()> {
+            unreachable!()
+        }
+    }
+    struct Time;
+    impl Clock for Time {
+        fn now(&self) -> u64 {
+            1005000
+        }
+    }
+    struct Chain {
+        rpc: Rpc,
+        broadcasts: Mutex<Vec<String>>,
+    }
+    impl citizenserve::chain::ports::Rpc for Chain {
+        async fn call(&self, m: &str, p: Value) -> Result<Value> {
+            citizenserve::chain::ports::Rpc::call(&self.rpc, m, p).await
+        }
+    }
+    impl Broadcaster for Chain {
+        async fn broadcast(&self, s: &str) -> Result<BroadcastOutcome> {
+            self.broadcasts.lock().unwrap().push(s.into());
+            Err(Error::new(503, "synthetic_timeout"))
+        }
+    }
+    let v = fixture_build();
+    let mut o: Order = serde_json::from_value(v["order"].clone()).unwrap();
+    o.scan = 9;
+    let id = o.order_id.clone();
+    let signed = o.signed.clone().unwrap();
+    let repo = Memory(Mutex::new(o));
+    let chain = Chain {
+        rpc: Rpc(v.clone()),
+        broadcasts: Mutex::new(vec![]),
+    };
+    for _ in 0..2 {
+        assert!(!run(topup::disburse::run(
+            &repo,
+            &chain,
+            &Time,
+            &config(&v),
+            None,
+            &id,
+            "new_claim"
+        ))
+        .unwrap());
+    }
+    assert_eq!(
+        *chain.broadcasts.lock().unwrap(),
+        vec![signed.extrinsic.clone(), signed.extrinsic.clone()]
+    );
+    assert_eq!(repo.0.lock().unwrap().signed.as_ref().unwrap(), &signed);
+    assert_eq!(
+        repo.0.lock().unwrap().phase,
+        topup::orders::Phase::Broadcast
+    );
+    // 合成下一轮暴露原交易的finalized块；只恢复扫描位置，不构造第二笔交易。
+    repo.0.lock().unwrap().scan = 8;
+    assert!(run(topup::disburse::run(
+        &repo,
+        &chain,
+        &Time,
+        &config(&v),
+        None,
+        &id,
+        "another_claim"
+    ))
+    .unwrap());
+    assert_eq!(repo.0.lock().unwrap().phase, topup::orders::Phase::Paid);
+    assert_eq!(chain.broadcasts.lock().unwrap().len(), 2);
+    assert!(run(topup::disburse::run(
+        &repo,
+        &chain,
+        &Time,
+        &config(&v),
+        None,
+        &id,
+        "duplicate"
+    ))
+    .unwrap());
+}
+
+fn auto_fixture() -> Value {
+    use citizenserve::{chain::scale, topup::account::Account};
+    let key = Account::read(&format!("0x{}", "01".repeat(32))).unwrap();
+    let m = Metadata::read(&metadata()).unwrap();
+    let order_id = format!("top_{}", "00".repeat(16));
+    let events = vec![
+        Record {
+            phase: Phase::ApplyExtrinsic(0),
+            event: Event::System(SystemEvent::ExtrinsicSuccess),
+            topics: vec![],
+        },
+        Record {
+            phase: Phase::ApplyExtrinsic(0),
+            event: Event::OnchainTransaction(TransferEvent::TransferWithRemark {
+                from_account_id: key.public(),
+                beneficiary_account_id: [4; 32],
+                amount: 1000000,
+                remark: format!("topup:{order_id}").into_bytes(),
+            }),
+            topics: vec![],
+        },
+    ]
+    .encode();
+    json!({"account":key.id(),"address":key.address(),"order_id":order_id,"account_key":m.storage_key("System","Account",&[key.public().to_vec()]).unwrap().0,"account_data":format!("0x{}",crypto::hex(&AccountInfo{nonce:0,data:AccountData{free:1000000000,frozen:0}}.encode())),"events_key":scale::value_key("System","Events"),"timestamp_key":scale::value_key("Timestamp","Now"),"events_template":format!("0x{}",crypto::hex(&events))})
+}
+
+#[test]
+fn native_runtime_extensions_match_typed_payload_and_version_changes_signature_domain() {
+    use citizenserve::topup::{account::Account, disburse};
+    use parity_scale_codec::Decode;
+    let v = fixture_build();
+    let o = serde_json::from_value(v["order"].clone()).unwrap();
+    let m = Metadata::read(&metadata_extensions(true)).unwrap();
+    let key = Account::read(&format!("0x{}", "01".repeat(32))).unwrap();
+    let signed = disburse::build(&m, &key, &h(0), 7, 8, 12, &o, "test", 8).unwrap();
+    let raw = crypto::unhex(&signed.extrinsic).unwrap();
+    let mut body = raw.as_slice();
+    Compact::<u32>::decode(&mut body).unwrap();
+    let sig = schnorrkel::Signature::from_bytes(&body[35..99]).unwrap();
+    let call = RuntimeCall::OnchainTransaction(Call::transfer_with_remark {
+        beneficiary_account_id: [4; 32],
+        amount: 1000000,
+        remark: format!("topup:{}", o.order_id).into_bytes(),
+    });
+    // 与CitizenChain signing公开合同一致，类型化独立编码extra/implicit，不从被测输出重构预期。
+    let extra = (
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        Era::Immortal,
+        Compact(12u32),
+        (),
+        Compact(0u128),
+        MetadataMode::Disabled,
+        ((), ()),
+    );
+    let implicit = (
+        (),
+        (),
+        (),
+        7u32,
+        8u32,
+        [0u8; 32],
+        [0u8; 32],
+        (),
+        (),
+        (),
+        None::<[u8; 32]>,
+        ((), ()),
+    );
+    let payload = (call, extra, implicit).encode();
+    schnorrkel::PublicKey::from_bytes(&key.public())
+        .unwrap()
+        .verify_simple(b"substrate", &payload, &sig)
+        .unwrap();
+    let mut changed = payload.clone();
+    let position = changed.len() - 73;
+    changed[position] ^= 1;
+    assert!(schnorrkel::PublicKey::from_bytes(&key.public())
+        .unwrap()
+        .verify_simple(b"substrate", &changed, &sig)
+        .is_err());
+    assert_eq!(&body[99..103], &[0, 48, 0, 0]);
 }

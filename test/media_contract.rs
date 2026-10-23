@@ -258,7 +258,7 @@ fn sigv4_matches_independent_python_golden_and_binds_every_upload_constraint() {
 }
 fn authorization() -> Authorization {
     use citizenserve::{
-        server::gate,
+        gate,
         user::{
             admission::Admission,
             auth::{

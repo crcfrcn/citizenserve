@@ -1,13 +1,8 @@
 # 公民服务端正式Worker；部署仍由独立授权入口执行。
 name: 公民服务端·Cloudflare
-run-name: 公民服务端·Cloudflare·v${{ inputs.version }}
+run-name: 公民服务端·Cloudflare·${{ github.run_number }}
 'on':
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 从最新成功Run计算的候选版本
-        required: true
-        type: string
+  workflow_dispatch: {}
 concurrency:
   group: ${{ github.repository }}-sdk
   cancel-in-progress: false
@@ -15,11 +10,50 @@ permissions:
   contents: write
   actions: write
 env:
-  SDK_VERSION: ${{ inputs.version }}
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
 jobs:
+  version:
+    name: 公民服务端·Cloudflare·版本
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '25.2.1'
+          check-latest: false
+      - id: version
+        name: 计算本Run版本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare.yml/runs?branch=main&event=workflow_dispatch&status=success&per_page=1" > "$RUNNER_TEMP/previous.json"
+          node --input-type=module >> "$GITHUB_OUTPUT" <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          let version=(await import('./scripts/config.mjs')).initialVersion;
+          const previous=JSON.parse(readFileSync(process.env.RUNNER_TEMP+'/previous.json','utf8')).workflow_runs[0];
+          if(previous){
+            const data=JSON.parse(execFileSync('gh',['api','repos/'+process.env.GITHUB_REPOSITORY+'/actions/runs/'+previous.id+'/artifacts?per_page=100'],{encoding:'utf8'}));
+            const prefix="公民服务端·Cloudflare·v";
+            const artifact=data.artifacts.find(value=>value.name.startsWith(prefix)&&/^\d+\.\d+\.\d+$/u.test(value.name.slice(prefix.length)));
+            const parts=artifact.name.slice(prefix.length).split('.');parts[2]=String(BigInt(parts[2])+1n);version=parts.join('.');
+          }
+          console.log('version='+version);
+          NODE
   sdk:
-    name: 公民服务端·Cloudflare·v${{ inputs.version }}
+    needs: version
+    name: 公民服务端·Cloudflare·v${{ needs.version.outputs.version }}
+    env:
+      SDK_VERSION: ${{ needs.version.outputs.version }}
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -80,19 +114,6 @@ jobs:
           if ! git -C target/cache/protocol cat-file -e "$protocol_commit^{commit}"; then git -C target/cache/protocol fetch "https://github.com/$protocol_repo.git" "$protocol_commit"; fi
           git -C target/cache/protocol checkout --detach --force "$protocol_commit"
           printf 'PROTOC=%s/target/cache/protoc/bin/protoc\nTATACHATSDK_PROTOCOL_DIR=%s/target/cache/protocol/lib/protocol\nPYTHON=%s\n' "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" "$(command -v python3)" >> "$GITHUB_ENV"
-      - name: 核对候选版本
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare.yml/runs?branch=main&event=workflow_dispatch&per_page=100" > "$RUNNER_TEMP/sdk-runs.json"
-          node --input-type=module - "$RUNNER_TEMP/sdk-runs.json" <<'NODE'
-          import {readFileSync} from 'node:fs';
-          import {nextVersion,automationDisplayName} from './scripts/config.mjs';
-          const rows=JSON.parse(readFileSync(process.argv[2],'utf8')).flatMap(page=>page.workflow_runs);
-          if(nextVersion(rows)!==process.env.SDK_VERSION)throw Error('候选版本已变化');
-          automationDisplayName('cloudflare',process.env.SDK_VERSION);
-          NODE
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: 运行本仓构建回归
         run: node --test test/build.test.mjs
       - name: 真实Rust与Worker测试、编译和完整正式包
@@ -125,7 +146,7 @@ jobs:
           printf 'SDK_NAME=%s\n' "$name" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: 公民服务端·Cloudflare·v${{ inputs.version }}
+          name: 公民服务端·Cloudflare·v${{ needs.version.outputs.version }}
           path: ${{ steps.build.outputs.path }}
           if-no-files-found: error
           compression-level: 0
@@ -215,3 +236,38 @@ jobs:
           [[ "${SDK_WORK_DIRECTORY%/*}" = "$GITHUB_WORKSPACE/target/test" && "${SDK_WORK_DIRECTORY##*/}" =~ ^cloudflare-[A-Za-z0-9]+$ ]]
           test "$(cd "$SDK_WORK_DIRECTORY" && pwd -P)" = "$SDK_WORK_DIRECTORY"
           rm -rf "$SDK_WORK_DIRECTORY"
+  cleanup:
+    name: 公民服务端·Cloudflare·收尾
+    needs: [version, sdk]
+    if: ${{ always() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: 保留本平台最新版本、成功失败记录和缓存
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.version.result == 'success' && needs.sdk.result == 'success' && 'success' || 'failure' }}
+          PREFIX: 公民服务端·Cloudflare·v
+          CACHE_PREFIX: sdk-
+        run: |
+          set -euo pipefail
+          workflow="${GITHUB_WORKFLOW_REF%@*}"; workflow="${workflow##*/}"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" > "$RUNNER_TEMP/caches.json"
+          jq -r --arg prefix "$CACHE_PREFIX" '[.[].actions_caches[]|select(.ref=="refs/heads/main" and (.key|startswith($prefix)))]|sort_by(.created_at,.id)|reverse|.[1:][]|.id' "$RUNNER_TEMP/caches.json" |
+          while IFS= read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
+          if [ "$RESULT" = success ]; then
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+            jq -r --arg prefix "$PREFIX" '[.[][]|select(.draft==false and (.tag_name|startswith($prefix)))]|sort_by(.published_at,.id)|reverse|.[1:][]|.tag_name' "$RUNNER_TEMP/releases.json" |
+            while IFS= read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+          fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=main&event=workflow_dispatch&per_page=100" > "$RUNNER_TEMP/runs.json"
+          jq --argjson current "$GITHUB_RUN_ID" --arg result "$RESULT" '
+            [.[].workflow_runs[]|select(.status=="completed" or .id==$current)|
+             .+{state:(if .id==$current then $result elif .conclusion=="success" then "success" else "failure" end)}]|
+            group_by(.state)|map(sort_by(.run_number)|last.id)' "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/keep.json"
+          jq -r --argjson current "$GITHUB_RUN_ID" --slurpfile keep "$RUNNER_TEMP/keep.json" '
+            [.[].workflow_runs[]|select(.status=="completed" and .id!=$current)|select(.id as $id|$keep[0]|index($id)|not)]|
+            sort_by(.conclusion=="success",.run_number)[]|.id' "$RUNNER_TEMP/runs.json" |
+          while IFS= read -r id; do gh run delete "$id" --repo "$GITHUB_REPOSITORY"; done

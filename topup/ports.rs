@@ -1,55 +1,84 @@
+use super::{config::Network, orders::Order, settlement::Cursor};
 use crate::shared::Result;
 use serde_json::Value;
 pub trait Clock {
     fn now(&self) -> u64;
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Method {
+    ChainId,
+    Transaction,
+    Receipt,
+    Block,
+    Code,
+    Call,
+    TronGenesis,
+    TronTransaction,
+    TronReceipt,
+    TronBlock,
+    TronBalance,
+    SolGenesis,
+    SolTransaction,
+    SolBlock,
+    SolAccounts,
+}
+impl Method {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ChainId => "eth_chainId",
+            Self::Transaction => "eth_getTransactionByHash",
+            Self::Receipt => "eth_getTransactionReceipt",
+            Self::Block => "eth_getBlockByNumber",
+            Self::Code => "eth_getCode",
+            Self::Call => "eth_call",
+            Self::TronGenesis | Self::TronBlock => "walletsolidity/getblockbynum",
+            Self::TronTransaction => "walletsolidity/gettransactionbyid",
+            Self::TronBalance => "walletsolidity/triggerconstantcontract",
+            Self::TronReceipt => "walletsolidity/gettransactioninfobyid",
+            Self::SolGenesis => "getGenesisHash",
+            Self::SolTransaction => "getTransaction",
+            Self::SolBlock => "getBlock",
+            Self::SolAccounts => "getTokenAccountsByOwner",
+        }
+    }
+}
 pub trait PaymentRpc {
     fn call(
         &self,
-        method: super::evm_verify::Method,
+        method: Method,
         params: Value,
     ) -> impl std::future::Future<Output = Result<Value>> + Send;
 }
 pub trait Repository {
-    fn by_tx(
+    fn by_id(&self, id: &str) -> impl std::future::Future<Output = Result<Option<Order>>> + Send;
+    fn insert(&self, order: &Order) -> impl std::future::Future<Output = Result<Order>> + Send;
+    fn save(
         &self,
-        chain: u64,
-        tx: &str,
-    ) -> impl std::future::Future<Output = Result<Option<super::orders::Order>>> + Send;
-    fn by_id(
-        &self,
-        id: &str,
-    ) -> impl std::future::Future<Output = Result<Option<super::orders::Order>>> + Send;
-    fn insert(
-        &self,
-        order: &super::orders::Order,
-        proof: &super::evm_verify::Payment,
-    ) -> impl std::future::Future<Output = Result<super::orders::Order>> + Send;
-    fn consume_rpc_budget(&self, now: u64) -> impl std::future::Future<Output = Result<()>> + Send;
+        before: &Order,
+        after: &Order,
+    ) -> impl std::future::Future<Output = Result<Order>> + Send;
     fn list(
         &self,
-        history: bool,
         limit: u32,
-        cursor: Option<&super::settlement::Cursor>,
-    ) -> impl std::future::Future<Output = Result<Vec<super::orders::Order>>> + Send;
-    fn claim(
+        cursor: Option<&Cursor>,
+    ) -> impl std::future::Future<Output = Result<Vec<Order>>> + Send;
+    fn pending(&self, limit: u32) -> impl std::future::Future<Output = Result<Vec<Order>>> + Send;
+    fn lock(
         &self,
-        id: &str,
+        order: &Order,
+        account: &str,
         claim: &str,
         now: u64,
-    ) -> impl std::future::Future<Output = Result<super::orders::Order>> + Send;
-    fn paid(
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn unlock(
         &self,
-        before: &super::orders::Order,
-        proof: &crate::chain::settlement::Proof,
-        payment: &super::evm_verify::Payment,
-        now: u64,
-    ) -> impl std::future::Future<Output = Result<super::orders::Order>> + Send;
-    fn exception(
-        &self,
-        id: &str,
+        order: &str,
+        account: &str,
         claim: &str,
-        reason: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn budget(
+        &self,
+        network: Network,
         now: u64,
-    ) -> impl std::future::Future<Output = Result<super::orders::Order>> + Send;
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }

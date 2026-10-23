@@ -1,5 +1,5 @@
 use citizenserve::{
-    server::gate::request,
+    gate::request,
     shared::crypto,
     square::{
         local_copy::{Cursor, Query},

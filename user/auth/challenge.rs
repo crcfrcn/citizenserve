@@ -51,7 +51,7 @@ pub fn target(request: &ChallengeRequest) -> Result<()> {
             Ok(())
         }
         Purpose::Request => {
-            crate::server::gate::request::protected_target(
+            crate::gate::request::protected_target(
                 &request.method,
                 &request.request_target,
             )
@@ -131,7 +131,7 @@ impl serde::Serialize for Consumption<'_> {
         s.serialize_field("now", &self.now)?;
         s.serialize_field(
             "sync_health_millis",
-            &crate::server::gate::policy::SYNC_HEALTH_MILLIS,
+            &crate::gate::policy::SYNC_HEALTH_MILLIS,
         )?;
         s.end()
     }

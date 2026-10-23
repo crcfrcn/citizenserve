@@ -1,6 +1,6 @@
 //! 精确目录是权限边界；充值能力和结算令牌均不能用来取得普通账户权限。
 use crate::{
-    server::gate::request::query,
+    gate::request::query,
     shared::{Error, Result},
     square::routes::keys,
 };
@@ -10,11 +10,8 @@ pub enum TopupRoute {
     Intent,
     Confirm,
     Status,
-    Pending,
     History,
-    Claim,
-    Settled,
-    Exception,
+    Account,
 }
 impl TopupRoute {
     pub fn resolve(method: &str, path: &str) -> Option<Self> {
@@ -23,50 +20,38 @@ impl TopupRoute {
             "/topup/intent" => Self::Intent,
             "/topup/confirm" => Self::Confirm,
             "/topup/status" => Self::Status,
-            "/topup/settlement/pending" => Self::Pending,
             "/topup/settlement/history" => Self::History,
-            _ => {
-                let s = path.strip_prefix("/topup/settlement/")?;
-                let (id, action) = s.split_once('/')?;
-                if !order_id(id) {
-                    return None;
-                }
-                match action {
-                    "claim" => Self::Claim,
-                    "settled" => Self::Settled,
-                    "exception" => Self::Exception,
-                    _ => return None,
-                }
-            }
+            "/topup/account" => Self::Account,
+            _ => return None,
         };
         (method == r.method()).then_some(r)
     }
     pub const fn method(self) -> &'static str {
         match self {
-            Self::Config | Self::Pending | Self::History => "GET",
+            Self::Config | Self::Account | Self::History => "GET",
             _ => "POST",
         }
     }
     pub const fn settlement(self) -> bool {
-        matches!(crate::server::gate::policy::api(crate::server::gate::request::Route::Topup(self)),
-            crate::server::gate::policy::Rule::Open(crate::server::gate::policy::OpenRule::Settlement))
+        matches!(
+            crate::gate::policy::api(crate::gate::request::Route::Topup(self)),
+            crate::gate::policy::Rule::Open(crate::gate::policy::OpenRule::Settlement)
+        )
     }
     pub const fn body_limit(self) -> usize {
         match self {
-            Self::Config | Self::Pending | Self::History => 0,
-            Self::Settled => 131584,
+            Self::Config | Self::Account | Self::History => 0,
             _ => 16384,
         }
     }
     pub fn validate_query(self, raw: Option<&str>) -> Result<()> {
         let q = query(raw)?;
         match self {
-            Self::Pending => keys(&q, &["limit"]),
             Self::History => keys(&q, &["limit", "cursor"]),
             _ => keys(&q, &[]),
         }?;
         if let Some(s) = q.get("limit") {
-            let max = if self == Self::Pending { 50 } else { 100 };
+            let max = 100;
             if s.parse::<u32>()
                 .ok()
                 .filter(|n| *n > 0 && *n <= max)
@@ -85,13 +70,6 @@ pub fn order_id(s: &str) -> bool {
             && s.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
-}
-pub fn path_order(path: &str) -> Result<&str> {
-    path.strip_prefix("/api/topup/settlement/")
-        .and_then(|s| s.split_once('/'))
-        .map(|(id, _)| id)
-        .filter(|s| order_id(s))
-        .ok_or_else(invalid)
 }
 pub fn invalid() -> Error {
     Error::new(400, "invalid_topup_request")
